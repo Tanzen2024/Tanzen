@@ -1,0 +1,1921 @@
+### 01. tenants
+TITLE: 🏛️ Table tenants — Gestion des organisations clientes (Core SaaS Multi-Tenant)
+NOTE: 👉 Cette table représente les organisations clientes de la plateforme (coopératives, tontines, entreprises).
+NOTE: 👉 Elle contient uniquement l’identité et les informations administratives du tenant.
+  - id | BIGINT | PK, Identity | Identifiant interne
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe
+  - location_id | BIGINT | FK → locations.id | Siège principal
+  - code | VARCHAR(100) | NOT NULL, UNIQUE | Code organisation
+  - name | VARCHAR(255) | NOT NULL | Nom de l’organisation
+  - short_name | VARCHAR(100) | NULL | Nom UI
+  - slug | VARCHAR(255) | NOT NULL, UNIQUE | Routing web
+  - organization_type | VARCHAR(30) | ENUM | Coopérative, tontine…
+  - description | TEXT | NULL | Présentation
+  - slogan | VARCHAR(255) | NULL | Devise
+  - logo | VARCHAR(255) | NULL | Branding
+  - cover_image | VARCHAR(255) | NULL | UI branding
+  - email | VARCHAR(255) | UNIQUE | Contact officiel
+  - phone | VARCHAR(50) | NULL | Contact
+  - whatsapp_number | VARCHAR(50) | NULL | Contact rapide
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État du tenant
+  - configuration_completed | BOOLEAN | DEFAULT FALSE | Configuration finie
+  - configured_at | TIMESTAMP | NULL | Fin configuration
+  - configured_by | BIGINT | FK → users.id | Responsable config
+  - version | INT | DEFAULT 1 | Concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Audit
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Audit
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id | Audit
+  - updated_by | BIGINT | FK → users.id | Audit
+  - 🔑 CONTRAINTES MÉTIER - Table tenants |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tenants_uuid | UNIQUE(uuid) | Unicité | 
+  - uq_tenants_code | UNIQUE(code) | Unicité métier | 
+  - uq_tenants_slug | UNIQUE(slug) | Unicité URL | 
+  - ck_tenants_status | CHECK(status IN ('ACTIVE','SUSPENDED','ARCHIVED','PENDING')) | Enum | 
+  - ck_tenants_config | CHECK(configuration_completed IN (0,1)) | Bool | 
+
+### 02. tenant_settings
+TITLE: ⚙️ Table tenant_settings — Configuration du tenant
+NOTE: 👉 Contient les paramètres fonctionnels de l’organisation après création.
+  - id | BIGINT | PK | Identifiant
+  - tenant_id | BIGINT | FK → tenants.id | Organisation
+  - language | VARCHAR(10) | NOT NULL | Langue système
+  - supported_locales | JSON | NULL | Multilingue
+  - currency_code | VARCHAR(10) | NOT NULL | Monnaie
+  - timezone | VARCHAR(100) | NOT NULL | Heure locale
+  - date_format | VARCHAR(30) | NULL | UI
+  - number_format | VARCHAR(30) | NULL | UI
+  - theme | VARCHAR(30) | NULL | UI
+  - primary_color | VARCHAR(20) | NULL | Branding
+  - logo_dark | VARCHAR(255) | NULL | UI
+  - logo_light | VARCHAR(255) | NULL | UI
+  - allow_self_registration | BOOLEAN | DEFAULT FALSE | Contrôle accès
+  - maintenance_mode | BOOLEAN | DEFAULT FALSE | Mode système
+  - version | INT | DEFAULT 1 | Concurrence
+  - created_at | TIMESTAMP |  | 
+  - updated_at | TIMESTAMP |  | 
+  - 🔑 CONTRAINTES MÉTIER — tenant_settings |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tenant_settings_tenant | UNIQUE(tenant_id) | Unicité | 
+  - ck_currency | CHECK(currency_code IS NOT NULL) | Validation | 
+  - ck_timezone | CHECK(timezone IS NOT NULL) | Validation | 
+
+### 03. locations
+TITLE: 📍 Table locations — Référentiel géographique (Core Geography Module)
+NOTE: 👉 Cette table contient les pays et les villes du système.
+NOTE: 👉 Elle sert de référentiel unique pour normaliser toutes les localisations utilisées dans les tenants et autres entités métier.
+  - id | BIGINT | PK, Identity | Identifiant unique interne de la localisation
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Identifiant global utilisé dans les API et intégrations
+  - parent_id | BIGINT | FK → locations.id, NULL | Permet de structurer les localisations (pays → région → ville → quartier)
+  - code | VARCHAR(50) | NOT NULL, UNIQUE | Code unique de la zone géographique (ISO ou interne)
+  - name | VARCHAR(150) | NOT NULL | Nom de la localisation (ville, région, pays, etc.)
+  - description | TEXT | NULL | Informations complémentaires sur la zone (historique, contexte, précision)
+  - phone | VARCHAR(50) | NULL | Code téléphonique international ou local de la zone
+  - email | VARCHAR(255) | NULL | Email de contact associé à l’administration locale
+  - address | VARCHAR(255) | NULL | Adresse ou centre administratif principal
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | Statut de disponibilité de la localisation dans le système
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de la localisation
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour de la localisation
+  - deleted_at | TIMESTAMP | NULL | Date de suppression logique (NULL = actif)
+  - 🔑 CONTRAINTES MÉTIER - Table locations |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_locations_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_locations_code | UNIQUE (code) | Unicité métier | 
+  - uq_locations_parent_code | UNIQUE (parent_id, code) | Unicité hiérarchique | 
+  - uq_locations_name_parent | UNIQUE (parent_id, name) | Unicité métier contextuelle | 
+
+### 04. users
+TITLE: 👤 Table users — Gestion des utilisateurs système (Core Authentication & Access Module)
+NOTE: 👉 Cette table contient les utilisateurs internes de la plateforme.
+NOTE: 👉 Elle gère l’authentification, l’accès aux fonctionnalités et l’activité des utilisateurs au sein d’un tenant.
+  - id | BIGINT | PK, Identity | Identifiant unique interne de l’utilisateur
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique (API, sync)
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation à laquelle appartient l’utilisateur
+  - name | VARCHAR(255) | NOT NULL | Nom et prénom de l’utilisateur
+  - email | VARCHAR(255) | NOT NULL, UNIQUE | Identifiant de connexion principal
+  - phone | VARCHAR(50) | NULL, UNIQUE | Numéro de contact utilisateur
+  - password | VARCHAR(255) | NOT NULL | Mot de passe sécurisé (bcrypt/argon2)
+  - preferred_language | VARCHAR(10) | NULL | Langue préférée de l’utilisateur
+  - is_active | BOOLEAN | DEFAULT TRUE | Indique si le compte est actif
+  - last_login_at | TIMESTAMP | NULL | Date de dernière authentification
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation des données
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création du compte
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification du compte
+  - deleted_at | TIMESTAMP | NULL | Date de désactivation (soft delete)
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé ce compte
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié ce compte
+  - 🔑 CONTRAINTES MÉTIER - Table users |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_users_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_users_email | UNIQUE (email) | Unicité métier | 
+  - uq_users_phone | UNIQUE (phone) | Unicité métier (optionnel) | 
+  - uq_users_tenant_email | UNIQUE (tenant_id, email) | Unicité multi-tenant | 
+  - uq_users_tenant_phone | UNIQUE (tenant_id, phone) | Unicité multi-tenant | 
+
+### 05. members
+TITLE: 👥 Table members — Gestion des adhérents (Core Membership Module)
+NOTE: 👉 Cette table contient les membres des organisations (cotisants, adhérents, participants).
+NOTE: 👉 Elle représente les individus rattachés à un tenant et participant aux activités financières (cotisations, prêts, comptes).
+  - id | BIGINT | PK, Identity | Identifiant unique interne du membre
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique (API, sync)
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation à laquelle appartient le membre
+  - matricule | VARCHAR(50) | UNIQUE, NULL | Identifiant interne du membre dans l’organisation
+  - first_name | VARCHAR(100) | NOT NULL | Prénom du membre
+  - last_name | VARCHAR(100) | NOT NULL | Nom de famille du membre
+  - gender | CHAR(1) | CHECK ('M','F'), NULL | Genre du membre
+  - phone | VARCHAR(50) | UNIQUE, NULL | Numéro de contact
+  - email | VARCHAR(255) | UNIQUE, NULL | Adresse email du membre
+  - join_date | DATE | NULL | Date d’entrée dans l’organisation
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État du membre (ACTIVE, INACTIVE, SUSPENDED, EXITED)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation des données
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de l’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Date de suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le membre
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié le membre
+  - 🔑 CONTRAINTES MÉTIER - Table members |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_members_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_members_matricule | UNIQUE (matricule) | Unicité métier | 
+  - uq_members_phone | UNIQUE (tenant_id, phone) | Unicité multi-tenant | 
+  - uq_members_email | UNIQUE (tenant_id, email) | Unicité multi-tenant | 
+  - uq_members_identity | UNIQUE (tenant_id, first_name, last_name, join_date) | Unicité métier composite | 
+
+### 06. positions
+TITLE: 🧩 Table positions — Gestion des rôles et fonctions organisationnelles (Core RBAC Module)
+NOTE: 👉 Cette table définit les positions (ou rôles métiers) au sein d’une organisation.
+NOTE: 👉 Elle permet de structurer les responsabilités (ex : Président, Trésorier, Secrétaire, Manager).
+NOTE: 👉 Elle peut être utilisée dans un système de gestion des accès (RBAC) ou de gouvernance interne.
+  - id | BIGINT | PK, Identity | Identifiant unique de la position
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Identifiant universel utilisé pour les API et intégrations
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation à laquelle appartient la position
+  - code | VARCHAR(50) | NOT NULL | Code unique permettant d’identifier une fonction dans une organisation
+  - name | VARCHAR(100) | NOT NULL | Intitulé du rôle occupé dans l’organisation (ex: Président, Trésorier)
+  - description | TEXT | NULL | Description détaillée du rôle, incluant responsabilités, missions et périmètre d’action
+  - is_system | BOOLEAN | DEFAULT FALSE | Indique si la position est prédéfinie par le système ou créée par l’utilisateur
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de la position
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour de la position
+  - deleted_at | TIMESTAMP | NULL | Date de suppression logique (désactivation sans suppression physique)
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la position
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié la position
+  - 🔑 CONTRAINTES MÉTIER - Table positions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_positions_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_positions_tenant_code | UNIQUE (tenant_id, code) | Unicité composée | 
+  - uq_positions_tenant_name | UNIQUE (tenant_id, name) | Unicité composée | 
+  - uq_positions_system_code | UNIQUE (code) WHERE is_system = TRUE | Unicité partielle | 
+
+### 07. board_mandates
+TITLE: 🧩 Table board_mandates — Gestion des mandats des membres du bureau (Core Governance Module)
+NOTE: 👉 Cette table définit les mandats des membres au sein d’un bureau (board).
+NOTE: 👉 Elle permet de tracer qui occupe quel rôle (Président, Trésorier, Secrétaire…) dans une période donnée.
+NOTE: 👉 Elle gère l’historisation des fonctions et la gouvernance interne des organisations (SaaS multi-tenant).
+  - id | BIGINT | PK, Identity | Identifiant unique du mandat
+  - uuid | CHAR(36) | UNIQUE, NOT NULL | Référence externe unique (API, sync)
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation propriétaire du mandat
+  - board_id | BIGINT | FK → boards.id, NOT NULL | Bureau concerné
+  - board_member_id | BIGINT | FK → members.id, NOT NULL | Membre du bureau
+  - role | VARCHAR(100) | NOT NULL | Poste occupé (Président, Trésorier, Secrétaire…)
+  - start_date | DATE | NOT NULL | Date de prise de fonction
+  - end_date | DATE | NULL | Date de fin du mandat
+  - is_active | BOOLEAN | DEFAULT TRUE | Indique si le mandat est en cours
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le mandat
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER - Table board_mandates |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_board_mandates_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_board_mandates_tenant_board_member_start | UNIQUE (tenant_id, board_id, board_member_id, start_date) | Unicité composée | 
+  - uq_board_mandates_active | UNIQUE (tenant_id, board_id, board_member_id) WHERE is_active = TRUE | Unicité partielle | 
+  - ck_board_mandates_dates | CHECK (end_date IS NULL OR end_date > start_date) | Contrainte de cohérence | 
+
+### 08. accounts
+TITLE: 🧾 Table accounts — Comptes financiers de l’organisation (Core Finance Module)
+NOTE: 👉 Cette table représente les comptes financiers d’une organisation.
+NOTE: 👉 Elle permet de suivre les soldes, catégoriser les comptes et structurer la comptabilité.
+NOTE: 👉 Elle est essentielle pour les opérations financières (prêts, contributions, paiements, épargne, tontines, etc.).
+  - id | BIGINT | PK | Identifiant unique du compte
+  - uuid | CHAR(36) | NOT NULL | Référence externe globale
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Tenant propriétaire
+  - code | VARCHAR(100) | NOT NULL | Code du compte
+  - name | VARCHAR(255) | NOT NULL | Nom affiché
+  - type | VARCHAR(50) | NOT NULL | ASSET, LIABILITY, INCOME, EXPENSE, EQUITY, CASH
+  - account_category | VARCHAR(50) | NOT NULL | Classification fonctionnelle
+  - account_role | VARCHAR(50) | DEFAULT 'STANDARD' | STANDARD, TONTINE_PURCHASE, LOAN_FUND, SAVINGS
+  - balance | NUMERIC(15,2) | DEFAULT 0 | Montant disponible
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | ACTIVE, CLOSED, BLOCKED
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le compte
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table accounts |  |  | 
+  - Nom | Définition | Type | 
+  - uq_accounts_uuid | UNIQUE(uuid) | Unique | 
+  - uq_accounts_code | UNIQUE(tenant_id, code) | Composée | 
+  - uq_accounts_name | UNIQUE(tenant_id, name) | Composée | 
+  - uq_accounts_tontine_purchase_singleton | UNIQUE(tenant_id, account_role) avec condition account_role = 'TONTINE_PURCHASE' | Partial Unique | 
+  - ck_accounts_balance | CHECK(balance >= 0) | Métier | 
+  - ck_accounts_type | CHECK(type IN ('ASSET','LIABILITY','INCOME','EXPENSE','EQUITY','CASH')) | ENUM | 
+  - ck_accounts_role | CHECK(account_role IN ('STANDARD','TONTINE_PURCHASE','LOAN_FUND','SAVINGS')) | ENUM | 
+
+### 09. members_accounts
+TITLE: 🧩 Table member_accounts — Liaison membres & comptes financiers
+NOTE: 👉 Cette table gère l’association entre un membre et un compte financier dans l’organisation.
+NOTE: 👉 Elle permet de définir les rôles des membres sur un compte (propriétaire, co-propriétaire, garant, etc.) et de tracer leur participation.
+  - id | BIGINT | PK, Identity | Identifiant unique de la liaison membre-compte
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Identifiant universel utilisé pour API et synchronisation
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation propriétaire de la relation
+  - member_id | BIGINT | FK → members.id, NOT NULL | Membre associé au compte financier
+  - account_id | BIGINT | FK → accounts.id, NOT NULL | Compte financier concerné par la liaison
+  - role | VARCHAR(30) | NULL | Fonction occupée par le membre dans le compte (owner, co-owner, guarantor, contributor…)
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État de la relation (ACTIVE, INACTIVE, SUSPENDED)
+  - join_date | DATE | NULL | Date à laquelle le membre a été associé au compte
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation des données
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de la liaison
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour de la liaison
+  - deleted_at | TIMESTAMP | NULL | Date de suppression logique (désactivation sans suppression physique)
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le membre dans le compte
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table member_accounts |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_member_accounts_unique_link | UNIQUE (tenant_id, member_id, account_id) | Unicité composite | 
+  - uq_member_accounts_active_link | UNIQUE (tenant_id, member_id, account_id) WHERE status = 'ACTIVE' | Unicité partielle | 
+  - uq_member_accounts_role_owner | UNIQUE (tenant_id, account_id, role) WHERE role = 'OWNER' AND status = 'ACTIVE' | Unicité partielle métier | 
+  - uq_member_accounts_active_member_per_account | UNIQUE (tenant_id, account_id, member_id) WHERE status IN ('ACTIVE', 'PENDING') | Unicité métier étendue | 
+  - uq_member_accounts_uuid | UNIQUE (uuid) | Unicité simple | 
+
+### 10. loans
+TITLE: 🧩 Table loans — Gestion des prêts (Core Finance Module)
+NOTE: 👉 Cette table gère les prêts accordés aux membres au sein d’une organisation.
+NOTE: 👉 Elle permet de suivre les montants, les taux, les durées et le statut de remboursement.
+NOTE: 👉 Elle est conçue pour un système financier multi-tenant avec synchronisation et audit.
+  - id | BIGINT | PK, Identity | Identifiant unique du prêt
+  - uuid | CHAR(36) | NOT NULL | Identifiant global externe
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire
+  - member_id | BIGINT | NOT NULL, FK → members.id | Bénéficiaire du prêt
+  - account_id | BIGINT | NOT NULL, FK → accounts.id | Compte financier lié au prêt
+  - amount | DECIMAL(15,2) | NOT NULL | Montant du prêt accordé
+  - interest_rate | DECIMAL(5,2) | DEFAULT 0 | Coût du prêt en pourcentage
+  - duration_months | INT | NOT NULL | Période de remboursement
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | Statut du prêt
+  - start_date | DATE | NULL | Début du remboursement
+  - end_date | DATE | NULL | Fin estimée du prêt
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de sync avec système externe
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression non destructive
+  - created_by | BIGINT | NULL, FK → users.id | Utilisateur créateur
+  - updated_by | BIGINT | NULL, FK → users.id | Dernier utilisateur modificateur
+  - 🔑 CONTRAINTES MÉTIER - Table loans |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_loans_member_start_date | UNIQUE (tenant_id, member_id, start_date) | Unicité simple composée | 
+  - uq_loans_active_member | UNIQUE (tenant_id, member_id) WHERE status IN ('PENDING', 'ACTIVE') | Unicité partielle (métier) | 
+  - uq_loans_active_account_member | UNIQUE (tenant_id, account_id, member_id, status) WHERE status = 'ACTIVE' | Unicité partielle + contexte compte | 
+  - ck_loans_amount | CHECK (amount > 0) | Contrainte métier | 
+  - ck_loans_interest | CHECK (interest_rate >= 0) | Contrainte métier | 
+  - ck_loans_duration | CHECK (duration_months > 0) | Contrainte métier | 
+  - ck_loans_dates | CHECK (end_date IS NULL OR end_date >= start_date) | Contrainte temporelle | 
+
+### 11. repayments
+TITLE: 💰 Table repayments — Gestion des remboursements de prêts (Core Finance Module)
+NOTE: 👉 Cette table enregistre tous les remboursements effectués sur les prêts accordés aux membres.
+NOTE: 👉 Elle permet de suivre les paiements, leur méthode, leur statut de synchronisation et l’historique financier.
+  - id | BIGINT | PK | Identifiant unique du remboursement
+  - uuid | CHAR(36) | UNIQUE | Référence externe unique du remboursement
+  - tenant_id | BIGINT | FK → tenants.id | Organisation propriétaire du remboursement
+  - loan_id | BIGINT | FK → loans.id | Prêt concerné par le remboursement
+  - member_id | BIGINT | FK → members.id | Membre ayant effectué le remboursement
+  - amount | DECIMAL(15,2) | NOT NULL | Montant remboursé sur le prêt
+  - payment_date | TIMESTAMP | NOT NULL | Date effective du paiement
+  - method | VARCHAR(30) | NULL | Moyen utilisé (cash, mobile money, bank…)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation des données
+  - version | INT | DEFAULT 1 | Gestion de concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement du remboursement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification du remboursement
+  - deleted_at | TIMESTAMP | NULL | Suppression logique (non physique)
+  - created_by | BIGINT | NULL, FK → users.id | Utilisateur créateur
+  - updated_by | BIGINT | NULL, FK → users.id | Dernier utilisateur modificateur
+  - 🔑 CONTRAINTES MÉTIER — Table repayments |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_repayments_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_repayments_loan_member_date | UNIQUE (tenant_id, loan_id, member_id, payment_date) | Unicité composite | 
+  - uq_repayments_transaction | UNIQUE (tenant_id, loan_id, amount, payment_date, method) | Unicité métier (forte cohérence) | 
+  - uq_repayments_sync | UNIQUE (tenant_id, loan_id, uuid) | Unicité technique renforcée | 
+  - ck_repayments_amount_positive | CHECK (amount > 0) | Validation métier | 
+  - ck_repayments_method_valid | CHECK (method IN ('CASH','MOBILE_MONEY','BANK','CARD')) | ENUM métier | 
+  - ck_repayments_payment_date_valid | CHECK (payment_date <= CURRENT_TIMESTAMP) | Cohérence temporelle | 
+  - ck_repayments_sync_status | CHECK (sync_status IN ('PENDING','SYNCED','FAILED')) | ENUM système | 
+  - ck_repayments_version_positive | CHECK (version >= 1) | Sécurité concurrence | 
+  - ck_repayments_deleted_logic | CHECK (deleted_at IS NULL OR deleted_at >= created_at) (optionnel) | Soft delete | 
+
+### 12. penalties
+TITLE: ⚠️ Table penalties — Gestion des pénalités et sanctions financières (Core Finance Module)
+NOTE: 👉 Cette table centralise toutes les pénalités appliquées aux membres ou entités métier.
+NOTE: 👉 Elle permet de gérer les sanctions issues des retards de cotisation, absences, retards de remboursement, règles de tontine ou frais administratifs.
+NOTE: 👉 Chaque pénalité peut générer une écriture financière dans le module TRANSACTIONS.
+  - id | BIGINT | PK | Identifiant unique de la pénalité
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique de la pénalité
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation propriétaire de la pénalité
+  - member_id | BIGINT | FK → members.id, NOT NULL | Membre concerné par la pénalité
+  - type | VARCHAR(50) | NOT NULL | Catégorie de sanction appliquée
+  - source_module | VARCHAR(50) | NOT NULL | Module ayant généré la pénalité
+  - source_id | BIGINT | NULL | Identifiant de l’événement source
+  - amount | DECIMAL(15,2) | NOT NULL | Valeur financière de la sanction
+  - reason | TEXT | NULL | Explication de la pénalité
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | Statut de règlement
+  - due_date | DATE | NULL | Date maximale de paiement
+  - paid_at | TIMESTAMP | NULL | Date effective de paiement
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | Statut offline/online
+  - version | INT | DEFAULT 1 | Gestion concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date génération pénalité
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la pénalité
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table penalties |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_penalties_uuid | UNIQUE(uuid) | Unicité simple | 
+  - uq_penalties_member_source | UNIQUE(tenant_id, member_id, source_module, source_id) | Unicité composite | 
+  - uq_penalties_transaction | UNIQUE(tenant_id, member_id, amount, created_at) | Unicité métier | 
+  - uq_penalties_sync | UNIQUE(tenant_id, uuid) | Unicité technique renforcée | 
+  - ck_penalties_amount_positive | CHECK(amount > 0) | Validation métier | 
+  - ck_penalties_type_valid | CHECK(type IN ('LATE_CONTRIBUTION','ABSENCE','LOAN_DELAY','EARLY_EXIT','RULE_VIOLATION','ADMIN_FEE')) | ENUM métier | 
+  - ck_penalties_status_valid | CHECK(status IN ('PENDING','PAID','CANCELLED','WAIVED')) | ENUM métier | 
+  - ck_penalties_module_valid | CHECK(source_module IN ('TONTINES','LOANS','MEETINGS','DOCUMENTS','SYSTEM')) | ENUM système | 
+  - ck_penalties_due_date_valid | CHECK(due_date IS NULL OR due_date >= created_at) | Cohérence temporelle | 
+  - ck_penalties_paid_date_valid | CHECK(paid_at IS NULL OR paid_at >= created_at) | Cohérence temporelle | 
+  - ck_penalties_sync_status | CHECK(sync_status IN ('PENDING','SYNCED','FAILED')) | ENUM système | 
+  - ck_penalties_version_positive | CHECK(version >= 1) | Sécurité concurrence | 
+  - ck_penalties_deleted_logic | CHECK(deleted_at IS NULL OR deleted_at >= created_at) | Soft delete | 
+
+### 13. loan_guarantors
+TITLE: 🏛️ Table loan_guarantors — Gestion des garants de prêts
+NOTE: 👉 Cette table enregistre les membres qui se portent garants ou avalistes d’un prêt.
+NOTE: 👉 Elle permet de gérer plusieurs garants, leurs engagements et le suivi des responsabilités financières.
+  - id | BIGINT | PK, Identity | Identifiant unique du garant
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe API
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation propriétaire
+  - loan_id | BIGINT | FK → loans.id, NOT NULL | Prêt garanti
+  - guarantor_member_id | BIGINT | FK → members.id, NOT NULL | Membre qui garantit
+  - guarantee_amount | DECIMAL(15,2) | NOT NULL | Montant maximum garanti
+  - guarantee_type | VARCHAR(30) | DEFAULT 'FULL' | Type d’engagement
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État de la garantie
+  - approved_at | TIMESTAMP | NULL | Date d’acceptation du garant
+  - released_at | TIMESTAMP | NULL | Date fin engagement
+  - notes | TEXT | NULL | Commentaire sur la garantie
+  - version | INT | DEFAULT 1 | Gestion concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | NULL, FK → users.id | Utilisateur créateur
+  - updated_by | BIGINT | NULL, FK → users.id | Dernier utilisateur modificateur
+  - 🔑 CONTRAINTES MÉTIER — loan_guarantors |  |  | 
+  - Nom contrainte | Définition | Type | 
+  - uq_loan_guarantor_uuid | UNIQUE(uuid) | Unicité simple | 
+  - uq_loan_member_guarantor | UNIQUE(loan_id, guarantor_member_id) | Unicité composée | 
+  - uq_active_guarantor | UNIQUE(loan_id, guarantor_member_id) WHERE status='ACTIVE' | Unicité partielle | 
+  - ck_guarantee_amount_positive | CHECK(guarantee_amount > 0) | CHECK | 
+  - ck_guarantee_type_valid | CHECK(guarantee_type IN ('FULL','PARTIAL')) | CHECK ENUM | 
+  - ck_guarantor_status_valid | CHECK(status IN ('ACTIVE','RELEASED','DEFAULTED')) | CHECK ENUM | 
+  - ck_guarantee_dates_valid | CHECK(released_at IS NULL OR released_at >= approved_at) | CHECK | 
+
+### 14. loan_rules
+TITLE: ⚙️ Table loan_rules — Règles de gestion des prêts (Core Credit Policy Engine)
+NOTE: 👉 Cette table définit les politiques de crédit appliquées aux comptes financiers.
+NOTE: 👉 Elle agit comme moteur de décision du système de prêt.
+NOTE: 👉 Elle est indépendante des tontines et s’applique uniquement aux comptes accounts.
+NOTE: 👉 Elle remplace toute logique de crédit embarquée dans les caisses métiers.
+  - id | BIGINT | PK, Identity | Identifiant unique règle
+  - uuid | CHAR(36) | NOT NULL | Référence API
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Tenant propriétaire
+  - account_id | BIGINT | NOT NULL, FK → accounts.id | Caisse soumise à la politique
+  - name | VARCHAR(100) | NOT NULL | Nom de la politique crédit
+  - allow_loans | BOOLEAN | DEFAULT FALSE | Autorise les prêts sur la caisse
+  - loan_mode | VARCHAR(20) | CHECK ENUM | NONE / INTERNAL / EXTERNAL / BOTH
+  - min_amount | DECIMAL(15,2) | DEFAULT 0 | Minimum empruntable
+  - max_amount | DECIMAL(15,2) | NOT NULL | Plafond de prêt
+  - interest_rate | DECIMAL(5,2) | DEFAULT 0 | Taux appliqué
+  - interest_type | VARCHAR(20) | ENUM | FIXED / REDUCING / FLAT
+  - interest_period | VARCHAR(20) | ENUM | DAILY / WEEKLY / MONTHLY / YEARLY
+  - duration_months | INT | NOT NULL | Durée remboursement
+  - max_active_loans | INT | DEFAULT 1 | Limite d’exposition active
+  - max_loan_exposure | DECIMAL(15,2) | NULL | Risque total autorisé
+  - requires_guarantor | BOOLEAN | DEFAULT FALSE | Nécessite aval
+  - min_guarantors | INT | DEFAULT 0 | Nombre minimum
+  - max_guarantors | INT | DEFAULT 1 | Nombre maximum
+  - guarantee_type_required | VARCHAR(30) | ENUM | PERSONAL / GROUP / COLLATERAL
+  - guarantee_ratio | DECIMAL(5,2) | DEFAULT 100 | % garantie exigée
+  - allow_self_guarantee | BOOLEAN | DEFAULT FALSE | Autorise caution interne
+  - requires_approval | BOOLEAN | DEFAULT TRUE | Approbation obligatoire
+  - approval_level | VARCHAR(30) | NULL | MEMBER / BOARD / ADMIN
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | ACTIVE / INACTIVE
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État synchronisation
+  - version | INT | DEFAULT 1 | Concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | NULL, FK → users.id | Utilisateur créateur
+  - updated_by | BIGINT | NULL, FK → users.id | Dernier utilisateur modificateur
+  - 🔑 CONTRAINTES MÉTIER — Table loan_rules |  |  | 
+  - Nom | Définition | Type | 
+  - uq_loan_rules_uuid | UNIQUE(uuid) | Unique | 
+  - uq_loan_rules_account | UNIQUE(tenant_id, account_id) | Composée | 
+  - uq_loan_rules_name | UNIQUE(tenant_id, name) | Composée | 
+  - ck_allow_loans_valid | CHECK(allow_loans IN (TRUE,FALSE)) | CHECK | 
+  - ck_amount_valid | CHECK(max_amount >= min_amount) | CHECK | 
+  - ck_interest_valid | CHECK(interest_rate >= 0) | CHECK | 
+  - ck_duration_valid | CHECK(duration_months > 0) | CHECK | 
+  - ck_exposure_valid | CHECK(max_loan_exposure >= 0) | CHECK | 
+  - ck_interest_type | CHECK(interest_type IN ('FIXED','REDUCING','FLAT')) | ENUM | 
+  - ck_interest_period | CHECK(interest_period IN ('DAILY','WEEKLY','MONTHLY','YEARLY')) | ENUM | 
+  - ck_guarantee_ratio | CHECK(guarantee_ratio BETWEEN 0 AND 100) | CHECK | 
+  - ck_guarantor_count | CHECK(max_guarantors >= min_guarantors) | CHECK | 
+  - ck_account_credit_policy | CHECK(account_id IS NOT NULL) | CHECK | 
+
+### 15. contribution_rules
+TITLE: 🏛️ Table contribution_rules — Règles des cotisations financières
+NOTE: 👉 Cette table définit les règles de cotisation appliquées aux membres d’une organisation (tenant).
+NOTE: 👉 Elle permet de standardiser les montants, fréquences et pénalités associées aux contributions financières.
+  - id | BIGINT | PK, Identity | Identifiant unique de la règle
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique (API/sync)
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire de la règle
+  - account_id | BIGINT | NOT NULL, FK → accounts.id | Compte financier associé à la cotisation
+  - amount | DECIMAL(15,2) | NOT NULL | Montant à payer par membre
+  - frequency | VARCHAR(20) | NOT NULL | Périodicité (DAILY, WEEKLY, MONTHLY, YEARLY)
+  - is_mandatory | BOOLEAN | DEFAULT TRUE | Indique si la cotisation est obligatoire
+  - late_fee | DECIMAL(15,2) | DEFAULT 0 | Montant appliqué en cas de retard
+  - version | INT | DEFAULT 1 | Gestion concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de la règle
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la règle de contribution
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table contribution_rules |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_contribution_rules_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_contribution_rules_account | UNIQUE (tenant_id, account_id) | Unicité métier | 
+  - uq_contribution_rules_frequency | UNIQUE (tenant_id, account_id, frequency) | Unicité métier composée | 
+  - ck_contribution_amount_positive | CHECK (amount > 0) | Validation métier | 
+  - ck_contribution_late_fee_valid | CHECK (late_fee >= 0) | Validation métier | 
+  - ck_contribution_frequency_valid | CHECK (frequency IN ('DAILY','WEEKLY','MONTHLY','YEARLY')) | Enum métier | 
+  - ck_contribution_is_mandatory | CHECK (is_mandatory IN (0,1)) | Booléen métier | 
+  - ck_contribution_version_positive | CHECK (version >= 1) | Cohérence système | 
+
+### 16. fiscal_years
+TITLE: 📅 Table fiscal_years — Exercices fiscaux des organisations (Core Finance & Accounting Module)
+NOTE: 👉 Cette table gère les exercices fiscaux des organisations multi-tenant.
+NOTE: 👉 Elle permet de structurer les périodes comptables, suivre les performances financières et clôturer les comptes.
+NOTE: 👉 Elle est essentielle pour le reporting financier et l’audit.
+  - id | BIGINT | PK | Identifiant unique de l’exercice
+  - uuid | CHAR(36) | NOT NULL | Identifiant global externe
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire
+  - code | VARCHAR(100) | NOT NULL | Code interne de l’exercice fiscal
+  - name | VARCHAR(255) | NOT NULL | Libellé de l’exercice (ex : FY2026)
+  - start_date | DATE | NOT NULL | Date de début de la période
+  - end_date | DATE | NOT NULL | Date de fin de la période
+  - opening_balance | NUMERIC | DEFAULT 0 | Capital initial de l’exercice
+  - closing_balance | NUMERIC | DEFAULT 0 | Résultat final de l’exercice
+  - total_income | NUMERIC | DEFAULT 0 | Ensemble des entrées financières
+  - total_expenses | NUMERIC | DEFAULT 0 | Ensemble des sorties financières
+  - is_closed | BOOLEAN | DEFAULT FALSE | Indique si l’exercice est fermé
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de sync système
+  - version | INT | DEFAULT 1 | Gestion concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Mise à jour des données
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé l'année fiscale
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table fiscal_years |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_fiscal_years_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_fiscal_years_code | UNIQUE (tenant_id, code) | Unicité composée | 
+  - uq_fiscal_years_name | UNIQUE (tenant_id, name) | Unicité composée | 
+  - uq_fiscal_years_period | UNIQUE (tenant_id, start_date, end_date) | Unicité métier | 
+  - ck_fiscal_years_dates | CHECK (end_date > start_date) | Contrainte temporelle | 
+  - ck_fiscal_years_balance | CHECK (closing_balance >= 0 AND opening_balance >= 0) | Contrainte métier | 
+  - ck_fiscal_years_income | CHECK (total_income >= 0) | Contrainte métier | 
+  - ck_fiscal_years_expenses | CHECK (total_expenses >= 0) | Contrainte métier | 
+  - ck_fiscal_years_status | CHECK (is_closed IN (TRUE, FALSE)) | Contrainte booléenne | 
+
+### 17. financial_categories
+TITLE: 🏛️ Table financial_categories — Catégories de transactions financières
+NOTE: 👉 Cette table permet de classifier les transactions financières (cotisations, prêts, remboursements, frais, etc.) afin d’assurer un reporting clair et une comptabilité structurée.
+  - id | BIGINT | PK, Identity | Identifiant unique de la catégorie
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique (API/sync)
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire
+  - name | VARCHAR(100) | NOT NULL | Libellé de la catégorie (ex: Cotisation, Prêt)
+  - type | VARCHAR(30) | NOT NULL | Type logique (INCOME, EXPENSE, TRANSFER)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation des données
+  - version | INT | DEFAULT 1 | Gestion concurrence (optimistic locking)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la catégorie financiére
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔒 CHECK CONSTRAINTS — financial_categories |  |  | 
+  - Nom de la contrainte | Définition | Règle métier | 
+  - ck_financial_categories_name_valid | CHECK (LENGTH(name) >= 2) | Nom minimal valide | 
+  - ck_financial_categories_type_valid | CHECK (type IN ('INCOME','EXPENSE','TRANSFER')) | Types normalisés | 
+  - ck_financial_categories_version_positive | CHECK (version >= 1) | Version cohérente | 
+  - ck_financial_categories_sync_status | CHECK (sync_status IN ('PENDING','SYNCED','FAILED')) | Sync contrôlée | 
+  - ck_financial_categories_not_deleted_future | CHECK (deleted_at IS NULL OR deleted_at >= created_at) | Cohérence soft delete | 
+
+### 18. meetings
+TITLE: 🏛️ Table meetings — Réunions des membres
+NOTE: 👉 Cette table gère les réunions organisées au sein d’un tenant (organisation).
+NOTE: 👉 Elle permet le suivi des assemblées, décisions et présences des membres.
+  - id | BIGINT | PK, Identity | Identifiant unique de la réunion
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique (API/sync)
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire de la réunion
+  - title | VARCHAR(150) | NOT NULL | Objet ou titre de la réunion
+  - meeting_date | DATE | NOT NULL | Date prévue ou effective de la réunion
+  - status | VARCHAR(20) | DEFAULT 'PLANNED' | État (PLANNED, DONE, CANCELLED, POSTPONED)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la réunion
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table meetings |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_meetings_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_meetings_tenant_date_title | UNIQUE (tenant_id, meeting_date, title) | Unicité métier composée | 
+  - uq_meetings_tenant_date | UNIQUE (tenant_id, meeting_date) (optionnel selon business) | Unicité métier | 
+  - uq_meetings_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_meetings_tenant_date_title | UNIQUE (tenant_id, meeting_date, title) | Unicité métier composée | 
+  - uq_meetings_tenant_date | UNIQUE (tenant_id, meeting_date) (optionnel selon business) | Unicité métier | 
+
+### 19. attendances
+TITLE: 🧾 Table attendances — Présence des membres aux réunions (Core Governance Module)
+NOTE: 👉 Cette table enregistre la présence des membres lors des réunions.
+NOTE: 👉 Elle permet de suivre la participation, appliquer des pénalités et analyser l’assiduité.
+NOTE: 👉 Elle est essentielle pour la gouvernance et la discipline organisationnelle.
+  - id | BIGINT | PK | Identifiant unique de la présence
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de la présence
+  - meeting_id | BIGINT | NOT NULL, FK → meetings.id | Réunion concernée
+  - member_id | BIGINT | NOT NULL, FK → members.id | Membre concerné
+  - status | VARCHAR(20) | NOT NULL | Présence (PRESENT, ABSENT, LATE, EXCUSED)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Mise à jour du record
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D’UNICITÉ MÉTIER — attendances |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_attendances_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_attendances_meeting_member | UNIQUE (meeting_id, member_id) | Unicité composée | 
+  - ck_attendances_status | CHECK (status IN ('PRESENT','ABSENT','LATE','EXCUSED')) | ENUM | 
+  - ck_attendances_penalty | CHECK (penalty_amount >= 0) | Contrainte métier | 
+
+### 20. tontines
+TITLE: 🧾 Table tontines — Gestion des tontines (Core Savings & Group Finance Module)
+NOTE: 👉 Cette table représente les tontines (groupes d’épargne rotatifs ou collectifs).
+NOTE: 👉 Elle permet de gérer les groupes, leurs règles de cotisation et leur cycle d’épargne.
+NOTE: 👉 Elle constitue un pilier du système financier communautaire multi-tenant.
+  - id | BIGINT | PK | Identifiant unique de la tontine
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de la tontine
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire
+  - name | VARCHAR(255) | NOT NULL | Nom du groupe d’épargne
+  - description | TEXT | NULL | Présentation de la tontine
+  - frequency | VARCHAR(20) | NOT NULL | Périodicité (daily, weekly, monthly…)
+  - default_contribution_amount | NUMERIC(15,2) | NOT NULL | Contribution standard des membres
+  - is_purchasable | BOOLEAN | DEFAULT FALSE | Indique si la tontine peut être achetée
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État du groupe (ACTIVE, CLOSED, PAUSED)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de sync système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la tontine
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — tontines |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tontines_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_tontines_name | UNIQUE (tenant_id, name) | Unicité composée | 
+  - ck_tontines_frequency | CHECK (frequency IN ('DAILY','WEEKLY','MONTHLY','CUSTOM')) | ENUM | 
+  - ck_tontines_amount | CHECK (default_contribution_amount > 0) | Contrainte métier | 
+  - ck_tontines_status | CHECK (status IN ('ACTIVE','PAUSED','CLOSED')) | ENUM | 
+  - ck_tontines_sync_status | CHECK (sync_status IN ('SYNCED','PENDING','FAILED')) | ENUM | 
+
+### 21. cycle_members
+TITLE: 🏛️ Table cycle_members — Membres par cycle de tontine
+NOTE: 👉 Cette table gère l’affectation des membres à un cycle de tontine.
+NOTE: 👉 Elle définit l’ordre (rank), la participation et le statut du membre dans un cycle.
+  - id | BIGINT | PK, Identity | Identifiant unique du lien cycle-membre
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique
+  - cycle_id | BIGINT | NOT NULL, FK → tontine_cycles.id | Cycle de tontine concerné
+  - member_id | BIGINT | NOT NULL, FK → members.id | Membre inscrit dans le cycle
+  - initial_rank | INT | NOT NULL | Position du membre dans le cycle
+  - join_date | DATE | NOT NULL | Date d’adhésion au cycle
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État (ACTIVE, INACTIVE, EXITED, SUSPENDED)
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation
+  - version | INT | DEFAULT 1 | Gestion concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’ajout du membre
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le membre du cycle
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — cycle_members |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_cycle_members_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_cycle_members_cycle_member | UNIQUE (cycle_id, member_id) | Unicité métier | 
+  - uq_cycle_members_cycle_rank | UNIQUE (cycle_id, initial_rank) | Unicité métier composée | 
+  - uq_cycle_members_cycle_join | UNIQUE (cycle_id, member_id, join_date) | Unicité métier optionnelle | 
+  - ck_cycle_members_rank_positive | CHECK (initial_rank > 0) | CHECK CONSTRAINT (Validation numérique) | 
+  - ck_cycle_members_status_valid | CHECK (status IN ('ACTIVE','INACTIVE','EXITED','SUSPENDED')) | CHECK CONSTRAINT (ENUM métier) | 
+  - ck_cycle_members_sync_status | CHECK (sync_status IN ('PENDING','SYNCED','FAILED')) | CHECK CONSTRAINT (ENUM système) | 
+  - ck_cycle_members_version_positive | CHECK (version >= 1) | CHECK CONSTRAINT (Validation d’intégrité) | 
+  - ck_cycle_members_join_date_valid | CHECK (join_date IS NOT NULL) | CHECK CONSTRAINT (Nullability rule) | 
+
+### 22. tontine_cycles
+TITLE: 🧾 Table tontine_cycles — Cycles d'une tontine (Core Tontine Rotation Module)
+NOTE: 👉 Cette table représente un cycle d'une tontine : une période d'activité bornée durant laquelle se déroulent cotisations, tours et tirages.
+NOTE: 👉 Elle est rattachée à une tontine (tontine_id) et regroupe les membres participants (cycle_members), les cotisations (tontine_contributions) et les tirages (tontine_draws) de la période.
+NOTE: 👉 Structure corrigée : la fiche précédente dupliquait intégralement cycle_members (ST-021) et référençait une table cycles inexistante. Voir docs/TANZEN_TONTINE_CYCLE_DECISION.md pour la traçabilité de cette correction.
+  - id | BIGINT | PK, Identity | Identifiant unique du cycle
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Identifiant global du cycle
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire du cycle
+  - tontine_id | BIGINT | NOT NULL, FK → tontines.id | Tontine à laquelle appartient le cycle
+  - start_date | DATE | NOT NULL | Date d'ouverture du cycle
+  - end_date | DATE | NULL | Date de clôture du cycle — caractère obligatoire et mode de détermination (planifiée ou constatée) non tranchés par les sources, à valider par le métier
+  - status | VARCHAR(20) | NOT NULL | État du cycle — aucune valeur d'enum documentée dans les spécifications sources à ce jour, à valider par le métier avant d'appliquer une contrainte CHECK
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création du cycle
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le cycle
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — tontine_cycles |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tontine_cycles_uuid | UNIQUE (uuid) | Unicité simple | 
+  - fk_tontine_cycles_tontine | FK (tontine_id) → tontines.id | Intégrité référentielle | 
+  - ck_tontine_cycles_dates | CHECK (end_date IS NULL OR end_date > start_date) | Contrainte logique | 
+  - ck_tontine_cycles_version_positive | CHECK (version >= 1) | Validation d'intégrité | 
+  - ⚠️ Statut de cette fiche : structure validée (docs/TANZEN_TONTINE_CYCLE_DECISION.md). Valeurs de l'enum status, obligation de end_date, et opportunité d'un champ cycle_number restent à valider par le propriétaire fonctionnel — aucune valeur n'a été inventée pour combler ces points. |  |  | 
+
+### 23. tontine_contributions
+TITLE: 🏛️ Table tontine_contributions — Cotisations des membres dans les cycles
+NOTE: 👉 Cette table enregistre les cotisations effectuées par les membres dans un cycle de tontine.
+NOTE: 👉 Elle constitue la base du suivi financier des contributions.
+  - id | BIGINT | PK, Identity | Identifiant unique de la cotisation
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe unique
+  - cycle_id | BIGINT | NOT NULL, FK → tontine_cycles.id | Cycle de tontine concerné
+  - member_id | BIGINT | NOT NULL, FK → members.id | Membre ayant cotisé
+  - amount | NUMERIC(15,2) | NOT NULL | Montant de la contribution
+  - contribution_date | DATE | NOT NULL | Date de paiement
+  - status | VARCHAR(20) | DEFAULT 'PAID' | État (PAID, PENDING, FAILED, CANCELLED)
+  - payment_method | VARCHAR(30) | NULL | CASH, MOBILE_MONEY, BANK…
+  - reference | VARCHAR(100) | NULL | Code de paiement externe
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État synchronisation
+  - version | INT | DEFAULT 1 | Gestion concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la contribution dans une tontine
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table tontine_contributions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tontine_contributions_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_tontine_contributions_reference | UNIQUE (reference) | Unicité transaction | 
+  - uq_tontine_contributions_member_cycle_date | UNIQUE (cycle_id, member_id, contribution_date) | Unicité métier composée | 
+  - uq_tontine_contributions_cycle_member | UNIQUE (cycle_id, member_id, reference) | Unicité métier | 
+  - ck_tontine_contributions_amount_positive | CHECK (amount > 0) | CHECK (Validation numérique) | 
+  - ck_tontine_contributions_status_valid | CHECK (status IN ('PAID','PENDING','FAILED','CANCELLED')) | CHECK (ENUM logique) | 
+  - ck_tontine_contributions_payment_method_valid | CHECK (payment_method IN ('CASH','MOBILE_MONEY','BANK','CARD')) | CHECK (ENUM logique) | 
+  - ck_tontine_contributions_sync_status_valid | CHECK (sync_status IN ('PENDING','SYNCED','FAILED')) | CHECK (ENUM logique) | 
+  - ck_tontine_contributions_version_positive | CHECK (version >= 1) | CHECK (Validation entière) | 
+  - ck_tontine_contributions_date_valid | CHECK (contribution_date IS NOT NULL) | CHECK (Null safety) | 
+
+### 24. tontine_draws
+TITLE: 🧾 Table tontine_draws — Tirages des tontines (Core Savings Rotation Engine)
+NOTE: 👉 Cette table gère les tirages des tontines (rotations ou enchères de distribution).
+NOTE: 👉 Elle permet de déterminer le bénéficiaire d’un cycle et d’enregistrer les résultats du tirage.
+NOTE: 👉 Elle constitue le cœur du mécanisme de rotation financière des tontines.
+  - id | BIGINT | PK | Identifiant unique du tirage
+  - uuid | CHAR(36) | NOT NULL | Identifiant global du tirage
+  - cycle_id | BIGINT | NOT NULL, FK → tontine_cycles.id | Cycle auquel appartient le tirage
+  - draw_number | INT | NOT NULL | Ordre du tirage dans le cycle
+  - draw_date | DATE | NOT NULL | Date à laquelle le tirage est effectué
+  - scheduled_member_id | BIGINT | FK → members.id | Membre prévu selon rotation
+  - actual_winner_id | BIGINT | FK → members.id | Membre ayant remporté le tirage
+  - draw_type | VARCHAR(20) | NOT NULL | Mode (ROTATION, AUCTION, RANDOM)
+  - winning_bid | NUMERIC(15,2) | DEFAULT 0 | Montant proposé par le gagnant
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | État du tirage (PENDING, COMPLETED, CANCELLED)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Mise à jour du tirage
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé l'ordre de tirage d'une tontine
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — tontine_draws |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_tontine_draws_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_tontine_draws_cycle_number | UNIQUE (cycle_id, draw_number) | Unicité composée | 
+  - ck_tontine_draws_number | CHECK (draw_number > 0) | Contrainte métier | 
+  - ck_tontine_draws_type | CHECK (draw_type IN ('ROTATION','AUCTION','RANDOM')) | ENUM | 
+  - ck_tontine_draws_status | CHECK (status IN ('PENDING','COMPLETED','CANCELLED')) | ENUM | 
+  - ck_tontine_draws_bid | CHECK (winning_bid >= 0) | Contrainte métier | 
+  - ck_tontine_draws_winner_logic | CHECK (actual_winner_id IS NOT NULL OR status != 'COMPLETED') | Contrainte logique | 
+
+### 25. draw_winners
+TITLE: 🧾 Table draw_winners — Gagnants des tirages de tontine (Core Tontine Settlement Module)
+NOTE: 👉 Cette table enregistre les gagnants des tirages de tontine.
+NOTE: 👉 Elle trace les montants reçus, les contributions du pool et les éventuelles enchères gagnantes.
+NOTE: 👉 Elle constitue la couche de règlement financier (settlement layer) du système de tontine.
+  - id | BIGINT | PK | Identifiant unique du gagnant
+  - uuid | CHAR(36) | NOT NULL | Identifiant global du gagnant
+  - draw_id | BIGINT | NOT NULL, FK → tontine_draws.id | Tirage concerné
+  - member_id | BIGINT | NOT NULL, FK → members.id | Membre gagnant
+  - contribution_pool | NUMERIC(15,2) | NOT NULL | Fonds total du tirage
+  - amount_received | NUMERIC(15,2) | NOT NULL | Somme perçue par le gagnant
+  - bid_amount | NUMERIC(15,2) | NULL | Montant de l’enchère (si auction)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de validation du gain
+  - 🔑 CONTRAINTES MÉTIER — Table draw_winners |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_draw_winners_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_draw_winners_draw | UNIQUE (draw_id) | Unicité composée | 
+  - ck_draw_winners_amounts | CHECK (amount_received >= 0 AND contribution_pool >= 0) | Contrainte métier | 
+  - ck_draw_winners_bid_logic | CHECK (bid_amount IS NULL OR bid_amount >= 0) | Contrainte métier | 
+
+### 26. transactions
+TITLE: 🏛️ Table transactions — Opérations financières
+NOTE: 👉 Cette table centralise toutes les opérations financières de la plateforme : cotisations, dépenses, revenus, transferts, prêts, remboursements.
+NOTE: 👉 Elle constitue le ledger (journal comptable unique) du système.
+  - id | BIGINT | PK | Identifiant unique transaction
+  - uuid | CHAR(36) | NOT NULL | Référence externe
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Tenant propriétaire
+  - account_id | BIGINT | NOT NULL, FK → accounts.id | Compte débité/crédité
+  - member_id | BIGINT | NULL, FK → members.id | Auteur ou bénéficiaire
+  - category_id | BIGINT | NULL, FK → transaction_categories.id | Type métier
+  - meeting_id | BIGINT | NULL, FK → meetings.id | Contexte tontine
+  - loan_id | BIGINT | NULL, FK → loans.id | Lien crédit (IMPORTANT AJOUT)
+  - fiscal_year_id | BIGINT | NULL, FK → fiscal_years.id | Année comptable
+  - type | VARCHAR(30) | NOT NULL | INCOME / EXPENSE / TRANSFER / COTISATION / LOAN_DISBURSEMENT / LOAN_REPAYMENT
+  - amount | NUMERIC(15,2) | NOT NULL | Valeur financière
+  - description | TEXT | NULL | Détail opération
+  - payment_method | VARCHAR(30) | DEFAULT 'CASH' | CASH / MOBILE_MONEY / BANK / CARD
+  - transaction_date | TIMESTAMP | NOT NULL | Date réelle
+  - reference | VARCHAR(100) | NOT NULL | ID paiement externe
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État synchronisation
+  - version | INT | DEFAULT 1 | Concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES MÉTIER — transactions |  |  | 
+  - Nom | Définition | Type | 
+  - uq_transactions_uuid | UNIQUE(uuid) | Unique | 
+  - uq_transactions_reference | UNIQUE(reference) | Unique | 
+  - uq_transactions_tenant_reference | UNIQUE(tenant_id, reference) | Composée | 
+  - uq_transactions_account_date_ref | UNIQUE(account_id, transaction_date, reference) | Composée | 
+  - ck_transactions_amount_positive | CHECK(amount > 0) | CHECK | 
+  - ck_transactions_type_valid | CHECK(type IN ('INCOME','EXPENSE','TRANSFER','COTISATION','LOAN_DISBURSEMENT','LOAN_REPAYMENT')) | ENUM | 
+  - ck_transactions_payment_method_valid | CHECK(payment_method IN ('CASH','MOBILE_MONEY','BANK','CARD')) | ENUM | 
+  - ck_transactions_sync_status_valid | CHECK(sync_status IN ('PENDING','SYNCED','FAILED')) | ENUM | 
+  - ck_transactions_version_positive | CHECK(version >= 1) | CHECK | 
+  - ck_transactions_date_valid | CHECK(transaction_date IS NOT NULL) | CHECK | 
+
+### 27. audit_logs
+TITLE: 🧾 Table audits — Journal d’audit des actions système (Core Audit & Compliance Module)
+NOTE: 👉 Cette table enregistre toutes les actions effectuées dans le système.
+NOTE: 👉 Elle permet de tracer les opérations utilisateurs et systèmes pour la sécurité, la conformité et le debugging.
+NOTE: 👉 Elle constitue la base du monitoring et de la traçabilité (audit trail).
+  - id | BIGINT | PK | Identifiant unique du log
+  - uuid | CHAR(36) | NOT NULL | Identifiant global du log
+  - tenant_id | BIGINT | NOT NULL | Organisation concernée
+  - user_id | BIGINT | NULL | Utilisateur ayant effectué l’action
+  - module | VARCHAR(100) | NOT NULL | Partie du système concernée (loans, tontines, accounts…)
+  - action | VARCHAR(50) | NOT NULL | Type d’action (CREATE, UPDATE, DELETE, LOGIN…)
+  - entity | VARCHAR(100) | NOT NULL | Table ou ressource affectée
+  - entity_id | BIGINT | NULL | Identifiant de l’objet modifié
+  - description | TEXT | NULL | Description humaine de l’événement
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Horodatage de l’action
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Mise à jour du log
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES MÉTIER — Table audits |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_audits_uuid | UNIQUE (uuid) | Unicité simple | 
+  - ck_audits_action | CHECK (action IN ('CREATE','UPDATE','DELETE','LOGIN','LOGOUT','APPROVE','REJECT','SYNC')) | ENUM | 
+  - ck_audits_entity_id | CHECK (entity_id IS NULL OR entity_id > 0) | Contrainte métier | 
+  - ck_audits_module | CHECK (module IS NOT NULL) | Contrainte métier | 
+
+### 28. notifications
+TITLE: 📩 Table notifications — Notifications utilisateurs
+NOTE: 👉 Messages envoyés aux utilisateurs.
+  - id | BIGINT | PK | 
+  - uuid | CHAR(36) | UNIQUE | 
+  - tenant_id | BIGINT | FK | 
+  - user_id | BIGINT | FK | 
+  - template_id | BIGINT | FK | 
+  - title | VARCHAR(255) |  | 
+  - message | TEXT | NOT NULL | 
+  - channel | VARCHAR(20) | ENUM | 
+  - category | VARCHAR(30) | ENUM | 
+  - status | VARCHAR(20) | ENUM | 
+  - sent_at | TIMESTAMP | NULL | 
+  - read_at | TIMESTAMP | NULL | 
+  - created_at | TIMESTAMP |  | 
+  - 🔑 CONTRAINTES MÉTIER — Table notifications |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_notifications_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_notifications_tenant_reference | UNIQUE (tenant_id, uuid) | Unicité métier | 
+  - uq_notifications_member_subject_time | UNIQUE (member_id, subject, created_at) | Unicité composée | 
+  - ck_notifications_channel_valid | CHECK (channel IN ('EMAIL','SMS','PUSH','IN_APP')) | CHECK (ENUM) | 
+  - ck_notifications_status_valid | CHECK (status IN ('PENDING','SENT','FAILED','READ')) | CHECK (ENUM) | 
+  - ck_notifications_subject_length | CHECK (LENGTH(subject) <= 255) | CHECK (validation texte) | 
+  - ck_notifications_sent_logic | CHECK (sent_at IS NULL OR sent_at >= created_at) | CHECK (cohérence temporelle) | 
+  - ck_notifications_message_not_empty | CHECK (message IS NOT NULL) | CHECK (null safety) | 
+
+### 29. notification_templates
+TITLE: 📝 Table notification_templates — Modèles de notifications
+NOTE: 👉 Cette table contient les modèles réutilisables de notifications (email, SMS, push, in-app).
+NOTE: 👉 Elle permet de standardiser les messages envoyés dans toute la plateforme.
+  - id | BIGINT | PK | Identifiant unique du template
+  - tenant_id | BIGINT | FK → tenants.id, NULL | Tenant propriétaire du template
+  - code | VARCHAR(100) | NOT NULL | Code unique du modèle (ex: LOAN_APPROVED)
+  - subject | VARCHAR(255) | NULL | Objet du message (email)
+  - body | TEXT | NOT NULL | Corps du message avec variables
+  - variables | JSON | NULL | Paramètres injectables (nom, montant…)
+  - language | VARCHAR(10) | DEFAULT 'fr' | Langue du template
+  - is_active | BOOLEAN | DEFAULT TRUE | Activation du template
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - 🔑 CONTRAINTES MÉTIER — Table notification_templates |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_templates_code_tenant | UNIQUE (tenant_id, code) | Unicité métier | 
+  - ck_templates_body_required | CHECK (body IS NOT NULL) | Validation | 
+  - ck_templates_language_valid | CHECK (language IN ('fr','en','es','pt')) | Enum | 
+  - ck_templates_active_flag | CHECK (is_active IN (0,1)) | Bool | 
+
+### 30. notification_preferences
+TITLE: 👤 Table notification_preferences — Préférences utilisateur
+NOTE: 👉 Cette table définit les préférences de réception des notifications par utilisateur.
+  - id | BIGINT | PK | ID technique
+  - user_id | BIGINT | FK → users.id | Utilisateur concerné
+  - tenant_id | BIGINT | FK → tenants.id | Tenant
+  - email | BOOLEAN | DEFAULT TRUE | Réception email
+  - sms | BOOLEAN | DEFAULT TRUE | Réception SMS
+  - push | BOOLEAN | DEFAULT TRUE | Notifications push
+  - in_app | BOOLEAN | DEFAULT TRUE | Notifications internes
+  - mute_from | TIME | NULL | Heure début mode silencieux
+  - mute_to | TIME | NULL | Heure fin mode silencieux
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - 🔑 CONTRAINTES MÉTIER — Table notification_preferences |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_preferences_user_tenant | UNIQUE (user_id, tenant_id) | Unicité métier | 
+  - ck_preferences_channels | CHECK (email IN (0,1) AND sms IN (0,1) AND push IN (0,1) AND in_app IN (0,1)) | Bool | 
+  - ck_preferences_mute_logic | CHECK (mute_from IS NULL OR mute_to IS NULL OR mute_from < mute_to) | Cohérence | 
+
+### 31. notification_logs
+TITLE: 📜 Table notification_logs — Logs d’envoi
+NOTE: 👉 Historique technique de toutes les notifications envoyées.
+  - id | BIGINT | PK | Log ID
+  - notification_id | BIGINT | FK → notifications.id | Notification liée
+  - channel | VARCHAR(20) | NOT NULL | EMAIL/SMS/PUSH
+  - provider | VARCHAR(100) | NULL | Twilio, SMTP…
+  - status | VARCHAR(20) | NOT NULL | SUCCESS/FAILED
+  - response | TEXT | NULL | Réponse fournisseur
+  - error_message | TEXT | NULL | Détail erreur
+  - sent_at | TIMESTAMP | NULL | Date envoi
+  - 🔑 CONTRAINTES MÉTIER — Table notification_logs |  |  | 
+  - Nom | Définition | Type | 
+  - ck_logs_status | CHECK (status IN ('SUCCESS','FAILED','PENDING')) | Enum | 
+  - ck_logs_channel | CHECK (channel IN ('EMAIL','SMS','PUSH','IN_APP')) | Enum | 
+
+### 32. email_queue
+TITLE: 📧 Table email_queue — File d’attente Email
+NOTE: 👉 Cette table gère les emails en file d’attente avant envoi asynchrone.
+NOTE: 👉 Elle permet de garantir la fiabilité et la traçabilité des envois email.
+  - id | BIGINT | PK | Email job
+  - tenant_id | BIGINT | FK → tenants.id | Organisation
+  - recipient | VARCHAR(255) | NOT NULL | Email utilisateur
+  - subject | VARCHAR(255) | NOT NULL | Objet email
+  - body | TEXT | NOT NULL | Message
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | Statut envoi
+  - retries | INT | DEFAULT 0 | Retry count
+  - scheduled_at | TIMESTAMP | NULL | Envoi différé
+  - sent_at | TIMESTAMP | NULL | Date réelle
+  - 🔑 CONTRAINTES MÉTIER — email_queue |  |  | 
+  - Nom | Règle |  | 
+  - ck_email_status | PENDING / SENT / FAILED |  | 
+  - ck_retries | retries >= 0 |  | 
+
+### 33. sms_queue
+TITLE: 📱 Table sms_queue — File d’attente SMS
+NOTE: 👉 Gère l’envoi des SMS en mode asynchrone.
+  - id | BIGINT | PK | ID SMS
+  - tenant_id | BIGINT | FK → tenants.id | Tenant
+  - phone_number | VARCHAR(50) | NOT NULL | Destinataire SMS
+  - message | TEXT | NOT NULL | Message SMS
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | État d’envoi
+  - retries | INT | DEFAULT 0 | Retry count
+  - scheduled_at | TIMESTAMP | NULL | Envoi planifié
+  - sent_at | TIMESTAMP | NULL | Date d’envoi
+  - 🔑 CONTRAINTES MÉTIER — sms_queue |  |  | 
+  - Nom | Règle |  | 
+  - ck_sms_status | PENDING / SENT / FAILED |  | 
+  - ck_sms_retries | retries >= 0 |  | 
+
+### 34. push_queue
+TITLE: 📲 Table push_queue — Notifications Push
+NOTE: 👉 Gère les notifications push vers applications mobiles et web.
+  - id | BIGINT | PK | ID notification
+  - tenant_id | BIGINT | FK → tenants.id | Tenant
+  - device_token | VARCHAR(255) | NOT NULL | Identifiant device
+  - title | VARCHAR(255) | NOT NULL | Titre notification
+  - body | TEXT | NOT NULL | Contenu push
+  - data | JSON | NULL | Données complémentaires
+  - status | VARCHAR(20) | DEFAULT 'PENDING' | État envoi
+  - sent_at | TIMESTAMP | NULL | Date d’envoi
+  - 🔑 CONTRAINTES MÉTIER — push_queue |  |  | 
+  - Nom | Règle |  | 
+  - ck_push_status | PENDING / SENT / FAILED |  | 
+
+### 35. announcements
+TITLE: 📢 Table announcements — Annonces globales
+NOTE: 👉 Cette table gère les annonces publiques diffusées à un ensemble d’utilisateurs d’un tenant.
+  - id | BIGINT | PK | ID annonce
+  - tenant_id | BIGINT | FK → tenants.id | Tenant émetteur
+  - title | VARCHAR(255) | NOT NULL | Titre de l’annonce
+  - content | TEXT | NOT NULL | Message de l’annonce
+  - audience | VARCHAR(50) | ENUM | ALL / MEMBERS / BOARD
+  - start_at | TIMESTAMP | NULL | Date de début
+  - end_at | TIMESTAMP | NULL | Date de fin
+  - is_published | BOOLEAN | DEFAULT FALSE | Statut visibilité
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - 🔑 CONTRAINTES MÉTIER — announcements |  |  | 
+  - Nom | Règle |  | 
+  - ck_audience | ALL / MEMBERS / BOARD |  | 
+  - ck_publish_logic | start_at <= end_at |  | 
+
+### 36. notification_settings
+TITLE: 🔔 Table notification_settings — Configuration notifications
+NOTE: 👉 Cette table définit les paramètres globaux des notifications pour chaque organisation (tenant).
+NOTE: 👉 Elle contrôle les canaux de diffusion et les règles de communication.
+  - id | BIGINT | PK | Identifiant de configuration
+  - tenant_id | BIGINT | FK → tenants.id | Tenant concerné
+  - email_enabled | BOOLEAN | DEFAULT TRUE | Autorise envoi email
+  - sms_enabled | BOOLEAN | DEFAULT TRUE | Autorise envoi SMS
+  - push_enabled | BOOLEAN | DEFAULT TRUE | Autorise notifications push
+  - in_app_enabled | BOOLEAN | DEFAULT TRUE | Active notifications in-app
+  - notify_new_member | BOOLEAN | DEFAULT TRUE | Notification création membre
+  - notify_payment | BOOLEAN | DEFAULT TRUE | Notification transactions
+  - notify_loan | BOOLEAN | DEFAULT TRUE | Notifications crédit
+  - notify_tontine | BOOLEAN | DEFAULT TRUE | Notifications tontine
+  - notify_penalty | BOOLEAN | DEFAULT TRUE | Alertes retard paiement
+  - daily_summary | BOOLEAN | DEFAULT FALSE | Rapport journalier
+  - weekly_summary | BOOLEAN | DEFAULT FALSE | Rapport hebdomadaire
+  - quiet_hours_enabled | BOOLEAN | DEFAULT FALSE | Désactive notifications nuit
+  - quiet_hours_start | TIME | NULL | Heure début mode silencieux
+  - quiet_hours_end | TIME | NULL | Heure fin mode silencieux
+  - version | INT | DEFAULT 1 | Gestion concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - 🔑 CONTRAINTES MÉTIER — Table notification_settings |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_notification_settings_tenant | UNIQUE (tenant_id) | Unicité métier | 
+  - ck_notification_channels | CHECK (email_enabled IN (0,1) AND sms_enabled IN (0,1) AND push_enabled IN (0,1) AND in_app_enabled IN (0,1)) | Bool | 
+  - ck_quiet_hours_logic | CHECK (quiet_hours_start IS NULL OR quiet_hours_end IS NULL OR quiet_hours_start <> quiet_hours_end) | Cohérence | 
+  - ck_summary_flags | CHECK (daily_summary IN (0,1) AND weekly_summary IN (0,1)) | Bool | 
+  - ck_notification_flags | CHECK (notify_payment IN (0,1) AND notify_loan IN (0,1) AND notify_tontine IN (0,1)) | Bool | 
+
+### 37. sync_jobs
+TITLE: 🔄 Table sync_jobs — Synchronisation système
+NOTE: 👉 Gère les tâches asynchrones (import/export/backup/API sync).
+  - id | BIGINT | PK | Job
+  - uuid | CHAR(36) | UNIQUE | Référence
+  - tenant_id | BIGINT | FK | Organisation
+  - job_type | VARCHAR(30) | ENUM | Import/export
+  - status | VARCHAR(20) | ENUM | État job
+  - progress | DECIMAL(5,2) | NULL | %
+  - source | VARCHAR(100) | NULL | Origine
+  - destination | VARCHAR(100) | NULL | Cible
+  - error_message | TEXT | NULL | Debug
+  - retries | INT | DEFAULT 0 | Retry
+  - started_at | TIMESTAMP | NULL | Exécution
+  - finished_at | TIMESTAMP | NULL | Résultat
+  - created_at | TIMESTAMP |  | 
+  - 🔑 CONTRAINTES MÉTIER — sync_jobs |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - ck_sync_status | CHECK(status IN ('PENDING','RUNNING','SUCCESS','FAILED')) | Enum | 
+  - ck_progress | CHECK(progress BETWEEN 0 AND 100) | Validation | 
+
+### 38. documents
+TITLE: 🧾 Table documents — Gestion des documents (Core Document Management Module)
+NOTE: 👉 Cette table gère les documents stockés dans le système.
+NOTE: 👉 Elle permet d’associer des fichiers aux entités métier (membres, tontines, prêts, audits…).
+NOTE: 👉 Elle constitue la base du système de gestion documentaire multi-tenant.
+  - id | BIGINT | PK | Identifiant unique du document
+  - uuid | CHAR(36) | NOT NULL | Identifiant global du document
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire
+  - title | VARCHAR(255) | NOT NULL | Nom du document
+  - document_type | VARCHAR(50) | NOT NULL | Catégorie (CONTRACT, ID_CARD, REPORT, RECEIPT…)
+  - file_path | VARCHAR(255) | NOT NULL | Emplacement du fichier dans le storage
+  - uploaded_by | BIGINT | FK → users.id | Auteur du téléchargement
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’ajout du document
+  - 🔑 CONTRAINTES MÉTIER — documents |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_documents_uuid | UNIQUE (uuid) | Unicité simple | 
+  - ck_documents_title | CHECK (title IS NOT NULL) | Contrainte métier | 
+  - ck_documents_file_path | CHECK (file_path IS NOT NULL) | Contrainte métier | 
+  - ck_documents_type | CHECK (document_type IN ('CONTRACT','ID','RECEIPT','REPORT','PROFILE','OTHER')) | ENUM | 
+
+### 39. general_assemblies
+TITLE: 🧾 Table general_assemblies — Assemblées générales des organisations (Core Governance Module)
+NOTE: 👉 Cette table représente les assemblées générales organisées par une organisation.
+NOTE: 👉 Elle permet de planifier, documenter et suivre les décisions collectives.
+NOTE: 👉 Elle constitue un pilier de gouvernance dans un système coopératif / tontine / SaaS organisationnel.
+  - id | BIGINT | PK | Identifiant unique de l’assemblée
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de l’assemblée
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - title | VARCHAR(255) | NOT NULL | Nom ou objet de la réunion
+  - assembly_date | DATE | NOT NULL | Date de tenue de l’AG
+  - description | TEXT | NULL | Contenu ou ordre du jour
+  - status | VARCHAR(20) | DEFAULT 'PLANNED' | État (PLANNED, ONGOING, COMPLETED, CANCELLED)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé l'assemblée générale
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table general_assemblies |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_general_assemblies_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_general_assemblies_title_date | UNIQUE (tenant_id, title, assembly_date) | Unicité composée | 
+  - ck_general_assemblies_status | CHECK (status IN ('PLANNED','ONGOING','COMPLETED','CANCELLED')) | ENUM | 
+  - ck_general_assemblies_date | CHECK (assembly_date IS NOT NULL) | Contrainte métier | 
+
+### 40. votes
+TITLE: 🏛️ Table votes — Votes des assemblées
+NOTE: 👉 Cette table enregistre les votes exprimés lors des assemblées générales ou réunions décisionnelles.
+NOTE: 👉 Elle permet de tracer les décisions collectives et leur statut d’adoption.
+  - id | BIGINT | PK | Identifiant unique du vote
+  - uuid | CHAR(36) | UNIQUE, NOT NULL | Référence externe unique
+  - assembly_id | BIGINT | FK → assemblies.id, NOT NULL | Assemblée concernée par le vote
+  - title | VARCHAR(255) | NOT NULL | Intitulé du sujet soumis au vote
+  - description | TEXT | NULL | Détails de la proposition
+  - status | VARCHAR(20) | DEFAULT 'OPEN' | État du vote (ouvert, clôturé, validé…)
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création du vote
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - 🔑 CONTRAINTES MÉTIER — Tables votes |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_votes_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_votes_assembly_title | UNIQUE (assembly_id, title) | Unicité métier composée | 
+  - uq_votes_assembly_active | UNIQUE (assembly_id, status) WHERE status = 'OPEN' | Unicité partielle métier | 
+  - ck_votes_status_valid | CHECK (status IN ('OPEN','CLOSED','APPROVED','REJECTED')) | CHECK (ENUM) | 
+  - ck_votes_title_not_empty | CHECK (title IS NOT NULL) | CHECK (null safety) | 
+  - ck_votes_description_length | CHECK (LENGTH(description) <= 1000) | CHECK (validation texte) | 
+  - ck_votes_status_consistency | CHECK (status IS NOT NULL) | CHECK (cohérence) | 
+
+### 41. vote_options
+TITLE: 🧾 Table votes_options — Options de vote (Core Governance Voting Module)
+NOTE: 👉 Cette table représente les options disponibles pour un vote.
+NOTE: 👉 Elle permet de définir les choix possibles soumis aux votants (ex : POUR / CONTRE / ABSTENTION ou choix multiples).
+NOTE: 👉 Elle constitue un élément clé du système de vote des assemblées et décisions collectives.
+  - id | BIGINT | PK | Identifiant unique de l’option
+  - vote_id | BIGINT | NOT NULL, FK → votes.id | Vote auquel appartient l’option
+  - label | VARCHAR(100) | NOT NULL | Texte de l’option (ex : POUR, CONTRE…)
+  - 🔑 CONTRAINTES MÉTIER — Table votes_options |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_votes_options_vote_label | UNIQUE (vote_id, label) | Unicité composée | 
+  - ck_votes_options_label | CHECK (label IS NOT NULL) | Contrainte métier | 
+
+### 42. member_votes
+TITLE: 🏛️ Table members_votes — Votes des membres
+NOTE: 👉 Cette table enregistre les votes individuels des membres lors des votes d’assemblée.
+NOTE: 👉 Elle permet de garantir la traçabilité, l’intégrité et l’unicité des choix exprimés.
+  - id | BIGINT | PK | Identifiant unique du vote membre
+  - vote_id | BIGINT | FK → votes.id, NOT NULL | Vote concerné
+  - member_id | BIGINT | FK → members.id, NOT NULL | Membre ayant voté
+  - option_id | BIGINT | FK → vote_options.id, NOT NULL | Option choisie par le membre
+  - voted_at | TIMESTAMP | NOT NULL | Date et heure du vote effectué
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Enregistrement du vote
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - 🔑 CONTRAINTES MÉTIER — Table members_votes |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_members_votes_id | UNIQUE (id) | Unicité simple | 
+  - uq_members_votes_vote_member | UNIQUE (vote_id, member_id) | Unicité métier composée | 
+  - uq_members_votes_vote_option_member | UNIQUE (vote_id, member_id, option_id) | Unicité métier avancée | 
+  - ck_members_votes_vote_id_valid | CHECK (vote_id IS NOT NULL) | CHECK (not null safety) | 
+  - ck_members_votes_member_id_valid | CHECK (member_id IS NOT NULL) | CHECK (not null safety) | 
+  - ck_members_votes_option_id_valid | CHECK (option_id IS NOT NULL) | CHECK (not null safety) | 
+  - ck_members_votes_voted_at_valid | CHECK (voted_at IS NOT NULL) | CHECK (date validation) | 
+  - ck_members_votes_consistency | CHECK (voted_at <= CURRENT_TIMESTAMP) | CHECK (cohérence temporelle) | 
+
+### 43. plans
+TITLE: 🧾 Table plans — Plans d’abonnement (Core SaaS Billing Module)
+NOTE: 👉 Cette table définit les plans d’abonnement disponibles dans la plateforme SaaS.
+NOTE: 👉 Elle permet de gérer les limites (membres), les tarifs et la différenciation des offres.
+NOTE: 👉 Elle constitue la base du module de facturation et de subscription management.
+  - id | BIGINT | PK | Identifiant unique du plan
+  - code | VARCHAR(50) | NOT NULL | Identifiant métier du plan
+  - name | VARCHAR(255) | NOT NULL | Libellé commercial
+  - max_members | INT | NOT NULL | Nombre maximum de membres autorisés
+  - monthly_price | NUMERIC(15,2) | NOT NULL | Coût mensuel du plan
+  - annual_price | NUMERIC(15,2) | NOT NULL | Coût annuel du plan
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création du plan
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le plan tarifaire
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table plans |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_plans_code | UNIQUE (code) | Unicité simple | 
+  - ck_plans_max_members | CHECK (max_members > 0) | Contrainte métier | 
+  - ck_plans_monthly_price | CHECK (monthly_price >= 0) | Contrainte métier | 
+  - ck_plans_annual_price | CHECK (annual_price >= 0) | Contrainte métier | 
+
+### 44. payments
+TITLE: 🏛️ Table payments — Paiements des abonnements
+NOTE: 👉 Cette table enregistre tous les paiements effectués pour les abonnements SaaS.
+NOTE: 👉 Elle constitue une table critique du module de facturation et subscription management.
+  - id | BIGINT | PK | Identifiant unique du paiement
+  - subscription_id | BIGINT | FK → subscriptions.id, NOT NULL | Abonnement concerné
+  - amount | NUMERIC(15,2) | NOT NULL | Montant payé
+  - payment_method | VARCHAR(30) | NOT NULL | Moyen utilisé (CARD, MOBILE_MONEY, BANK…)
+  - payment_date | TIMESTAMP | NOT NULL | Date effective du paiement
+  - reference | VARCHAR(100) | UNIQUE | Identifiant unique du paiement
+  - status | VARCHAR(20) | DEFAULT 'SUCCESS' | État du paiement
+  - currency | VARCHAR(10) | DEFAULT 'XAF' | Devise utilisée
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le paiement
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES D’UNICITÉ MÉTIER — Table payments |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_payments_id | UNIQUE (id) | Unicité simple | 
+  - uq_payments_reference | UNIQUE (reference) | Unicité transaction | 
+  - uq_payments_subscription_reference | UNIQUE (subscription_id, reference) | Unicité métier composée | 
+  - uq_payments_subscription_date | UNIQUE (subscription_id, payment_date) | Unicité métier | 
+  - ck_payments_amount_positive | CHECK (amount > 0) | CHECK (validation financière) | 
+  - ck_payments_payment_method_valid | CHECK (payment_method IN ('CARD','MOBILE_MONEY','BANK','CASH')) | CHECK (ENUM) | 
+  - ck_payments_status_valid | CHECK (status IN ('PENDING','SUCCESS','FAILED','REFUNDED')) | CHECK (ENUM) | 
+  - ck_payments_reference_not_null | CHECK (reference IS NOT NULL) | CHECK (null safety) | 
+  - ck_payments_payment_date_valid | CHECK (payment_date IS NOT NULL) | CHECK (date safety) | 
+
+### 45. backups
+TITLE: 🧾 Table backups — Sauvegardes système (Core Infrastructure Module)
+NOTE: 👉 Cette table gère les sauvegardes des données du système.
+NOTE: 👉 Elle permet de tracer, stocker et contrôler les backups par organisation (tenant).
+NOTE: 👉 Elle est essentielle pour la résilience, la récupération et la continuité de service.
+  - id | BIGINT | PK | Identifiant unique du backup
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - backup_date | TIMESTAMP | NOT NULL | Moment où le backup a été effectué
+  - file_path | VARCHAR(255) | NOT NULL | Emplacement du backup
+  - size_mb | NUMERIC(10,2) | NOT NULL | Poids de la sauvegarde
+  - status | VARCHAR(20) | DEFAULT 'SUCCESS' | État (SUCCESS, FAILED, IN_PROGRESS)
+  - 🔑 CONTRAINTES MÉTIER — Table backups |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - ck_backups_size | CHECK (size_mb >= 0) | Contrainte métier | 
+  - ck_backups_status | CHECK (status IN ('SUCCESS','FAILED','IN_PROGRESS')) | ENUM | 
+  - uq_backups_tenant_date | UNIQUE (tenant_id, backup_date) | Unicité composée | 
+
+### 46. subscriptions
+TITLE: 🏛️ Table subscriptions — Abonnements des organisations
+NOTE: 👉 Cette table gère les abonnements SaaS des organisations (tenants).
+NOTE: 👉 Elle définit le plan actif, la période de validité et le statut de souscription.
+  - id | BIGINT | PK | Identifiant unique de l’abonnement
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Organisation abonnée
+  - plan_id | BIGINT | FK → subscription_plans.id, NOT NULL | Plan souscrit
+  - start_date | DATE | NOT NULL | Date de début d’abonnement
+  - end_date | DATE | NULL | Date de fin d’abonnement
+  - status | VARCHAR(20) | DEFAULT 'ACTIVE' | État de l’abonnement
+  - auto_renew | BOOLEAN | DEFAULT TRUE | Indique si renouvellement automatique
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la souscription
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES D’UNICITÉ MÉTIER — Table subscriptions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_subscriptions_id | UNIQUE (id) | Unicité simple | 
+  - uq_subscriptions_tenant_active | UNIQUE (tenant_id) WHERE status = 'ACTIVE' | Unicité partielle | 
+  - uq_subscriptions_tenant_plan_period | UNIQUE (tenant_id, plan_id, start_date) | Unicité métier composée | 
+  - uq_subscriptions_tenant_date | UNIQUE (tenant_id, start_date, end_date) | Unicité métier | 
+  - ck_subscriptions_status_valid | CHECK (status IN ('ACTIVE','EXPIRED','CANCELLED','SUSPENDED')) | CHECK (ENUM) | 
+  - ck_subscriptions_dates_valid | CHECK (end_date IS NULL OR end_date >= start_date) | CHECK (date logic) | 
+  - ck_subscriptions_start_date_required | CHECK (start_date IS NOT NULL) | CHECK (not null safety) | 
+  - ck_subscriptions_tenant_valid | CHECK (tenant_id IS NOT NULL) | CHECK (not null safety) | 
+
+### 47. modules
+TITLE: 🧩 Table modules — Gestion des modules applicatifs (Dynamic Module Registry)
+NOTE: 👉 Cette table centralise les modules fonctionnels disponibles dans la plateforme.
+NOTE: 👉 Elle permet de rendre les permissions dynamiques sans modifier le code.
+  - id | BIGINT | PK, Identity | Identifiant unique du module
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe du module
+  - code | VARCHAR(100) | NOT NULL | Identifiant utilisé par le système (loans, tontines...)
+  - name | VARCHAR(150) | NOT NULL | Libellé affiché
+  - description | TEXT | NULL | Présentation du module
+  - is_active | BOOLEAN | DEFAULT TRUE | Indique si le module est disponible
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d’enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le module
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table modules |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_modules_uuid | UNIQUE(uuid) | Unicité simple | 
+  - uq_modules_code | UNIQUE(code) | Unicité simple | 
+  - ck_modules_active | CHECK(is_active IN(TRUE,FALSE)) | CHECK | 
+
+### 48. roles
+TITLE: 🧑‍💼 Table roles — Gestion des rôles utilisateurs (RBAC)
+NOTE: 👉 Cette table définit les rôles attribuables aux utilisateurs.
+NOTE: 👉 Un rôle regroupe plusieurs permissions.
+  - id | BIGINT | PK, Identity | Identifiant du rôle
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe
+  - tenant_id | BIGINT | FK → tenants.id, NOT NULL | Rôle spécifique au tenant
+  - code | VARCHAR(100) | NOT NULL | Identifiant métier
+  - name | VARCHAR(150) | NOT NULL | Libellé du rôle
+  - description | TEXT | NULL | Détail responsabilité
+  - is_system | BOOLEAN | DEFAULT FALSE | Rôle natif plateforme
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Modification
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé le rôle
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔑 CONTRAINTES MÉTIER — Table roles |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_roles_uuid | UNIQUE(uuid) | Unicité simple | 
+  - uq_roles_tenant_code | UNIQUE(tenant_id, code) | Unicité composée | 
+  - uq_roles_tenant_name | UNIQUE(tenant_id, name) | Unicité composée | 
+  - ck_roles_code | CHECK(code IS NOT NULL) | CHECK métier | 
+  - ck_roles_name | CHECK(name IS NOT NULL) | CHECK métier | 
+  - ck_roles_system | CHECK(is_system IN(TRUE,FALSE)) | CHECK booléen | 
+
+### 49. users_roles
+TITLE: 🔗 Table users_roles — Affectation utilisateurs / rôles
+NOTE: 👉 Table de liaison entre utilisateurs et rôles.
+  - id | BIGINT | PK | Identifiant association
+  - tenant_id | BIGINT | FK → tenants.id | Contexte utilisateur
+  - user_id | BIGINT | FK → users.id | Utilisateur concerné
+  - role_id | BIGINT | FK → roles.id | Rôle utilisateur
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date affectation
+  - 🔑 CONTRAINTES MÉTIER— users_roles |  |  | 
+  - Nom | Définition | Type | 
+  - uq_users_roles | UNIQUE(user_id, role_id, tenant_id) | Composée | 
+
+### 50. permissions
+TITLE: 🔐 Table permissions — Permissions dynamiques
+NOTE: 👉 Cette table définit les actions possibles par module.
+  - id | BIGINT | PK | Identifiant permission
+  - uuid | CHAR(36) | NOT NULL, UNIQUE | Référence externe
+  - module_id | BIGINT | FK → modules.id | Domaine concerné
+  - code | VARCHAR(150) | NOT NULL | Ex: loans.create
+  - action | VARCHAR(50) | NOT NULL | CREATE, READ, UPDATE...
+  - name | VARCHAR(150) | NOT NULL | Libellé permission
+  - description | TEXT | NULL | Détail droit
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date
+  - created_by | BIGINT | FK → users.id, NULL | Utilisateur ayant créé la permission
+  - updated_by | BIGINT | FK → users.id, NULL | Dernier utilisateur ayant modifié
+  - 🔐 CONTRAINTES MÉTIER — Table permissions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_permissions_uuid | UNIQUE(uuid) | Unicité simple | 
+  - uq_permissions_code | UNIQUE(code) | Unicité simple | 
+  - uq_permissions_module_action | UNIQUE(module_id, action) | Unicité composée | 
+  - ck_permissions_action | CHECK(action IN('CREATE','READ','UPDATE','DELETE','APPROVE','EXPORT','IMPORT')) | CHECK ENUM | 
+  - ck_permissions_module | CHECK(module_id IS NOT NULL) | CHECK métier | 
+  - ck_permissions_code_format | CHECK(code LIKE '%.%') | CHECK métier | 
+
+### 51. role_permissions
+TITLE: 🔗 Table role_permissions — Attribution des droits
+NOTE: 👉 Association entre rôles et permissions.
+  - id | BIGINT | PK | Identifiant
+  - role_id | BIGINT | FK → roles.id | Rôle concerné
+  - permission_id | BIGINT | FK → permissions.id | Droit accordé
+  - tenant_id | BIGINT | FK → tenants.id | Isolation tenant
+  - granted | BOOLEAN | DEFAULT TRUE | Permission active
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date attribution
+  - 🔑 CONTRAINTES — Table role_permissions |  |  | 
+  - Nom | Définition | Type | 
+  - uq_permissions_code | UNIQUE(code) | Simple | 
+  - uq_role_permissions | UNIQUE(role_id, permission_id) | Composée | 
+
+### 52. templates
+TITLE: 📄 Table templates — Génération de documents
+NOTE: 👉 Cette table 👉 Stocke les modèles utilisés pour générer automatiquement PDF, DOCX, rapports, contrats.
+  - id | BIGINT | PK | Identifiant
+  - uuid | CHAR(36) | NOT NULL | Référence globale
+  - tenant_id | BIGINT | FK → tenants.id | Propriétaire
+  - name | VARCHAR(150) | NOT NULL | Nom du modèle
+  - code | VARCHAR(100) | NOT NULL | Identifiant métier
+  - type | VARCHAR(50) | NOT NULL | PDF, DOCX, EMAIL…
+  - file_path | VARCHAR(255) | NOT NULL | Chemin stockage
+  - module | VARCHAR(100) | NOT NULL | loans, tontines…
+  - is_active | BOOLEAN | DEFAULT TRUE | Activation template
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date création
+  - 🔑 Contraintes — Table templates |  |  | 
+  - Nom | Définition | Type | 
+  - uq_templates_uuid | UNIQUE(uuid) | Simple | 
+  - uq_templates_code | UNIQUE(tenant_id,code) | Composée | 
+  - ck_templates_type | CHECK(file_type IN ('PDF','DOCX','XLSX')) | CHECK | 
+  - ck_templates_active | CHECK(is_active IN(TRUE,FALSE)) | CHECK | 
+
+### 53. workflows
+TITLE: 🧾 Table workflows — Définition des workflows de validation
+NOTE: 👉 Cette table permet de définir les différents workflows de validation utilisés par la plateforme TANZEN.
+NOTE: 👉 Elle centralise les processus d'approbation applicables aux différents modules métier (Prêts, Tontines, Comptabilité, Gouvernance, Documents, etc.).
+NOTE: 👉 Elle est essentielle pour rendre les circuits de validation entièrement configurables par organisation (tenant), sans modifier le code de l'application.
+  - id | BIGINT | PK | Identifiant unique du workflow
+  - uuid | CHAR(36) | NOT NULL | Identifiant global du workflow
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation propriétaire du workflow
+  - code | VARCHAR(50) | NOT NULL | Code de référence (ex. WF_LOAN, WF_EXPENSE)
+  - name | VARCHAR(150) | NOT NULL | Nom affiché aux administrateurs
+  - description | TEXT | NULL | Description fonctionnelle du processus de validation
+  - module | VARCHAR(50) | NOT NULL | Module utilisant le workflow (Credit, Accounting, Tontine, etc.)
+  - entity_type | VARCHAR(100) | NOT NULL | Entité concernée (Loan, Expense, Tontine, Meeting, etc.)
+  - is_active | BOOLEAN | DEFAULT TRUE | Indique si le workflow est actif et utilisable
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation avec les autres instances
+  - version | INT | DEFAULT 1 | Gestion de la concurrence lors des mises à jour
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création du workflow
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique du workflow
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflows |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflows_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflows_tenant_code | UNIQUE (tenant_id, code) | Unicité composée | 
+  - uq_workflows_tenant_name | UNIQUE (tenant_id, name) | Unicité composée | 
+  - ck_workflows_module | CHECK (module IN ('IDENTITY','GOVERNANCE','TONTINE','ACCOUNTING','CREDIT','RISK','DOCUMENT','COMMUNICATION')) | Contrainte métier | 
+  - ck_workflows_active | CHECK (is_active IN (TRUE,FALSE)) | Booléen | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - tenant_id | tenants.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_workflows_tenant | tenant_id | BTREE | 
+  - idx_workflows_module | module | BTREE | 
+  - idx_workflows_entity | entity_type | BTREE | 
+  - idx_workflows_active | is_active | BTREE | 
+  - idx_workflows_sync | sync_status | BTREE | 
+  - idx_workflows_created | created_at | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WF-001 | Un workflow appartient obligatoirement à une seule organisation (tenant). |  | 
+  - RM-WF-002 | Un workflow ne peut être utilisé que s'il est actif. |  | 
+  - RM-WF-003 | Un workflow est associé à un seul module métier. |  | 
+  - RM-WF-004 | Plusieurs workflows peuvent exister pour un même module. |  | 
+  - RM-WF-005 | Un workflow peut être associé à plusieurs étapes de validation. |  | 
+  - RM-WF-006 | Un workflow ne peut être supprimé s'il est déjà utilisé par une demande de validation. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Créer un workflow | ✅ | ❌ | 
+  - Modifier un workflow | ✅ | ❌ | 
+  - Activer / Désactiver | ✅ | ❌ | 
+  - Consulter les workflows | ✅ | ❌ | 
+  - Supprimer (logique) | ✅ | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflows | Liste des workflows | 
+  - GET | /api/workflows/{id} | Détails d'un workflow | 
+  - POST | /api/workflows | Créer un workflow | 
+  - PUT | /api/workflows/{id} | Modifier un workflow | 
+  - PATCH | /api/workflows/{id}/activate | Activer / Désactiver un workflow | 
+  - DELETE | /api/workflows/{id} | Suppression logique | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowCreated |  |  | 
+  - WorkflowUpdated |  |  | 
+  - WorkflowActivated |  |  | 
+  - WorkflowDeactivated |  |  | 
+  - WorkflowDeleted |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque opération doit enregistrer : |  |  | 
+  - l'utilisateur ayant effectué l'action ; |  |  | 
+  - la date et l'heure ; |  |  | 
+  - les anciennes et nouvelles valeurs ; |  |  | 
+  - l'adresse IP (si disponible) ; |  |  | 
+  - le motif de la modification (optionnel). |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Liste des workflows actifs |  |  | 
+  - Répartition des workflows par module |  |  | 
+  - Historique des modifications |  |  | 
+  - Statistiques d'utilisation des workflows |  |  | 
+  - Workflows inactifs |  |  | 
+
+### 54. workflow_steps
+TITLE: 🧾 Table workflow_steps — Étapes de validation d'un workflow
+NOTE: 👉 Cette table définit les différentes étapes constituant un workflow de validation.
+NOTE: 👉 Elle permet de configurer l'ordre d'exécution des validations, les règles propres à chaque étape et le niveau d'approbation requis.
+NOTE: 👉 Elle est essentielle pour construire des circuits de validation flexibles, configurables et adaptés aux besoins de chaque organisation (tenant).
+  - id | BIGINT | PK | Identifiant unique de l'étape
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de l'étape
+  - workflow_id | BIGINT | NOT NULL, FK → workflows.id | Workflow auquel appartient l'étape
+  - step_order | INT | NOT NULL | Position de l'étape dans le workflow
+  - code | VARCHAR(50) | NOT NULL | Référence fonctionnelle (STEP01, VALIDATION_PRESIDENT...)
+  - name | VARCHAR(150) | NOT NULL | Nom affiché aux administrateurs
+  - description | TEXT | NULL | Description fonctionnelle de l'étape
+  - approval_type | VARCHAR(30) | NOT NULL | Validation individuelle, collective, unanime, automatique…
+  - min_approvals | INT | DEFAULT 1 | Nombre minimum d'approbations nécessaires pour franchir l'étape
+  - timeout_days | INT | DEFAULT NULL | Nombre de jours autorisés avant expiration de l'étape
+  - allow_delegation | BOOLEAN | DEFAULT TRUE | Autorise ou non un validateur à déléguer sa validation
+  - allow_rejection | BOOLEAN | DEFAULT TRUE | Autorise le rejet de la demande à cette étape
+  - allow_return | BOOLEAN | DEFAULT TRUE | Permet de renvoyer la demande à l'étape précédente
+  - is_final | BOOLEAN | DEFAULT FALSE | Indique si cette étape clôture définitivement le workflow
+  - is_active | BOOLEAN | DEFAULT TRUE | Étape disponible ou désactivée
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de la concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de création de l'étape
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_steps |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_steps_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflow_steps_code | UNIQUE (workflow_id, code) | Unicité composée | 
+  - uq_workflow_steps_order | UNIQUE (workflow_id, step_order) | Unicité composée | 
+  - ck_workflow_steps_order | CHECK (step_order > 0) | Contrainte métier | 
+  - ck_workflow_steps_min_approvals | CHECK (min_approvals >= 1) | Contrainte métier | 
+  - ck_workflow_steps_timeout | CHECK (timeout_days IS NULL OR timeout_days >= 0) | Contrainte métier | 
+  - ck_workflow_steps_approval_type | CHECK (approval_type IN ('ANY','ALL','UNANIMOUS','AUTOMATIC')) | ENUM | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - workflow_id | workflows.id | CASCADE | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_workflow_steps_workflow | workflow_id | BTREE | 
+  - idx_workflow_steps_order | workflow_id, step_order | BTREE | 
+  - idx_workflow_steps_active | is_active | BTREE | 
+  - idx_workflow_steps_final | is_final | BTREE | 
+  - idx_workflow_steps_sync | sync_status | BTREE | 
+  - idx_workflow_steps_created | created_at | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WFS-001 | Une étape appartient obligatoirement à un seul workflow. |  | 
+  - RM-WFS-002 | Les étapes d'un workflow sont exécutées dans l'ordre défini par step_order. |  | 
+  - RM-WFS-003 | Une seule étape peut être marquée comme étape finale dans un workflow. |  | 
+  - RM-WFS-004 | Une étape inactive ne peut pas être utilisée lors d'une nouvelle demande d'approbation. |  | 
+  - RM-WFS-005 | Une étape ne peut être supprimée si des demandes de validation y sont déjà rattachées. |  | 
+  - RM-WFS-006 | Le nombre minimal d'approbations ne peut jamais être supérieur au nombre de validateurs affectés à l'étape. |  | 
+  - RM-WFS-007 | Lorsqu'une étape est validée, le workflow passe automatiquement à l'étape suivante, sauf si elle est marquée comme étape finale. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Créer une étape | ✅ | ❌ | 
+  - Modifier une étape | ✅ | ❌ | 
+  - Activer / Désactiver | ✅ | ❌ | 
+  - Consulter les étapes | ✅ | ❌ | 
+  - Supprimer (logique) | ✅ | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflows/{workflowId}/steps | Liste des étapes d'un workflow | 
+  - GET | /api/workflow-steps/{id} | Détails d'une étape | 
+  - POST | /api/workflows/{workflowId}/steps | Créer une étape | 
+  - PUT | /api/workflow-steps/{id} | Modifier une étape | 
+  - PATCH | /api/workflow-steps/{id}/activate | Activer / Désactiver | 
+  - DELETE | /api/workflow-steps/{id} | Suppression logique | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowStepCreated |  |  | 
+  - WorkflowStepUpdated |  |  | 
+  - WorkflowStepActivated |  |  | 
+  - WorkflowStepDeactivated |  |  | 
+  - WorkflowStepDeleted |  |  | 
+  - WorkflowStepCompleted |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque opération doit enregistrer : |  |  | 
+  - l'utilisateur ayant réalisé l'action ; |  |  | 
+  - la date et l'heure ; |  |  | 
+  - les anciennes et nouvelles valeurs ; |  |  | 
+  - l'étape concernée ; |  |  | 
+  - le workflow concerné ; |  |  | 
+  - le motif de la modification (optionnel). |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Liste des étapes par workflow |  |  | 
+  - Durée moyenne de traitement par étape |  |  | 
+  - Étapes les plus bloquantes |  |  | 
+  - Étapes expirées |  |  | 
+  - Taux de validation par étape |  |  | 
+  - Historique des modifications |  |  | 
+
+### 55. workflow_step_approvers
+TITLE: 🧾 Table workflow_step_approvers — Validateurs des étapes de workflow
+NOTE: 👉 Cette table définit les validateurs autorisés pour chaque étape d'un workflow.
+NOTE: 👉 Elle permet d'associer une ou plusieurs entités de validation (rôle, fonction ou utilisateur) à une étape spécifique.
+NOTE: 👉 Elle est essentielle pour mettre en œuvre des circuits d'approbation flexibles, multi-niveaux et configurables sans modifier le code de l'application.
+  - id | BIGINT | PK | Identifiant unique de l'affectation
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de l'affectation
+  - workflow_step_id | BIGINT | NOT NULL, FK → workflow_steps.id | Étape de validation concernée
+  - approver_type | VARCHAR(20) | NOT NULL | ROLE, POSITION ou USER
+  - role_id | BIGINT | NULL, FK → roles.id | Rôle autorisé à valider
+  - position_id | BIGINT | NULL, FK → positions.id | Fonction autorisée à valider
+  - user_id | BIGINT | NULL, FK → users.id | Utilisateur autorisé à valider
+  - priority | INT | DEFAULT 1 | Ordre de priorité des validateurs
+  - is_required | BOOLEAN | DEFAULT TRUE | Indique si ce validateur est obligatoire
+  - is_active | BOOLEAN | DEFAULT TRUE | Affectation active ou non
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de la concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d'affectation
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_step_approvers |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_step_approvers_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflow_step_role | UNIQUE (workflow_step_id, role_id) WHERE role_id IS NOT NULL | Unicité composée | 
+  - uq_workflow_step_position | UNIQUE (workflow_step_id, position_id) WHERE position_id IS NOT NULL | Unicité composée | 
+  - uq_workflow_step_user | UNIQUE (workflow_step_id, user_id) WHERE user_id IS NOT NULL | Unicité composée | 
+  - ck_workflow_step_approver_type | CHECK (approver_type IN ('ROLE','POSITION','USER')) | ENUM | 
+  - ck_workflow_step_priority | CHECK (priority >= 1) | Contrainte métier | 
+  - ck_workflow_step_single_reference | CHECK ((role_id IS NOT NULL)::INT + (position_id IS NOT NULL)::INT + (user_id IS NOT NULL)::INT = 1) | Contrainte métier | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - workflow_step_id | workflow_steps.id | CASCADE | 
+  - role_id | roles.id | RESTRICT | 
+  - position_id | positions.id | RESTRICT | 
+  - user_id | users.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_wsa_step | workflow_step_id | BTREE | 
+  - idx_wsa_role | role_id | BTREE | 
+  - idx_wsa_position | position_id | BTREE | 
+  - idx_wsa_user | user_id | BTREE | 
+  - idx_wsa_priority | priority | BTREE | 
+  - idx_wsa_active | is_active | BTREE | 
+  - idx_wsa_sync | sync_status | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WSA-001 | Une affectation appartient obligatoirement à une étape de workflow. |  | 
+  - RM-WSA-002 | Un seul type de validateur (ROLE, POSITION ou USER) est autorisé par enregistrement. |  | 
+  - RM-WSA-003 | Une étape peut posséder plusieurs validateurs. |  | 
+  - RM-WSA-004 | Les validateurs sont évalués selon leur priorité lorsque le workflow le requiert. |  | 
+  - RM-WSA-005 | Une affectation inactive ne peut pas participer à une validation. |  | 
+  - RM-WSA-006 | Les règles de l'étape (minimum d'approbations, type d'approbation) prévalent sur les affectations individuelles. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Affecter un validateur | ✅ | ❌ | 
+  - Modifier une affectation | ✅ | ❌ | 
+  - Activer / Désactiver | ✅ | ❌ | 
+  - Consulter les affectations | ✅ | ❌ | 
+  - Supprimer (logique) | ✅ | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflow-steps/{id}/approvers | Liste des validateurs d'une étape | 
+  - GET | /api/workflow-step-approvers/{id} | Détails d'une affectation | 
+  - POST | /api/workflow-steps/{id}/approvers | Affecter un validateur | 
+  - PUT | /api/workflow-step-approvers/{id} | Modifier une affectation | 
+  - PATCH | /api/workflow-step-approvers/{id}/activate | Activer / Désactiver | 
+  - DELETE | /api/workflow-step-approvers/{id} | Suppression logique | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowStepApproverAssigned |  |  | 
+  - WorkflowStepApproverUpdated |  |  | 
+  - WorkflowStepApproverActivated |  |  | 
+  - WorkflowStepApproverDeactivated |  |  | 
+  - WorkflowStepApproverRemoved |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque opération doit enregistrer : |  |  | 
+  - l'administrateur ayant réalisé l'action ; |  |  | 
+  - la date et l'heure ; |  |  | 
+  - l'étape concernée ; |  |  | 
+  - le type de validateur ; |  |  | 
+  - les anciennes et nouvelles valeurs ; |  |  | 
+  - le motif de la modification (optionnel). |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Liste des validateurs par workflow |  |  | 
+  - Répartition des validations par rôle |  |  | 
+  - Répartition des validations par fonction |  |  | 
+  - Répartition des validations par utilisateur |  |  | 
+  - Affectations actives |  |  | 
+  - Historique des modifications |  |  | 
+
+### 56. workflow_requests
+TITLE: 🧾 Table workflow_requests — Instances des workflows de validation
+NOTE: 👉 Cette table représente les demandes de validation exécutées par le moteur de workflow.
+NOTE: 👉 Elle enregistre chaque instance d'un workflow appliquée à une entité métier (prêt, dépense, tontine, document, etc.).
+NOTE: 👉 Elle permet de suivre l'état d'avancement des validations, les étapes en cours et le résultat final du processus d'approbation.
+NOTE: 👉 Elle constitue le cœur du moteur de workflow de TANZEN.
+  - id | BIGINT | PK | Identifiant unique de la demande
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de la demande
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - workflow_id | BIGINT | NOT NULL, FK → workflows.id | Workflow exécuté
+  - entity_type | VARCHAR(50) | NOT NULL | Loan, Expense, Tontine, Meeting, Document, etc.
+  - entity_id | BIGINT | NOT NULL | Enregistrement concerné par la validation
+  - current_step_id | BIGINT | NULL, FK → workflow_steps.id | Étape actuellement en attente de validation
+  - requested_by | BIGINT | NOT NULL, FK → users.id | Utilisateur ayant initié le workflow
+  - business_key | VARCHAR(100) |  | Référence métier unique de l'entité (ex. numéro de prêt, numéro de 
+facture, numéro de réunion)
+  - status | VARCHAR(20) | NOT NULL | PENDING, IN_PROGRESS, APPROVED, REJECTED, CANCELLED, EXPIRED
+  - started_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de lancement
+  - completed_at | TIMESTAMP | NULL | Date de clôture
+  - comments | TEXT | NULL | Observations générales
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d'enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière mise à jour
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_requests |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_requests_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflow_entity | UNIQUE (workflow_id, entity_type, entity_id) WHERE status IN ('PENDING','IN_PROGRESS') | Unicité métier | 
+  - ck_workflow_request_status | CHECK (status IN ('PENDING','IN_PROGRESS','APPROVED','REJECTED','CANCELLED','EXPIRED')) | ENUM | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - tenant_id | tenants.id | RESTRICT | 
+  - workflow_id | workflows.id | RESTRICT | 
+  - current_step_id | workflow_steps.id | RESTRICT | 
+  - requested_by | users.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_wr_tenant | tenant_id | BTREE | 
+  - idx_wr_workflow | workflow_id | BTREE | 
+  - idx_wr_entity | entity_type, entity_id | BTREE | 
+  - idx_wr_status | status | BTREE | 
+  - idx_wr_step | current_step_id | BTREE | 
+  - idx_wr_requester | requested_by | BTREE | 
+  - idx_wr_created | created_at | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WR-001 | Une demande est toujours associée à un seul workflow. |  | 
+  - RM-WR-002 | Une demande concerne une seule entité métier. |  | 
+  - RM-WR-003 | Une demande ne peut être validée qu'en suivant l'ordre des étapes du workflow. |  | 
+  - RM-WR-004 | Une seule étape est active à un instant donné. |  | 
+  - RM-WR-005 | Une demande approuvée, rejetée ou annulée ne peut plus être modifiée. |  | 
+  - RM-WR-006 | L'approbation de la dernière étape clôt automatiquement le workflow. |  | 
+  - RM-WR-007 | Le rejet d'une étape met fin au workflow, sauf si le workflow autorise le retour en correction. |  | 
+  - RM-WR-008 | Un workflow expiré passe automatiquement au statut EXPIRED. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Créer une demande | ✅ | ❌ | 
+  - Consulter une demande | ✅ | Consultation de ses propres demandes uniquement | 
+  - Annuler une demande | ✅ (selon le statut) | ❌ | 
+  - Modifier une demande | ❌ (après lancement du workflow) | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflow-requests | Liste des demandes | 
+  - GET | /api/workflow-requests/{id} | Détails d'une demande | 
+  - POST | /api/workflow-requests | Démarrer un workflow | 
+  - PATCH | /api/workflow-requests/{id}/cancel | Annuler une demande | 
+  - GET | /api/workflow-requests/pending | Demandes en attente | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowRequestCreated |  |  | 
+  - WorkflowStarted |  |  | 
+  - WorkflowStepCompleted |  |  | 
+  - WorkflowApproved |  |  | 
+  - WorkflowRejected |  |  | 
+  - WorkflowCancelled |  |  | 
+  - WorkflowExpired |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque opération journalise : |  |  | 
+  - le demandeur ; |  |  | 
+  - le workflow utilisé ; |  |  | 
+  - l'étape concernée ; |  |  | 
+  - le statut avant/après ; |  |  | 
+  - la date et l'heure ; |  |  | 
+  - les commentaires éventuels. |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Demandes en attente de validation |  |  | 
+  - Délais moyens d'approbation |  |  | 
+  - Nombre de workflows approuvés |  |  | 
+  - Nombre de workflows rejetés |  |  | 
+  - Workflows expirés |  |  | 
+  - Historique des validations par module |  |  | 
+  - Tableau de bord des approbations |  |  | 
+
+### 57. workflow_actions
+TITLE: 🧾 Table workflow_actions — Historique des actions de validation
+NOTE: 👉 Cette table enregistre toutes les actions réalisées au cours de l'exécution d'un workflow.
+NOTE: 👉 Elle conserve l'historique complet des validations, rejets, retours, délégations et annulations effectués sur chaque demande.
+NOTE: 👉 Elle garantit la traçabilité complète des décisions prises durant le processus d'approbation.
+NOTE: 👉 Elle constitue la principale source d'audit du moteur de workflow.
+  - id | BIGINT | PK | Identifiant unique de l'action
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de l'action
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - workflow_request_id | BIGINT | NOT NULL, FK → workflow_requests.id | Demande concernée
+  - workflow_step_id | BIGINT | NOT NULL, FK → workflow_steps.id | Étape concernée
+  - previous_step_id | BIGINT, FK → workflow_steps.id |  | 
+  - next_step_id | BIGINT, FK → workflow_steps.id |  | 
+  - approver_id | BIGINT | NOT NULL, FK → users.id | Utilisateur ayant effectué l'action
+  - action_type | VARCHAR(20) | NOT NULL | APPROVE, REJECT, RETURN, DELEGATE, CANCEL, AUTO_APPROVE
+  - decision | VARCHAR(20) | NOT NULL | APPROVED, REJECTED, RETURNED, CANCELLED
+  - comments | TEXT | NULL | Justification ou observation du validateur
+  - delegated_to | BIGINT | NULL, FK → users.id | Utilisateur recevant la délégation
+  - action_date | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date et heure de la décision
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d'enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Dernière modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_actions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_actions_uuid | UNIQUE (uuid) | Unicité simple | 
+  - ck_workflow_actions_type | CHECK (action_type IN ('APPROVE','REJECT','RETURN','DELEGATE','CANCEL','AUTO_APPROVE')) | ENUM | 
+  - ck_workflow_actions_decision | CHECK (decision IN ('APPROVED','REJECTED','RETURNED','CANCELLED')) | ENUM | 
+  - ck_workflow_delegate | CHECK ((action_type <> 'DELEGATE') OR delegated_to IS NOT NULL) | Contrainte métier | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - tenant_id | tenants.id | RESTRICT | 
+  - workflow_request_id | workflow_requests.id | CASCADE | 
+  - workflow_step_id | workflow_steps.id | RESTRICT | 
+  - approver_id | users.id | RESTRICT | 
+  - delegated_to | users.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_workflow_actions_request | workflow_request_id | BTREE | 
+  - idx_workflow_actions_step | workflow_step_id | BTREE | 
+  - idx_workflow_actions_approver | approver_id | BTREE | 
+  - idx_workflow_actions_type | action_type | BTREE | 
+  - idx_workflow_actions_date | action_date | BTREE | 
+  - idx_workflow_actions_sync | sync_status | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WFA-001 | Toute action est obligatoirement liée à une demande de workflow. |  | 
+  - RM-WFA-002 | Toute action concerne une seule étape du workflow. |  | 
+  - RM-WFA-003 | Une action est réalisée par un seul validateur. |  | 
+  - RM-WFA-004 | Une action enregistrée ne peut jamais être modifiée ni supprimée physiquement. |  | 
+  - RM-WFA-005 | Les commentaires sont obligatoires pour les actions REJECT et RETURN. |  | 
+  - RM-WFA-006 | Une délégation doit obligatoirement désigner un délégataire valide. |  | 
+  - RM-WFA-007 | Chaque action déclenche automatiquement la mise à jour du statut de la demande (workflow_requests). |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Enregistrer une action | ✅ | ❌ | 
+  - Consulter l'historique | ✅ | Consultation de ses propres demandes uniquement | 
+  - Modifier une action | ❌ | ❌ | 
+  - Supprimer une action | ❌ | ❌ | 
+  - Les actions constituent un journal d'audit et sont immuables. |  |  | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflow-actions | Liste des actions | 
+  - GET | /api/workflow-actions/{id} | Détails d'une action | 
+  - POST | /api/workflow-actions | Enregistrer une action | 
+  - GET | /api/workflow-requests/{id}/history | Historique d'une demande | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowDelegationCreated |  |  | 
+  - WorkflowDelegationUpdated |  |  | 
+  - WorkflowDelegationActivated |  |  | 
+  - WorkflowDelegationRevoked |  |  | 
+  - WorkflowDelegationExpired |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque opération journalise : |  |  | 
+  - le délégant ; |  |  | 
+  - le délégataire ; |  |  | 
+  - le workflow concerné ; |  |  | 
+  - le module concerné ; |  |  | 
+  - les dates de début et de fin ; |  |  | 
+  - le motif de la délégation ; |  |  | 
+  - l'administrateur ayant créé ou modifié la délégation ; |  |  | 
+  - la date et l'heure de l'opération. |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Délégations actives |  |  | 
+  - Délégations expirées |  |  | 
+  - Historique des délégations |  |  | 
+  - Répartition des délégations par module |  |  | 
+  - Utilisateurs les plus souvent remplacés |  |  | 
+  - Durée moyenne des délégations |  |  | 
+
+### 58. workflow_delegations
+TITLE: 🧾 Table workflow_delegations — Délégations de pouvoir des validateurs
+NOTE: 👉 Cette table permet de gérer les délégations temporaires ou permanentes des pouvoirs de validation.
+NOTE: 👉 Elle autorise un validateur à transférer ses responsabilités d'approbation à un autre utilisateur pendant une période déterminée.
+NOTE: 👉 Elle garantit la continuité des processus de validation en cas d'absence, d'indisponibilité ou de remplacement.
+NOTE: 👉 Elle est essentielle pour assurer le bon fonctionnement du moteur de workflow sans interruption.
+  - id | BIGINT | PK | Identifiant unique de la délégation
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de la délégation
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - delegator_user_id | BIGINT | NOT NULL, FK → users.id | Utilisateur qui délègue son pouvoir
+  - delegate_user_id | BIGINT | NOT NULL, FK → users.id | Utilisateur recevant le pouvoir de validation
+  - delegation_scope | VARCHAR(20) | NOT NULL, DEFAULT 'ALL' | Niveau d'application : ALL, MODULE, WORKFLOW, STEP
+  - workflow_id | BIGINT | NULL, FK → workflows.id | Workflow spécifique concerné (NULL = tous les workflows)
+  - module | VARCHAR(50) | NULL | Module spécifique (Credit, Accounting, Tontine, etc.)
+  - start_date | TIMESTAMP | NOT NULL | Date de début de la délégation
+  - end_date | TIMESTAMP | NOT NULL | Date de fin de la délégation
+  - reason | VARCHAR(255) | NULL | Congé, mission, maladie, remplacement, etc.
+  - is_active | BOOLEAN | DEFAULT TRUE | Indique si la délégation est active
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d'enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_delegations |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_delegations_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflow_delegation_period | UNIQUE (delegator_user_id, delegate_user_id, workflow_id, start_date) | Unicité composée | 
+  - ck_workflow_delegation_dates | CHECK (end_date > start_date) | Contrainte métier | 
+  - ck_workflow_delegation_self | CHECK (delegator_user_id <> delegate_user_id) | Contrainte métier | 
+  - ck_workflow_delegation_module | CHECK (module IS NULL OR module IN ('IDENTITY','GOVERNANCE','TONTINE','ACCOUNTING','CREDIT','RISK','DOCUMENT','COMMUNICATION')) | ENUM | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - tenant_id | tenants.id | RESTRICT | 
+  - delegator_user_id | users.id | RESTRICT | 
+  - delegate_user_id | users.id | RESTRICT | 
+  - workflow_id | workflows.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_workflow_delegations_tenant | tenant_id | BTREE | 
+  - idx_workflow_delegations_delegator | delegator_user_id | BTREE | 
+  - idx_workflow_delegations_delegate | delegate_user_id | BTREE | 
+  - idx_workflow_delegations_workflow | workflow_id | BTREE | 
+  - idx_workflow_delegations_module | module | BTREE | 
+  - idx_workflow_delegations_active | is_active | BTREE | 
+  - idx_workflow_delegations_period | start_date, end_date | BTREE | 
+  - idx_workflow_delegations_sync | sync_status | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WFD-001 | Une délégation appartient obligatoirement à une organisation. |  | 
+  - RM-WFD-002 | Un utilisateur ne peut pas se déléguer à lui-même. |  | 
+  - RM-WFD-003 | Une délégation ne produit ses effets que pendant sa période de validité. |  | 
+  - RM-WFD-004 | Une délégation inactive n'est jamais prise en compte par le moteur de workflow. |  | 
+  - RM-WFD-005 | Une délégation peut concerner tous les workflows ou un workflow spécifique. |  | 
+  - RM-WFD-006 | En cas de plusieurs délégations valides, la plus spécifique (workflow) prévaut sur la délégation générale. |  | 
+  - RM-WFD-007 | La révocation d'une délégation n'annule pas les validations déjà effectuées. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Créer une délégation | ✅ | ❌ | 
+  - Modifier une délégation | ✅ | ❌ | 
+  - Révoquer une délégation | ✅ | ❌ | 
+  - Consulter les délégations | ✅ | ❌ | 
+  - Supprimer (logique) | ✅ | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflow-delegations | Liste des délégations | 
+  - GET | /api/workflow-delegations/{id} | Détails d'une délégation | 
+  - POST | /api/workflow-delegations | Créer une délégation | 
+  - PUT | /api/workflow-delegations/{id} | Modifier une délégation | 
+  - PATCH | /api/workflow-delegations/{id}/activate | Activer / Désactiver | 
+  - PATCH | /api/workflow-delegations/{id}/revoke | Révoquer une délégation | 
+  - DELETE | /api/workflow-delegations/{id} | Suppression logique | 
+
+### 59. workflow_conditions
+TITLE: 🧾 Table workflow_conditions — Conditions de transition des workflows
+NOTE: 👉 Cette table définit les règles métier permettant de déterminer le chemin d'exécution d'un workflow.
+NOTE: 👉 Elle permet de créer des workflows conditionnels en fonction des données métier (montant, type de prêt, catégorie de dépense, statut d'un membre, etc.).
+NOTE: 👉 Elle est essentielle pour automatiser les décisions et orienter dynamiquement les demandes vers les étapes appropriées.
+NOTE: 👉 Elle constitue le moteur de décision (Business Rules Engine) du Workflow Core.
+  - id | BIGINT | PK | Identifiant unique de la condition
+  - uuid | CHAR(36) | NOT NULL | Identifiant global de la condition
+  - tenant_id | BIGINT | NOT NULL, FK → tenants.id | Organisation concernée
+  - workflow_id | BIGINT | NOT NULL, FK → workflows.id | Workflow auquel appartient la règle
+  - workflow_step_id | BIGINT | NOT NULL, FK → workflow_steps.id | Étape à partir de laquelle la condition est évaluée
+  - field_name | VARCHAR(100) | NOT NULL | Champ utilisé dans la condition (amount, member_type, account_type, etc.)
+  - operator | VARCHAR(20) | NOT NULL | =, !=, >, >=, <, <=, IN, NOT IN, BETWEEN, LIKE
+  - comparison_value | VARCHAR(255) | NOT NULL | Valeur utilisée pour évaluer la condition
+  - logical_operator | VARCHAR(10) | DEFAULT 'AND' | AND ou OR entre plusieurs conditions
+  - next_step_id | BIGINT | NOT NULL, FK → workflow_steps.id | Étape vers laquelle le workflow est dirigé si la condition est satisfaite
+  - priority | INT | DEFAULT 1 | Ordre d'évaluation des conditions
+  - is_default | BOOLEAN | DEFAULT FALSE | Condition utilisée si aucune autre n'est satisfaite
+  - is_active | BOOLEAN | DEFAULT TRUE | Condition active ou inactive
+  - sync_status | VARCHAR(20) | DEFAULT 'SYNCED' | État de synchronisation système
+  - version | INT | DEFAULT 1 | Gestion de concurrence
+  - created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date d'enregistrement
+  - updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | Date de modification
+  - deleted_at | TIMESTAMP | NULL | Suppression logique
+  - 🔑 CONTRAINTES D'UNICITÉ MÉTIER — workflow_conditions |  |  | 
+  - Nom de la contrainte | Définition | Type | 
+  - uq_workflow_conditions_uuid | UNIQUE (uuid) | Unicité simple | 
+  - uq_workflow_condition_priority | UNIQUE (workflow_step_id, priority) | Unicité composée | 
+  - ck_workflow_operator | CHECK (operator IN ('=','!=','>','>=','<','<=','IN','NOT IN','BETWEEN','LIKE')) | ENUM | 
+  - ck_workflow_logical | CHECK (logical_operator IN ('AND','OR')) | ENUM | 
+  - ck_workflow_priority | CHECK (priority > 0) | Contrainte métier | 
+  - 🔗 CLÉS ÉTRANGÈRES |  |  | 
+  - Champ | Référence | Action ON DELETE | 
+  - tenant_id | tenants.id | RESTRICT | 
+  - workflow_id | workflows.id | CASCADE | 
+  - workflow_step_id | workflow_steps.id | CASCADE | 
+  - next_step_id | workflow_steps.id | RESTRICT | 
+  - 📌 INDEX RECOMMANDÉS |  |  | 
+  - Nom | Colonnes | Type | 
+  - idx_workflow_conditions_workflow | workflow_id | BTREE | 
+  - idx_workflow_conditions_step | workflow_step_id | BTREE | 
+  - idx_workflow_conditions_priority | workflow_step_id, priority | BTREE | 
+  - idx_workflow_conditions_active | is_active | BTREE | 
+  - idx_workflow_conditions_sync | sync_status | BTREE | 
+  - 📋 RÈGLES MÉTIER |  |  | 
+  - Code | Règle métier |  | 
+  - RM-WFC-001 | Une condition appartient obligatoirement à une étape d'un workflow. |  | 
+  - RM-WFC-002 | Les conditions sont évaluées par ordre de priorité. |  | 
+  - RM-WFC-003 | Une seule condition marquée is_default = TRUE est autorisée par étape. |  | 
+  - RM-WFC-004 | Si aucune condition n'est satisfaite, la condition par défaut est utilisée lorsqu'elle existe. |  | 
+  - RM-WFC-005 | Une condition inactive n'est jamais évaluée. |  | 
+  - RM-WFC-006 | La transition vers next_step_id est automatique lorsque la condition est satisfaite. |  | 
+  - RM-WFC-007 | Les étapes d'origine et de destination doivent appartenir au même workflow. |  | 
+  - 🔐 SÉCURITÉ |  |  | 
+  - Action | Administrateur Tenant | Membre | 
+  - Créer une condition | ✅ | ❌ | 
+  - Modifier une condition | ✅ | ❌ | 
+  - Activer / Désactiver | ✅ | ❌ | 
+  - Consulter les conditions | ✅ | ❌ | 
+  - Supprimer (logique) | ✅ | ❌ | 
+  - 📡 API CONCERNÉES |  |  | 
+  - Méthode | Endpoint | Description | 
+  - GET | /api/workflow-conditions | Liste des conditions | 
+  - GET | /api/workflow-conditions/{id} | Détails d'une condition | 
+  - POST | /api/workflow-conditions | Créer une condition | 
+  - PUT | /api/workflow-conditions/{id} | Modifier une condition | 
+  - PATCH | /api/workflow-conditions/{id}/activate | Activer / Désactiver | 
+  - DELETE | /api/workflow-conditions/{id} | Suppression logique | 
+  - 🔔 ÉVÉNEMENTS MÉTIER |  |  | 
+  - WorkflowConditionCreated |  |  | 
+  - WorkflowConditionUpdated |  |  | 
+  - WorkflowConditionActivated |  |  | 
+  - WorkflowConditionDeactivated |  |  | 
+  - WorkflowConditionEvaluated |  |  | 
+  - 📒 JOURNALISATION (AUDIT) |  |  | 
+  - Chaque modification enregistre : |  |  | 
+  - l'administrateur ayant effectué l'opération ; |  |  | 
+  - la règle modifiée ; |  |  | 
+  - les anciennes et nouvelles valeurs ; |  |  | 
+  - la date et l'heure ; |  |  | 
+  - le motif de la modification (optionnel). |  |  | 
+  - 📊 UTILISATION DANS LES RAPPORTS |  |  | 
+  - Conditions par workflow |  |  | 
+  - Conditions actives |  |  | 
+  - Conditions les plus utilisées |  |  | 
+  - Répartition des transitions |  |  | 
+  - Historique des modifications |  |  | 
+  - Analyse des chemins de validation |  |  | 

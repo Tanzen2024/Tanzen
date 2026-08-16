@@ -3,19 +3,22 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react';
 import { Logo } from './components/logo';
 import { useLocale } from '@/contexts/locale-context';
+import { authService } from '@/services/auth.service';
+import { notify } from '@/lib/notify';
 
 /**
  * Point d'entrée de l'Application Tenant — séparation Commercial/Tenant
  * (2026-08-16, voir docs/COMMERCIAL_TENANT_EXECUTION_PLAN.md §24). Contenu
  * fonctionnel identique à l'ancien `signin-page.tsx` du site Public
- * (formulaire, simulation de connexion, redirection `/dashboard`) — seul
- * l'habillage change (`AuthShell` minimal au lieu de `PublicShell`). Le
- * lien "Pas encore de compte ? Créer mon espace" a été retiré : il pointait
- * vers `/pricing`/`/signup`, qui n'existent plus dans ce projet — la
+ * (formulaire, redirection `/dashboard`) — seul l'habillage change
+ * (`AuthShell` minimal au lieu de `PublicShell`). Le lien "Pas encore de
+ * compte ? Créer mon espace" a été retiré : il pointait vers
+ * `/pricing`/`/signup`, qui n'existent plus dans ce projet — la
  * souscription est un parcours Commercial, pas une action du Tenant App.
  *
- * BACKEND PENDING — connexion simulée (pas d'authentification réelle, cf.
- * mocks/rbac.mocks.ts).
+ * BACKEND PENDING — `authService.login()` ne vérifie aucun identifiant
+ * réel, il pose seulement le drapeau de session locale qui permet à
+ * `AuthGuard` de laisser passer (cf. docs/FIX_LOGOUT_TENANT_APP.md).
  */
 export function LoginPage() {
   const navigate = useNavigate();
@@ -24,10 +27,17 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
-    setTimeout(() => navigate('/dashboard'), 1000);
+    try {
+      await authService.login();
+      navigate('/dashboard');
+    } catch {
+      notify.error(t('system', 'errorTitle'));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

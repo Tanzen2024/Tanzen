@@ -1,17 +1,21 @@
 import type { ReactNode } from 'react';
+import { Navigate } from 'react-router-dom';
+import { authService } from '@/services/auth.service';
 
 /**
- * BACKEND PENDING — aucune authentification réelle n'existe encore
- * (`currentUser` dans `mocks/rbac.mocks.ts` est une constante toujours
- * "connectée", pas un état de session). Un vrai `AuthGuard` redirigerait
- * vers `/login` en l'absence de session valide ; il n'y a aujourd'hui rien
- * de réel à vérifier, donc ce garde reste un passthrough explicite plutôt
- * que d'inventer une logique de session fictive. Même principe que
- * `PlatformScopeGuard`/`PermissionRoute` (qui eux vérifient un `scope`/
- * `permission` réels, dérivés du RBAC mocké) — quand une authentification
- * réelle existera, c'est ici que la vérification de session prendra place,
- * sans changer l'emplacement de la garde dans l'arbre de routes.
+ * Garde de session — voir `services/auth.service.ts` pour le détail de la
+ * session locale (BACKEND PENDING : pas de vrai token, juste un drapeau
+ * `localStorage`). Même principe que `PermissionRoute`/`PlatformScopeGuard`
+ * (l'ancien `PlatformScopeGuard`, supprimé de ce projet lors de la
+ * séparation Commercial/Tenant) : une vérification synchrone au rendu,
+ * `<Navigate>` si elle échoue — pas de state React à synchroniser, pas de
+ * context dédié. Cette vérification s'exécute à chaque nouveau rendu (donc
+ * à chaque navigation), ce qui suffit : après `authService.logout()` suivi
+ * d'une redirection vers `/login`, ce composant sort de l'arbre rendu et
+ * n'est réévalué que si l'utilisateur retente une route protégée — auquel
+ * cas il relit l'état à jour et redirige de nouveau.
  */
 export function AuthGuard({ children }: { children: ReactNode }) {
+  if (!authService.isAuthenticated()) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
