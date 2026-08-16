@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #F9FAFB;
+  --color-foreground: #0F172A;
+  --color-primary: #0B1E36;
+  --color-accent: #00C48C;
+  --color-accent-light: #E5F9F4;
+  --color-surface: #FFFFFF;
+  --color-surface-muted: #F1F5F9;
+  
+  --font-sans: var(--font-geist-sans), "Inter", sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    @apply antialiased selection:bg-accent selection:text-white;
+  }
+}

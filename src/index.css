@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 30% 98%;
+    --foreground: 210 35% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 35% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 35% 12%;
+    --primary: 210 80% 46%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 30% 94%;
+    --secondary-foreground: 210 35% 20%;
+    --muted: 210 24% 94%;
+    --muted-foreground: 210 12% 45%;
+    --accent: 210 40% 94%;
+    --accent-foreground: 210 35% 20%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 24% 88%;
+    --input: 210 24% 88%;
+    --ring: 210 80% 46%;
+    --radius: 0.6rem;
+    --chart-1: 210 80% 46%;
+    --chart-2: 158 64% 42%;
+    --chart-3: 35 92% 52%;
+    --chart-4: 262 64% 52%;
+    --chart-5: 0 72% 51%;
+    --sidebar: 210 45% 14%;
+    --sidebar-foreground: 210 20% 80%;
+    --sidebar-accent: 210 50% 22%;
+  }
+
+  .dark {
+    --background: 210 40% 8%;
+    --foreground: 210 20% 92%;
+    --card: 210 38% 12%;
+    --card-foreground: 210 20% 92%;
+    --popover: 210 38% 12%;
+    --popover-foreground: 210 20% 92%;
+    --primary: 210 80% 56%;
+    --primary-foreground: 210 40% 8%;
+    --secondary: 210 30% 18%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 210 30% 18%;
+    --muted-foreground: 210 12% 60%;
+    --accent: 210 30% 22%;
+    --accent-foreground: 210 20% 92%;
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 30% 22%;
+    --input: 210 30% 22%;
+    --ring: 210 80% 56%;
+    --chart-1: 210 80% 56%;
+    --chart-2: 158 64% 52%;
+    --chart-3: 35 92% 57%;
+    --chart-4: 262 64% 62%;
+    --chart-5: 0 72% 61%;
+    --sidebar: 210 48% 9%;
+    --sidebar-foreground: 210 20% 72%;
+    --sidebar-accent: 210 50% 18%;
+  }
+}
+
+* { box-sizing: border-box; }
+html { font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+body { margin: 0; min-height: 100vh; background: hsl(var(--background)); color: hsl(var(--foreground)); -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+button, select, input { font: inherit; }
+button { cursor: pointer; }
+.dark { color-scheme: dark; }
+
+::selection { background: hsl(var(--primary) / 0.2); }
+
+/* Accessible focus indicator for every interactive element; components that already
+   define their own focus-visible ring (shadcn Button, etc.) override this via the
+   Tailwind utilities layer, which has higher precedence than this base-layer rule. */
+:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; border-radius: 2px; }
+
+.skip-link { position: fixed; top: -100%; left: 1rem; z-index: 100; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); padding: 0.625rem 1rem; border-radius: 0.5rem; font-size: 0.875rem; font-weight: 600; transition: top 0.15s ease; }
+.skip-link:focus { top: 1rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }

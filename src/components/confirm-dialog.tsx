@@ -1,0 +1,6 @@
+import type { ReactNode } from 'react';
+
+export function ConfirmDialog({ open, title, description, confirmLabel = 'Confirmer', cancelLabel = 'Annuler', onConfirm, onCancel, children }: { open: boolean; title: string; description?: string; confirmLabel?: string; cancelLabel?: string; onConfirm: () => void; onCancel: () => void; children?: ReactNode }) {
+  if (!open) return null;
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4" role="presentation" onMouseDown={onCancel}><div role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><h2 id="confirm-title" className="text-lg font-semibold text-foreground">{title}</h2>{description && <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>}{children}<div className="mt-6 flex justify-end gap-2"><button type="button" onClick={onCancel} className="rounded-lg border border-input px-3 py-2 text-sm font-medium text-foreground hover:bg-muted">{cancelLabel}</button><button type="button" onClick={onConfirm} className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">{confirmLabel}</button></div></div></div>;
+}

@@ -1,0 +1,23 @@
+{
+  "name": "landing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx next dev -p 3001",
+    "build": "npx next build",
+    "start": "npx next start",
+    "lint": "npx next lint"
+  },
+  "dependencies": {
+    "lucide-react": "^1.23.0",
+    "next": "^15.1.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.2",
+    "@types/node": "20.17.6",
+    "@types/react": "19.2.17",
+    "typescript": "5.8.2"
+  }
+}
