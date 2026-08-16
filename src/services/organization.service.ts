@@ -1,11 +1,19 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { tenants, type Tenant } from '@/mocks/organization/tenants';
+import { tenants } from '@/mocks/organization/tenants';
 import { members, type Member } from '@/mocks/organization/members';
 import { assemblies, meetings, votes, boardMembers, type Assembly, type Meeting, type Vote, type BoardMember } from '@/mocks/organization/governance';
 import type { PlatformScope } from '@/mocks/rbac.mocks';
 
-export type TenantInput = Omit<Tenant, 'id' | 'memberCount' | 'createdAt' | 'status'>;
+/**
+ * Séparation Commercial/Tenant (2026-08-16) : `createTenant`/`updateTenant`
+ * (écriture du registre des tenants) n'existent plus ici — exclusifs à
+ * tanzen-commercial (Platform Administration). `listTenants`/`getTenant`
+ * (lecture seule) restent dupliquées à l'identique côté tenant : le
+ * sélecteur "Tenant" du formulaire Membre en dépend encore, même s'il ne
+ * contient jamais qu'un seul élément en pratique (scope toujours
+ * `'tenant'` ici). Voir docs/COMMERCIAL_TENANT_EXECUTION_PLAN.md §21.
+ */
 export type MemberInput = Pick<Member, 'firstName' | 'lastName' | 'email' | 'phone' | 'occupation' | 'nationality' | 'address' | 'status'> & { tenantId: string; tenantName: string };
 export type AssemblyInput = Pick<Assembly, 'name' | 'type' | 'date' | 'location' | 'participants' | 'agenda'>;
 export type MeetingInput = Pick<Meeting, 'title' | 'date' | 'location' | 'participants' | 'agenda'>;
@@ -34,20 +42,6 @@ export const organizationService = {
       const tenant = tenants.find((item) => item.id === resourceId);
       if (!tenant) return undefined;
       return scope === 'platform' || tenant.id === tenantId ? tenant : undefined;
-    }),
-
-  createTenant: (input: TenantInput) =>
-    mockRequest(() => {
-      const tenant: Tenant = { id: `T-${String(tenants.length + 1).padStart(3, '0')}`, memberCount: 0, createdAt: new Date().toISOString().slice(0, 10), status: 'pending', ...input };
-      tenants.push(tenant);
-      return tenant;
-    }),
-  updateTenant: (tenantId: string, resourceId: string, scope: PlatformScope, patch: Partial<TenantInput>) =>
-    mockRequest(() => {
-      const tenant = tenants.find((item) => item.id === resourceId);
-      if (!tenant || (scope !== 'platform' && tenant.id !== tenantId)) return undefined;
-      Object.assign(tenant, patch);
-      return tenant;
     }),
 
   listMembers: (tenantId: string) => mockRequest(() => members.filter((member) => member.tenantId === tenantId)),

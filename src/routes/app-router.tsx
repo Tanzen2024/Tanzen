@@ -1,19 +1,30 @@
 import { lazy, Suspense } from 'react';
-import { Route, Routes } from 'react-router-dom';
-import { AppShell, PlatformShell } from '@/layouts';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell, AuthShell } from '@/layouts';
 import { DashboardOverview } from '@/features/dashboard';
+import { LoginPage } from '@/features/auth/login-page';
 import { PermissionRoute } from './permission-route';
-import { PlatformScopeGuard } from './platform-scope-route';
+import { AuthGuard } from './auth-guard';
 import { NotFoundPage } from './not-found-page';
 import { UnauthorizedPage } from './unauthorized-page';
 import { RouteLoadingFallback } from './route-loading-fallback';
 
 /**
- * Arbre de routes déclaratif. Chaque domaine métier est monté sur un
- * segment `/*` et définit ses propres routes imbriquées (voir
- * `<Domaine>Module()` dans `src/features/<domaine>/`) — plus aucun module
- * ne parse `pathname` à la main. `PermissionRoute` protège l'accès à la
- * PAGE (pas seulement aux actions, déjà couvertes par `PermissionGate`).
+ * Arbre de routes de tanzen-frontend — Application Tenant exclusivement,
+ * depuis la séparation Commercial/Tenant (2026-08-16, voir
+ * docs/COMMERCIAL_TENANT_EXECUTION_PLAN.md). Ce routeur ne connaît plus
+ * `PlatformShell`/`PublicShell` ni aucune route Public/Platform
+ * (`/pricing`, `/checkout`, `/payment`, `/platform/*`, etc.) : elles
+ * n'existent plus dans ce projet, déplacées vers tanzen-commercial.
+ *
+ * `/` redirige vers `/login`, le nouveau point d'entrée de l'app (mandat
+ * §7/§9) ; `AuthGuard` reste un passthrough documenté tant qu'aucune
+ * authentification réelle n'existe (`BACKEND PENDING`, voir `auth-guard.tsx`).
+ *
+ * Chaque domaine métier est monté sur un segment `/*` et définit ses
+ * propres routes imbriquées (voir `<Domaine>Module()` dans
+ * `src/features/<domaine>/`). `PermissionRoute` protège l'accès à la PAGE
+ * (pas seulement aux actions, déjà couvertes par `PermissionGate`).
  *
  * Le Dashboard reste en import statique (chargé avec le shell) ; les 7
  * autres domaines sont chargés à la demande via `React.lazy` — chacun
@@ -27,13 +38,21 @@ const OperationsModule = lazy(() => import('@/features/operations').then((m) => 
 const AccessModule = lazy(() => import('@/features/access').then((m) => ({ default: m.AccessModule })));
 const AuditModule = lazy(() => import('@/features/audit').then((m) => ({ default: m.AuditModule })));
 const SettingsModule = lazy(() => import('@/features/settings').then((m) => ({ default: m.SettingsModule })));
-const PlatformModule = lazy(() => import('@/features/platform').then((m) => ({ default: m.PlatformModule })));
-const PublicModule = lazy(() => import('@/features/public').then((m) => ({ default: m.PublicModule })));
 
 export function AppRouter() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
+      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route element={<AuthShell />}>
+        <Route path="/login" element={<LoginPage />} />
+      </Route>
+      <Route
+        element={
+          <AuthGuard>
+            <AppShell />
+          </AuthGuard>
+        }
+      >
         <Route path="/dashboard" element={<PermissionRoute permission="dashboard.read"><DashboardOverview /></PermissionRoute>} />
         <Route path="/organization/*" element={<PermissionRoute permission="tenants.read"><Suspense fallback={<RouteLoadingFallback />}><OrganizationModule /></Suspense></PermissionRoute>} />
         <Route path="/finance/*" element={<PermissionRoute permission="accounts.read"><Suspense fallback={<RouteLoadingFallback />}><FinanceModule /></Suspense></PermissionRoute>} />
@@ -45,36 +64,7 @@ export function AppRouter() {
         <Route path="/unauthorized" element={<UnauthorizedPage />} />
         <Route path="/404" element={<NotFoundPage />} />
       </Route>
-      <Route
-        path="/platform/*"
-        element={
-          <PlatformScopeGuard>
-            <PlatformShell>
-              <Suspense fallback={<RouteLoadingFallback />}>
-                <PlatformModule />
-              </Suspense>
-            </PlatformShell>
-          </PlatformScopeGuard>
-        }
-      />
-      {/*
-        Racine du site Public/SaaS — non authentifié, pas d'AppShell/TenantContext.
-        Splat non préfixé : un catch-all bare `path="*"` existait auparavant dans le
-        bloc AppShell ci-dessus et aurait été à égalité de score avec celui-ci
-        (React Router ne départage des splats de même rang que par l'ordre de
-        déclaration, ce qui est fragile) — il a été retiré. Les chemins métier
-        (/dashboard, /organization/*, /platform/*, ...) restent prioritaires car
-        plus spécifiques (segment statique) ; seuls les chemins réellement non
-        reconnus atteignent ce splat, où PublicModule gère son propre 404 interne.
-      */}
-      <Route
-        path="/*"
-        element={
-          <Suspense fallback={<RouteLoadingFallback />}>
-            <PublicModule />
-          </Suspense>
-        }
-      />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }
