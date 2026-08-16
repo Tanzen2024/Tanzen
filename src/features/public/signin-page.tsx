@@ -76,7 +76,7 @@ export function SignInPage() {
 
           <div className="mt-8 text-center text-sm text-slate-500">
             {t('public', 'signinNoAccount')}{' '}
-            <Link to="/subscribe" className="font-bold text-landing-primary hover:text-landing-accent transition-colors">{t('public', 'signinCreateAccount')}</Link>
+            <Link to="/pricing" className="font-bold text-landing-primary hover:text-landing-accent transition-colors">{t('public', 'signinCreateAccount')}</Link>
           </div>
         </div>
       </div>

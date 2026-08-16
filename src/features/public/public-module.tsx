@@ -2,9 +2,14 @@ import { Route, Routes } from 'react-router-dom';
 import { PublicShell } from '@/layouts';
 import { LandingPage } from './landing-page';
 import { FeaturesPage } from './features-page';
+import { PricingPage } from './pricing-page';
 import { SignInPage } from './signin-page';
 import { SignUpPage } from './signup-page';
 import { SubscribePage } from './subscribe-page';
+import { CheckoutPage } from './checkout-page';
+import { PaymentPage } from './payment-page';
+import { PaymentSuccessPage } from './payment-success-page';
+import { PaymentCancelPage } from './payment-cancel-page';
 import { DownloadsPage } from './downloads-page';
 import { DocsPage } from './docs-page';
 import { NotFoundPage } from '@/routes';
@@ -21,9 +26,14 @@ export function PublicModule() {
       <Route element={<PublicShell />}>
         <Route index element={<LandingPage />} />
         <Route path="features" element={<FeaturesPage />} />
+        <Route path="pricing" element={<PricingPage />} />
         <Route path="signin" element={<SignInPage />} />
         <Route path="signup" element={<SignUpPage />} />
         <Route path="subscribe" element={<SubscribePage />} />
+        <Route path="checkout" element={<CheckoutPage />} />
+        <Route path="payment" element={<PaymentPage />} />
+        <Route path="payment/success" element={<PaymentSuccessPage />} />
+        <Route path="payment/cancel" element={<PaymentCancelPage />} />
         <Route path="downloads" element={<DownloadsPage />} />
       </Route>
       <Route path="docs" element={<DocsPage />} />

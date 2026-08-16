@@ -20,7 +20,7 @@ export function SignUpPage() {
     setTimeout(() => {
       setIsLoading(false);
       setIsSuccess(true);
-      setTimeout(() => navigate('/subscribe'), 1500);
+      setTimeout(() => navigate('/pricing'), 1500);
     }, 1200);
   };
 

@@ -47,6 +47,7 @@ export type CurrentUser = {
 export const permissionCatalog: Permission[] = [
   'dashboard.read',
   'tenants.read', 'tenants.create', 'tenants.update',
+  'plans.read', 'subscriptions.read', 'payments.read', 'billing.read', 'platformAudit.read',
   'members.read', 'members.create', 'members.update', 'members.delete',
   'governance.read', 'governance.create', 'governance.approve',
   'accounts.read', 'accounts.create',

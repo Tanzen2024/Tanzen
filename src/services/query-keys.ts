@@ -12,6 +12,17 @@ export const queryKeys = {
     list: (tenantId: string, scope: PlatformScope) => ['tenants', 'list', tenantId, scope] as const,
     detail: (id: string) => ['tenants', 'detail', id] as const,
   },
+  platformCommercial: {
+    dashboard: (scope: PlatformScope) => ['platform-commercial', 'dashboard', scope] as const,
+    plans: ['platform-commercial', 'plans'] as const,
+    subscriptions: (scope: PlatformScope) => ['platform-commercial', 'subscriptions', scope] as const,
+    subscriptionsByTenant: (scope: PlatformScope, tenantId: string) => ['platform-commercial', 'subscriptions', 'tenant', scope, tenantId] as const,
+    payments: (scope: PlatformScope) => ['platform-commercial', 'payments', scope] as const,
+    paymentsByTenant: (scope: PlatformScope, tenantId: string) => ['platform-commercial', 'payments', 'tenant', scope, tenantId] as const,
+    invoices: (scope: PlatformScope) => ['platform-commercial', 'invoices', scope] as const,
+    invoicesByTenant: (scope: PlatformScope, tenantId: string) => ['platform-commercial', 'invoices', 'tenant', scope, tenantId] as const,
+    auditEvents: (scope: PlatformScope) => ['platform-commercial', 'audit-events', scope] as const,
+  },
   members: {
     list: (tenantId: string) => ['members', 'list', tenantId] as const,
     detail: (id: string) => ['members', 'detail', id] as const,

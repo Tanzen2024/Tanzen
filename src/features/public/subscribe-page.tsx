@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, Calendar, Layers, Landmark, ShieldCheck, Shield, LifeBuoy, WifiOff, Loader2 } from 'lucide-react';
 import { useLocale } from '@/contexts/locale-context';
+import { formatNumber } from '@/lib/utils';
 
 type ModuleId = 'MEMBERS' | 'MEETINGS' | 'TONTINES' | 'FINANCE' | 'AUDIT';
 const MODULES: { id: ModuleId; nameKey: string; descKey: string; icon: typeof Users; price: number }[] = [
@@ -21,7 +22,7 @@ const MODULES: { id: ModuleId; nameKey: string; descKey: string; icon: typeof Us
  */
 export function SubscribePage() {
   const navigate = useNavigate();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [selectedModules, setSelectedModules] = useState<ModuleId[]>(['MEMBERS', 'MEETINGS']);
   const [membersCount, setMembersCount] = useState(10);
   const [financialFlow, setFinancialFlow] = useState(0);
@@ -117,7 +118,7 @@ export function SubscribePage() {
                       <h3 className="text-lg font-bold mb-2">{t('public', mod.nameKey)}</h3>
                       <p className="text-xs text-slate-500 mb-6 h-10">{t('public', mod.descKey)}</p>
                       <div className={`text-sm font-bold ${isFree ? 'text-landing-accent' : 'text-slate-600'}`}>
-                        {isFree ? t('public', 'subscribeFree') : `+ ${mod.price.toLocaleString('fr-FR')} CFA/m`}
+                        {isFree ? t('public', 'subscribeFree') : `+ ${formatNumber(mod.price, locale)} CFA/m`}
                       </div>
                     </div>
                   );
@@ -138,18 +139,18 @@ export function SubscribePage() {
                 {MODULES.filter((m) => selectedModules.includes(m.id) && m.price > 0).map((mod) => (
                   <div key={mod.id} className="flex justify-between items-center text-slate-300">
                     <span>{t('public', 'subscribeModuleLine', { name: t('public', mod.nameKey) })}</span>
-                    <span className="font-semibold">+ {mod.price.toLocaleString('fr-FR')} CFA</span>
+                    <span className="font-semibold">+ {formatNumber(mod.price, locale)} CFA</span>
                   </div>
                 ))}
                 <div className="flex justify-between items-center text-slate-300">
                   <span>{t('public', 'subscribeVolumeFee')}</span>
-                  <span className="font-semibold">{volumeFee > 0 ? `+ ${volumeFee.toLocaleString('fr-FR')} CFA` : '0 CFA'}</span>
+                  <span className="font-semibold">{volumeFee > 0 ? `+ ${formatNumber(volumeFee, locale)} CFA` : '0 CFA'}</span>
                 </div>
               </div>
 
               <div className="pt-6 border-t border-white/10 mb-6">
                 <div className="flex items-baseline gap-2 mb-1">
-                  <span className="text-4xl font-extrabold">{totalPrice.toLocaleString('fr-FR')}</span>
+                  <span className="text-4xl font-extrabold">{formatNumber(totalPrice, locale)}</span>
                   <span className="text-sm font-medium text-slate-400">{t('public', 'subscribePerMonth')}</span>
                 </div>
                 <p className="text-xs text-slate-400">{t('public', 'subscribeAnnualBilling')}</p>

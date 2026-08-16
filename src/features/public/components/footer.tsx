@@ -26,7 +26,7 @@ export function Footer() {
             <h3 className="text-sm font-semibold tracking-wider text-white uppercase">{t('public', 'footerProduct')}</h3>
             <ul className="space-y-3 text-sm">
               <li><Link to="/features" className="hover:text-white transition-colors">{t('public', 'footerFeatures')}</Link></li>
-              <li><Link to="/subscribe" className="hover:text-white transition-colors">{t('public', 'footerPricing')}</Link></li>
+              <li><Link to="/pricing" className="hover:text-white transition-colors">{t('public', 'footerPricing')}</Link></li>
               <li><Link to="/downloads" className="hover:text-white transition-colors">{t('public', 'footerDownloads')}</Link></li>
               <li><Link to="#" className="hover:text-white transition-colors">{t('public', 'footerRoadmap')}</Link></li>
             </ul>

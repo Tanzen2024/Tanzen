@@ -16,9 +16,8 @@ export function CTA() {
             <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-6">{t('public', 'ctaHeading')}</h2>
             <p className="text-lg text-slate-300 mb-10 max-w-2xl mx-auto">{t('public', 'ctaDescription')}</p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              {/* Corrigé depuis le site source : /pricing n'existe pas, le tarif vit sur /subscribe */}
               <Link
-                to="/subscribe"
+                to="/pricing"
                 className="w-full sm:w-auto px-8 py-4 rounded-lg bg-landing-accent text-white font-medium hover:bg-landing-accent-dark transition-colors md:text-lg"
               >
                 {t('public', 'ctaSeePricing')}
