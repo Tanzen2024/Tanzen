@@ -6,8 +6,14 @@ describe('authService — local session (BACKEND PENDING, no real backend)', () 
     expect(authService.isAuthenticated()).toBe(false);
   });
 
-  it('login() creates a local session', async () => {
+  it('login() creates a local demo session', async () => {
     await authService.login();
+    expect(authService.isAuthenticated()).toBe(true);
+  });
+
+  it('D2: login() never fakes a verified success — it always reports BACKEND_PENDING honestly, even while it establishes the local demo session', async () => {
+    const result = await authService.login();
+    expect(result).toEqual({ ok: false, error: 'BACKEND_PENDING' });
     expect(authService.isAuthenticated()).toBe(true);
   });
 

@@ -50,7 +50,7 @@ function Info({ label, value, icon: Icon }: { label: string; value: string; icon
 // ----------------------------------------------------------------------- Organization
 
 function SettingsOrganization({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { currentTenant } = useTenant();
   const { data: tenant } = useQuery({ queryKey: queryKeys.tenants.detail(currentTenant.id), queryFn: () => organizationService.getTenant(currentTenant.id, currentTenant.id) });
   const { data: settings } = useQuery({ queryKey: queryKeys.settings.organization(currentTenant.id), queryFn: () => settingsService.getOrganizationSettings(currentTenant.id) });
   const [values, setValues] = useState<{ timezone: string; currency: string } | null>(null);
@@ -68,7 +68,6 @@ function SettingsOrganization({ t }: { t: T }) {
         <Info label={t('settings', 'name')} value={tenant.name} icon={Building2} />
         <Info label={t('settings', 'legalName')} value={tenant.legalName} icon={Building2} />
         <Info label={t('settings', 'country')} value={tenant.country} icon={MapPin} />
-        <PermissionGate permission="tenants.update"><Button variant="outline" size="sm" onClick={() => navigate(`/organization/tenants/${tenant.id}/edit`)}>{t('settings', 'editInTenantRegistry')}</Button></PermissionGate>
       </div></FormSection>
       <FormSection title={t('settings', 'contact')}><div className="space-y-4">
         <Info label={t('settings', 'email')} value={tenant.email} icon={Mail} />

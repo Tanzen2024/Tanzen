@@ -1,31 +1,34 @@
+import { tenants } from '@/mocks/organization/tenants';
+
 /**
  * Fondation RBAC (rôles système / permissions techniques), distincte des
  * rôles métier de Gouvernance (`PositionRole` dans mocks/organization/members.ts :
  * président, trésorier, secrétaire...). Un `SystemRole` détermine ce qu'un
  * utilisateur peut faire dans l'application ; un `PositionRole` décrit une
  * fonction élue au sein d'un tenant. Les deux ne doivent jamais être fusionnés.
- *
- * Les écrans Users/Roles/Permissions (Access & Security) ne sont pas
- * construits ici — seule la fondation (types, contexte, garde) l'est.
  */
 
 /** Format `module.action`, ex. "members.read", "loans.approve". */
 export type Permission = string;
 
 /**
- * Portée d'accès inter-tenant. Ne concerne QUE les répertoires transverses
- * (registre Organization > Tenants, comptes système d'Access & Security) —
- * jamais les données métier d'un tenant (Member/Account/Loan/Tontine/Cycle/
- * WorkflowRequest...), qui restent strictement isolées au tenant courant
- * quel que soit le scope de l'utilisateur (voir services/tenant-scope.ts).
- * - 'tenant'   : ne voit que le tenant actuellement sélectionné.
- * - 'platform' : peut consulter les répertoires transverses au-delà du
- *                 tenant sélectionné (ex. un opérateur plateforme).
+ * Marqueur RBAC hérité, PAS un `tenant_id`. Depuis D1 (P0 RBAC, cf.
+ * docs/P0_RBAC_IMPLEMENTATION_REPORT.md), `SystemRole` porte son propre
+ * `tenantId` — la portée inter-tenant que ce champ décrivait historiquement
+ * n'existe plus nulle part dans `tanzen-frontend` (déjà neutralisée pour
+ * `users`/`sessions` par D1 de la mission `users`, désormais également
+ * neutralisée pour `roles` lui-même). `scope` ne sert plus qu'à distinguer,
+ * *au sein du catalogue d'un même tenant*, le rôle le plus élevé (« platform »)
+ * des rôles ordinaires (« tenant ») — un vestige de nommage conservé pour ne
+ * pas casser `RolePicker`/`resolveScope()`, jamais une capacité inter-tenant
+ * réelle dans ce projet.
  */
 export type PlatformScope = 'tenant' | 'platform';
 
 export type SystemRole = {
   id: string;
+  /** D1 (validé) : chaque rôle appartient à un seul tenant — jamais partagé entre tenants, jamais global. */
+  tenantId: string;
   name: string;
   description: string;
   permissions: Permission[];
@@ -49,7 +52,7 @@ export const permissionCatalog: Permission[] = [
   'tenants.read', 'tenants.create', 'tenants.update',
   'plans.read', 'subscriptions.read', 'payments.read', 'billing.read', 'platformAudit.read',
   'members.read', 'members.create', 'members.update', 'members.delete',
-  'governance.read', 'governance.create', 'governance.approve',
+  'governance.read', 'governance.create', 'governance.approve', 'governance.update', 'governance.delete',
   'accounts.read', 'accounts.create',
   'transactions.read', 'transactions.export',
   'contributions.read',
@@ -58,6 +61,7 @@ export const permissionCatalog: Permission[] = [
   'loans.read', 'loans.create', 'loans.approve',
   'repayments.read', 'repayments.create',
   'guarantors.read', 'guarantors.create',
+  'loanRules.manage',
   'tontines.read', 'tontines.create',
   'cycles.read', 'cycles.create', 'cycles.manage',
   'draws.read', 'draws.manage',
@@ -75,20 +79,37 @@ export const permissionCatalog: Permission[] = [
   'securityPolicies.manage', 'modules.manage', 'integrations.manage',
 ];
 
-export const systemRoles: SystemRole[] = [
-  {
-    id: 'role-admin', name: 'Administrateur Tenant', description: "Accès complet, avec visibilité inter-tenant sur les répertoires transverses (registre des tenants, comptes système).",
-    permissions: permissionCatalog, scope: 'platform',
-  },
-  {
-    id: 'role-manager', name: 'Gestionnaire', description: 'Gestion opérationnelle sans suppression ni approbation finale, restreinte au tenant courant.',
-    permissions: permissionCatalog.filter((permission) => !permission.endsWith('.delete') && !permission.endsWith('.approve')), scope: 'tenant',
-  },
-  {
-    id: 'role-viewer', name: 'Lecture seule', description: 'Consultation uniquement, restreinte au tenant courant.',
-    permissions: permissionCatalog.filter((permission) => permission.endsWith('.read')), scope: 'tenant',
-  },
+type RoleTemplate = { key: string; name: string; description: string; scope: PlatformScope; permissions: Permission[] };
+
+const roleTemplates: RoleTemplate[] = [
+  { key: 'role-admin', name: 'Administrateur Tenant', description: 'Accès complet aux fonctionnalités du tenant courant.', scope: 'platform', permissions: permissionCatalog },
+  { key: 'role-manager', name: 'Gestionnaire', description: 'Gestion opérationnelle sans suppression ni approbation finale, restreinte au tenant courant.', scope: 'tenant', permissions: permissionCatalog.filter((permission) => !permission.endsWith('.delete') && !permission.endsWith('.approve')) },
+  { key: 'role-viewer', name: 'Lecture seule', description: 'Consultation uniquement, restreinte au tenant courant.', scope: 'tenant', permissions: permissionCatalog.filter((permission) => permission.endsWith('.read')) },
 ];
+
+/**
+ * D1 (validé, cf. docs/P0_RBAC_IMPLEMENTATION_REPORT.md) : chaque tenant
+ * possède sa PROPRE instance des 3 rôles de base — jamais partagée. Avant
+ * cette mission, `systemRoles` était un catalogue global à 3 entrées ; il
+ * est désormais généré une fois par tenant (5 tenants × 3 rôles = 15
+ * entrées avec le jeu de données actuel). T-001 conserve les identifiants
+ * historiques (`role-admin`/`role-manager`/`role-viewer`, sans suffixe) —
+ * uniquement pour ne pas casser les nombreux tests/mocks déjà écrits contre
+ * ces chaînes littérales ; les autres tenants reçoivent un identifiant
+ * suffixé (`role-admin-T-002`, etc.). Aucune signification n'est attachée à
+ * la présence ou l'absence du suffixe — ce sont de simples identifiants
+ * opaques, uniques dans l'ensemble du tableau.
+ */
+export const systemRoles: SystemRole[] = tenants.flatMap((tenant) =>
+  roleTemplates.map((template) => ({
+    id: tenant.id === 'T-001' ? template.key : `${template.key}-${tenant.id}`,
+    tenantId: tenant.id,
+    name: template.name,
+    description: template.description,
+    permissions: template.permissions,
+    scope: template.scope,
+  })),
+);
 
 function resolveScope(roleIds: string[]): PlatformScope {
   const roles = roleIds.map((id) => systemRoles.find((role) => role.id === id)).filter((role): role is SystemRole => Boolean(role));

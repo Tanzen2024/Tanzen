@@ -66,8 +66,9 @@ export const workflowRequests: WorkflowRequest[] = [
       { order: 2, name: 'Autorisation direction', approverPermission: 'cycles.manage', status: 'pending' },
     ],
   },
+  // entityId : AS-002 (ancienne entité autonome Assembly) migrée vers MT-008 par la correction post-implémentation Phase 4C-4 — cf. src/mocks/organization/governance.ts.
   {
-    id: 'WR-006', tenantId: 'T-001', workflowDefinitionId: 'WD-003', domain: 'governance', entityType: 'assembly', entityId: 'AS-002', entityLabel: 'AGE Budget Q3', requestedBy: 'Fatou Ndiaye', requestedAt: '2026-08-12', status: 'inProgress', currentStepOrder: 2,
+    id: 'WR-006', tenantId: 'T-001', workflowDefinitionId: 'WD-003', domain: 'governance', entityType: 'assembly', entityId: 'MT-008', entityLabel: 'AGE Budget Q3', requestedBy: 'Fatou Ndiaye', requestedAt: '2026-08-12', status: 'inProgress', currentStepOrder: 2,
     steps: [
       { order: 1, name: 'Préparation ordre du jour', approverPermission: 'governance.create', status: 'approved', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-08-13' },
       { order: 2, name: 'Validation du bureau', approverPermission: 'governance.approve', status: 'pending' },

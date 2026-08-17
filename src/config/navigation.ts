@@ -17,7 +17,6 @@ import {
   Landmark,
   ListChecks,
   LockKeyhole,
-  PanelsTopLeft,
   ReceiptText,
   Scale,
   Settings2,
@@ -46,7 +45,6 @@ export const navigationTree: NavigationNode[] = [
       { label: 'Members', path: '/organization/members', icon: Users },
       {
         label: 'Governance', path: '/organization/governance', icon: Scale, children: [
-          { label: 'Assemblies', path: '/organization/governance/assemblies', icon: PanelsTopLeft },
           { label: 'Meetings', path: '/organization/governance/meetings', icon: CalendarDays },
           { label: 'Votes', path: '/organization/governance/votes', icon: ClipboardCheck },
           { label: 'Board & Mandates', path: '/organization/governance/board-mandates', icon: UserCog },
@@ -65,6 +63,7 @@ export const navigationTree: NavigationNode[] = [
           { label: 'Loans', path: '/finance/credit/loans', icon: CreditCard },
           { label: 'Repayments', path: '/finance/credit/repayments', icon: ReceiptText },
           { label: 'Guarantors', path: '/finance/credit/guarantors', icon: Users },
+          { label: 'Loan Rules', path: '/finance/credit/loan-rules', icon: ListChecks },
         ],
       },
       { label: 'Distributions', path: '/finance/distributions', icon: SlidersHorizontal },

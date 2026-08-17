@@ -6,3 +6,4 @@ export * from './applications';
 export * from './loans';
 export * from './repayments';
 export * from './guarantors';
+export * from './loan-rules';

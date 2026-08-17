@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Building2, CalendarDays, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, PanelsTopLeft, Plus, ShieldCheck, UserCog, UserRound, Users, WalletCards } from 'lucide-react';
-import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Building2, CalendarDays, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, ShieldCheck, UserCog, UserRound, Users, UsersRound, WalletCards, XCircle } from 'lucide-react';
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,12 +10,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
-import { usePermissions } from '@/contexts/permission-context';
-import { NotFoundPage } from '@/routes';
+import { NotFoundPage, PermissionRoute } from '@/routes';
 import { organizationService, type MemberInput } from '@/services/organization.service';
 import { financeService } from '@/services/finance.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
+import { attendanceService, type AttendanceInput } from '@/services/attendance.service';
+import { quorumService, type QuorumThresholdInput } from '@/services/quorum.service';
+import { assemblyDecisionService, type AssemblyDecisionInput } from '@/services/assembly-decision.service';
+import { decisionVoteService, type CreateDecisionVoteInput } from '@/services/decision-vote.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
@@ -23,8 +26,13 @@ import type { Tenant } from '@/mocks/organization/tenants';
 import type { Member } from '@/mocks/organization/members';
 import type { Contribution } from '@/mocks/finance/contributions';
 import type { Loan } from '@/mocks/finance/loans';
-import type { Assembly, Meeting, Vote, BoardMember, AssemblyType, VoteResult } from '@/mocks/organization/governance';
-import type { AssemblyInput, MeetingInput, BoardMemberInput, VoteInput } from '@/services/organization.service';
+import type { Meeting, MeetingStatus, MeetingType, Vote, BoardMember, VoteResult } from '@/mocks/organization/governance';
+import type { Attendance, AttendanceStatus } from '@/mocks/organization/attendances';
+import type { QuorumThresholdType } from '@/mocks/organization/quorum-snapshots';
+import type { AssemblyDecision, AssemblyDecisionStatus } from '@/mocks/organization/assembly-decisions';
+import type { VoteOption } from '@/mocks/organization/vote-options';
+import type { MemberVote } from '@/mocks/organization/member-votes';
+import type { MeetingInput, BoardMemberInput, VoteInput } from '@/services/organization.service';
 import type { PositionRole } from '@/mocks/organization/members';
 import { Textarea } from '@/components/ui/textarea';
 import type { TableColumn } from '@/types/ui';
@@ -80,8 +88,9 @@ function MemberFormFields({ values, onChange, errors, tenants, t }: { values: Me
 }
 
 function MemberCreate({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, user.scope), queryFn: () => organizationService.listTenants(currentTenant.id, user.scope) });
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
+  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const [values, setValues] = useState<MemberFormValues>({ firstName: '', lastName: '', email: '', phone: '', occupation: '', nationality: 'Sénégalaise', address: '', tenantId: currentTenant.id, status: 'pending' });
   const [errors, setErrors] = useState<MemberFormErrors>({});
   const mutation = useMockMutation<Member, ReturnType<typeof buildMemberInput>>({
@@ -134,8 +143,9 @@ function MemberEdit({ t }: { t: T }) {
 }
 
 function MemberEditForm({ t, member }: { t: T; member: Member }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, user.scope), queryFn: () => organizationService.listTenants(currentTenant.id, user.scope) });
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
+  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, email: member.email, phone: member.phone, occupation: member.occupation, nationality: member.nationality, address: member.address, tenantId: member.tenantId, status: member.status });
   const [errors, setErrors] = useState<MemberFormErrors>({});
   const mutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
@@ -199,35 +209,63 @@ function TontinesTab({ t, memberId, tontineNameById }: { t: T; memberId: string;
 function GovernanceTab({ t, member }: { t: T; member: Member }) { return <Card><CardContent className="p-5">{member.governanceParticipation.length ? <Timeline items={member.governanceParticipation.map((item) => ({ id: item.id, title: item.assemblyName, description: item.role, date: formatDate(item.date), tone: 'success' as const }))} /> : <EmptyState icon={ShieldCheck} title={t('organization', 'noGovernance')} />}</CardContent></Card>; }
 function DocumentsTab({ t, member }: { t: T; member: Member }) { const columns: TableColumn<typeof member.documents[number]>[] = [{ key: 'name', header: t('organization', 'documentName'), render: (row) => <span className="flex items-center gap-2 font-medium"><FileText size={15} className="text-primary" />{row.name}</span> }, { key: 'type', header: t('organization', 'documentType'), render: (row) => t('organization', row.type) }, { key: 'uploadedAt', header: t('organization', 'uploaded'), render: (row) => <DateDisplay value={row.uploadedAt} /> }, { key: 'action', header: '', className: 'w-12', render: (row) => <button type="button" aria-label={`${t('organization', 'actions')} — ${row.name}`} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><MoreHorizontal size={16} /></button> }]; return <DataTable columns={columns} rows={member.documents} empty={<EmptyState icon={FileText} title={t('organization', 'noDocuments')} />} />; }
 
+/**
+ * `GeneralAssembly`/`Assembly` ne sont plus des entités autonomes (correction
+ * post-implémentation Phase 4C-4 — cf.
+ * docs/P1_GOVERNANCE_PHASE_4C4_GENERALASSEMBLY_MEETING_MIGRATION_UX_CORRECTION_REPORT.md
+ * §7) : plus de carte/route dédiée. La carte "Assemblées Générales" ci-dessous
+ * n'ouvre pas une nouvelle structure — elle navigue vers la liste Meetings
+ * pré-filtrée par `type=GENERAL_ASSEMBLY`, le seul point d'entrée Governance
+ * reste `Meeting`.
+ */
 function GovernanceOverview({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  const assembliesQuery = useQuery({ queryKey: queryKeys.governance.assemblies(currentTenant.id), queryFn: () => organizationService.listAssemblies(currentTenant.id) });
   const meetingsQuery = useQuery({ queryKey: queryKeys.governance.meetings(currentTenant.id), queryFn: () => organizationService.listMeetings(currentTenant.id) });
   const votesQuery = useQuery({ queryKey: queryKeys.governance.votes(currentTenant.id), queryFn: () => organizationService.listVotes(currentTenant.id) });
   const boardQuery = useQuery({ queryKey: queryKeys.governance.board(currentTenant.id), queryFn: () => organizationService.listBoardMembers(currentTenant.id) });
-  const assemblies = assembliesQuery.data ?? []; const meetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? [];
-  if (assembliesQuery.isLoading || meetingsQuery.isLoading || votesQuery.isLoading || boardQuery.isLoading) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><CardSkeleton count={4} /></OrganizationPage>;
-  if (assembliesQuery.isError || meetingsQuery.isError || votesQuery.isError || boardQuery.isError) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><ErrorState onRetry={() => { assembliesQuery.refetch(); meetingsQuery.refetch(); votesQuery.refetch(); boardQuery.refetch(); }} /></OrganizationPage>;
-  return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{[{ key: 'assemblies', icon: PanelsTopLeft, count: assemblies.length, path: '/organization/governance/assemblies' }, { key: 'meetings', icon: CalendarDays, count: meetings.length, path: '/organization/governance/meetings' }, { key: 'votes', icon: ClipboardCheck, count: votes.length, path: '/organization/governance/votes' }, { key: 'boardMandates', icon: UserCog, count: boardMembers.length, path: '/organization/governance/board-mandates' }].map((item) => <button type="button" key={item.key} onClick={() => navigate(item.path)} className="group text-left"><Card className="h-full transition-all duration-300 group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-md"><CardContent className="p-5"><span className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary"><item.icon size={19} /></span><p className="mt-5 text-sm font-semibold">{t('organization', item.key)}</p><p className="mt-1 font-heading text-2xl font-semibold">{formatNumber(item.count)}</p><p className="mt-1 flex items-center gap-1 text-xs text-primary">{t('organization', 'viewDetail')}<ChevronRight size={13} /></p></CardContent></Card></button>)}</div><Card><CardHeader><CardTitle className="text-sm">{t('organization', 'upcoming')}</CardTitle></CardHeader><CardContent><Timeline items={assemblies.filter((assembly) => assembly.status === 'upcoming').map((assembly) => ({ id: assembly.id, title: assembly.name, description: `${t('organization', assembly.type)} · ${assembly.location}`, date: formatDate(assembly.date), tone: 'success' as const }))} /></CardContent></Card></OrganizationPage>;
+  const meetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? [];
+  if (meetingsQuery.isLoading || votesQuery.isLoading || boardQuery.isLoading) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><CardSkeleton count={4} /></OrganizationPage>;
+  if (meetingsQuery.isError || votesQuery.isError || boardQuery.isError) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><ErrorState onRetry={() => { meetingsQuery.refetch(); votesQuery.refetch(); boardQuery.refetch(); }} /></OrganizationPage>;
+  const generalAssemblyCount = meetings.filter((meeting) => meeting.type === 'GENERAL_ASSEMBLY').length;
+  const cards = [
+    { key: 'meetings', icon: CalendarDays, count: meetings.length, path: '/organization/governance/meetings' },
+    { key: 'generalAssemblies', icon: ShieldCheck, count: generalAssemblyCount, path: '/organization/governance/meetings?type=GENERAL_ASSEMBLY' },
+    { key: 'votes', icon: ClipboardCheck, count: votes.length, path: '/organization/governance/votes' },
+    { key: 'boardMandates', icon: UserCog, count: boardMembers.length, path: '/organization/governance/board-mandates' },
+  ];
+  const upcoming = meetings.filter((meeting) => meeting.status === 'PLANNED').sort((a, b) => a.date.localeCompare(b.date));
+  return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{cards.map((item) => <button type="button" key={item.key} onClick={() => navigate(item.path)} className="group text-left"><Card className="h-full transition-all duration-300 group-hover:-translate-y-0.5 group-hover:border-primary/40 group-hover:shadow-md"><CardContent className="p-5"><span className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary"><item.icon size={19} /></span><p className="mt-5 text-sm font-semibold">{t('organization', item.key)}</p><p className="mt-1 font-heading text-2xl font-semibold">{formatNumber(item.count)}</p><p className="mt-1 flex items-center gap-1 text-xs text-primary">{t('organization', 'viewDetail')}<ChevronRight size={13} /></p></CardContent></Card></button>)}</div><Card><CardHeader><CardTitle className="text-sm">{t('organization', 'upcoming')}</CardTitle></CardHeader><CardContent><Timeline items={upcoming.map((meeting) => ({ id: meeting.id, title: meeting.title, description: `${t('organization', meeting.type === 'GENERAL_ASSEMBLY' ? 'meetingTypeGeneralAssembly' : 'meetingTypeRegular')} · ${meeting.location || '—'}`, date: formatDate(meeting.date), tone: 'success' as const }))} /></CardContent></Card></OrganizationPage>;
 }
 
 function GovernanceTableShell({ title, description, action, icon: Icon, t, onCreate, children }: { title: string; description: string; action: string; icon: typeof CalendarDays; t: T; onCreate: () => void; children: ReactNode }) { const navigate = useNavigate(); return <OrganizationPage title={title} description={description} actions={<PermissionGate permission="governance.create"><Button onClick={onCreate}><Plus size={16} />{action}</Button></PermissionGate>}><div className="flex items-center gap-2 border-b border-border pb-3 text-sm text-muted-foreground"><button type="button" onClick={() => navigate('/organization/governance')} className="hover:text-foreground">{t('organization', 'governanceTitle')}</button><ChevronRight size={14} /><Icon size={14} className="text-primary" /><span className="font-medium text-foreground">{title}</span></div>{children}</OrganizationPage>; }
 
 const BOARD_POSITIONS: PositionRole[] = ['president', 'treasurer', 'secretary', 'boardMember'];
 
-function GovernanceTablePage({ t, kind }: { t: T; kind: 'assemblies' | 'meetings' | 'votes' | 'boardMandates' }) {
+/** D-4C3-TECH-01 : même vocabulaire/tons que GeneralAssemblyStatus (déjà en place dans ce projet). */
+function meetingStatusTone(status: MeetingStatus): 'info' | 'warning' | 'success' | 'error' {
+  if (status === 'PLANNED') return 'info';
+  if (status === 'ONGOING') return 'warning';
+  if (status === 'COMPLETED') return 'success';
+  return 'error';
+}
+function meetingStatusKey(status: MeetingStatus): string {
+  return status === 'PLANNED' ? 'statusPlanned' : status === 'ONGOING' ? 'statusOngoingMeeting' : status === 'COMPLETED' ? 'statusCompletedMeeting' : 'statusCancelledMeeting';
+}
+
+function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'votes' | 'boardMandates' }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  const assembliesQuery = useQuery({ queryKey: queryKeys.governance.assemblies(currentTenant.id), queryFn: () => organizationService.listAssemblies(currentTenant.id), enabled: kind === 'assemblies' });
+  const [searchParams] = useSearchParams();
   const meetingsQuery = useQuery({ queryKey: queryKeys.governance.meetings(currentTenant.id), queryFn: () => organizationService.listMeetings(currentTenant.id), enabled: kind === 'meetings' });
   const votesQuery = useQuery({ queryKey: queryKeys.governance.votes(currentTenant.id), queryFn: () => organizationService.listVotes(currentTenant.id), enabled: kind === 'votes' });
   const boardQuery = useQuery({ queryKey: queryKeys.governance.board(currentTenant.id), queryFn: () => organizationService.listBoardMembers(currentTenant.id), enabled: kind === 'boardMandates' });
   const membersQuery = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id), enabled: kind === 'boardMandates' });
-  const assemblies = assembliesQuery.data ?? []; const meetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? []; const members = membersQuery.data ?? [];
-  const activeQuery = kind === 'assemblies' ? assembliesQuery : kind === 'meetings' ? meetingsQuery : kind === 'votes' ? votesQuery : boardQuery;
+  const allMeetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? []; const members = membersQuery.data ?? [];
+  const activeQuery = kind === 'meetings' ? meetingsQuery : kind === 'votes' ? votesQuery : boardQuery;
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [assemblyForm, setAssemblyForm] = useState({ name: '', type: 'generalAssembly' as AssemblyType, date: '', location: '', participants: 0, agenda: '' });
-  const [meetingForm, setMeetingForm] = useState({ title: '', date: '', location: '', participants: 0, agenda: '' });
+  const [meetingTypeFilter, setMeetingTypeFilter] = useState<'all' | MeetingType>((searchParams.get('type') as MeetingType | null) ?? 'all');
+  const meetings = meetingTypeFilter === 'all' ? allMeetings : allMeetings.filter((meeting) => meeting.type === meetingTypeFilter);
+  const [meetingForm, setMeetingForm] = useState({ title: '', date: '', location: '', participants: 0, agenda: '', type: 'REGULAR' as MeetingType, description: '' });
   const [boardForm, setBoardForm] = useState({ memberId: '', position: 'president' as PositionRole, mandateStart: '', mandateEnd: '' });
   const [voteForm, setVoteForm] = useState({ subject: '', date: '' });
   const [minutesTarget, setMinutesTarget] = useState<Meeting | null>(null);
@@ -236,43 +274,67 @@ function GovernanceTablePage({ t, kind }: { t: T; kind: 'assemblies' | 'meetings
   const [resultTarget, setResultTarget] = useState<Vote | null>(null);
   const [resultForm, setResultForm] = useState({ yes: 0, no: 0, abstain: 0, result: 'adopted' as VoteResult });
 
-  const createAssembly = useMockMutation<Assembly, AssemblyInput>({ mutationFn: (input) => organizationService.createAssembly(currentTenant.id, input), invalidateKeys: [queryKeys.governance.assemblies(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'assemblyCreated')); setCreateOpen(false); setAssemblyForm({ name: '', type: 'generalAssembly', date: '', location: '', participants: 0, agenda: '' }); } });
-  const createMeeting = useMockMutation<Meeting, MeetingInput>({ mutationFn: (input) => organizationService.createMeeting(currentTenant.id, input), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'meetingCreated')); setCreateOpen(false); setMeetingForm({ title: '', date: '', location: '', participants: 0, agenda: '' }); } });
+  const createMeeting = useMockMutation<Meeting | undefined, MeetingInput>({
+    mutationFn: (input) => organizationService.createMeeting(currentTenant.id, input),
+    invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('organization', 'meetingRejected')); return; }
+      notify.success(t('organization', 'meetingCreated'));
+      setCreateOpen(false);
+      setMeetingForm({ title: '', date: '', location: '', participants: 0, agenda: '', type: 'REGULAR', description: '' });
+    },
+  });
   const createBoardMember = useMockMutation<BoardMember, BoardMemberInput>({ mutationFn: (input) => organizationService.createBoardMember(currentTenant.id, input), invalidateKeys: [queryKeys.governance.board(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'boardMemberAdded')); setCreateOpen(false); setBoardForm({ memberId: '', position: 'president', mandateStart: '', mandateEnd: '' }); } });
   const createVote = useMockMutation<Vote, VoteInput>({ mutationFn: (input) => organizationService.createVote(currentTenant.id, input), invalidateKeys: [queryKeys.governance.votes(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'voteCreated')); setCreateOpen(false); setVoteForm({ subject: '', date: '' }); } });
   const publishMinutes = useMockMutation<Meeting | undefined, string>({ mutationFn: (minutes) => organizationService.updateMeetingMinutes(currentTenant.id, minutesTarget?.id ?? '', minutes), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'minutesPublished')); setMinutesTarget(null); setMinutesText(''); } });
   const endMandate = useMockMutation<BoardMember | undefined, void>({ mutationFn: () => organizationService.endBoardMandate(currentTenant.id, mandateTarget?.id ?? '', new Date().toISOString().slice(0, 10)), invalidateKeys: [queryKeys.governance.board(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'mandateEnded')); setMandateTarget(null); } });
   const publishResult = useMockMutation<Vote | undefined, typeof resultForm>({ mutationFn: (patch) => organizationService.updateVoteResult(currentTenant.id, resultTarget?.id ?? '', patch), invalidateKeys: [queryKeys.governance.votes(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'resultPublished')); setResultTarget(null); } });
+  /** D-4C3-TECH-01 : transitions de cycle de vie Meeting — jamais un simple changement de champ, toujours via ces 3 méthodes de service dédiées. */
+  const startMeeting = useMockMutation<Meeting | undefined, string>({ mutationFn: (meetingId) => organizationService.startMeeting(currentTenant.id, meetingId), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => notify.success(t('organization', 'meetingStarted')) });
+  const completeMeeting = useMockMutation<Meeting | undefined, string>({ mutationFn: (meetingId) => organizationService.completeMeeting(currentTenant.id, meetingId), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => notify.success(t('organization', 'meetingCompleted')) });
+  const cancelMeeting = useMockMutation<Meeting | undefined, string>({ mutationFn: (meetingId) => organizationService.cancelMeeting(currentTenant.id, meetingId), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => notify.success(t('organization', 'meetingCancelled')) });
 
   if (activeQuery.isLoading) return <OrganizationPage title={t('organization', 'governanceTitle')} description=""><TableSkeleton /></OrganizationPage>;
   if (activeQuery.isError) return <OrganizationPage title={t('organization', 'governanceTitle')} description=""><ErrorState onRetry={activeQuery.refetch} /></OrganizationPage>;
 
-  if (kind === 'assemblies') {
-    const columns: TableColumn<Assembly>[] = [{ key: 'name', header: t('organization', 'assemblyName'), render: (row) => <span className="font-semibold">{row.name}</span> }, { key: 'type', header: t('organization', 'assemblyType'), render: (row) => t('organization', row.type) }, { key: 'date', header: t('organization', 'date'), render: (row) => <DateDisplay value={row.date} /> }, { key: 'location', header: t('organization', 'location') }, { key: 'participants', header: t('organization', 'participants') }, { key: 'status', header: t('organization', 'status'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> }];
-    return <GovernanceTableShell title={t('organization', 'assembliesTitle')} description={t('organization', 'assembliesDescription')} action={t('organization', 'createAssembly')} icon={PanelsTopLeft} t={t} onCreate={() => setCreateOpen(true)}>
-      <DataTable columns={columns} rows={assemblies} empty={<EmptyState icon={PanelsTopLeft} title={t('organization', 'noAssemblies')} />} />
-      {createOpen && <ConfirmDialog open title={t('organization', 'createAssembly')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createAssembly.mutate({ ...assemblyForm, participants: Number(assemblyForm.participants) })} onCancel={() => setCreateOpen(false)}>
-        <div className="mt-4 space-y-3 text-left">
-          <div className="space-y-1"><Label htmlFor="assembly-name">{t('organization', 'name')}</Label><Input id="assembly-name" value={assemblyForm.name} onChange={(e) => setAssemblyForm((v) => ({ ...v, name: e.target.value }))} /></div>
-          <div className="space-y-1"><Label htmlFor="assembly-type">{t('organization', 'assemblyType')}</Label><select id="assembly-type" value={assemblyForm.type} onChange={(e) => setAssemblyForm((v) => ({ ...v, type: e.target.value as AssemblyType }))} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="generalAssembly">{t('organization', 'generalAssembly')}</option><option value="extraordinaryAssembly">{t('organization', 'extraordinaryAssembly')}</option><option value="boardAssembly">{t('organization', 'boardAssembly')}</option></select></div>
-          <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><Label htmlFor="assembly-date">{t('organization', 'date')}</Label><Input id="assembly-date" type="date" value={assemblyForm.date} onChange={(e) => setAssemblyForm((v) => ({ ...v, date: e.target.value }))} /></div><div className="space-y-1"><Label htmlFor="assembly-participants">{t('organization', 'participants')}</Label><Input id="assembly-participants" type="number" min={0} value={assemblyForm.participants} onChange={(e) => setAssemblyForm((v) => ({ ...v, participants: Number(e.target.value) }))} /></div></div>
-          <div className="space-y-1"><Label htmlFor="assembly-location">{t('organization', 'location')}</Label><Input id="assembly-location" value={assemblyForm.location} onChange={(e) => setAssemblyForm((v) => ({ ...v, location: e.target.value }))} /></div>
-          <div className="space-y-1"><Label htmlFor="assembly-agenda">{t('organization', 'agenda')}</Label><Textarea id="assembly-agenda" value={assemblyForm.agenda} onChange={(e) => setAssemblyForm((v) => ({ ...v, agenda: e.target.value }))} /></div>
-        </div>
-      </ConfirmDialog>}
-    </GovernanceTableShell>;
-  }
-
   if (kind === 'meetings') {
-    const columns: TableColumn<Meeting>[] = [{ key: 'title', header: t('organization', 'meetingTitle'), render: (row) => <span className="font-semibold">{row.title}</span> }, { key: 'date', header: t('organization', 'meetingDate'), render: (row) => <DateDisplay value={row.date} /> }, { key: 'location', header: t('organization', 'location') }, { key: 'participants', header: t('organization', 'participants') }, { key: 'minutes', header: t('organization', 'minutes'), render: (row) => row.minutes ?? '—' }, { key: 'actions', header: '', className: 'w-40', render: (row) => <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => { setMinutesTarget(row); setMinutesText(row.minutes ?? ''); }}>{t('organization', 'publishMinutes')}</Button></PermissionGate> }];
+    const columns: TableColumn<Meeting>[] = [
+      { key: 'title', header: t('organization', 'meetingTitle'), render: (row) => <button type="button" onClick={() => navigate(`/organization/governance/meetings/${row.id}`)} className="text-left text-sm font-semibold text-primary">{row.title}</button> },
+      { key: 'type', header: t('organization', 'meetingTypeLabel'), render: (row) => <StatusBadge label={t('organization', row.type === 'GENERAL_ASSEMBLY' ? 'meetingTypeGeneralAssembly' : 'meetingTypeRegular')} tone={row.type === 'GENERAL_ASSEMBLY' ? 'success' : 'default'} /> },
+      { key: 'date', header: t('organization', 'meetingDate'), render: (row) => <DateDisplay value={row.date} /> },
+      { key: 'location', header: t('organization', 'location'), render: (row) => row.location || '—' },
+      { key: 'participants', header: t('organization', 'participants') },
+      { key: 'status', header: t('organization', 'status'), render: (row) => <StatusBadge label={t('organization', meetingStatusKey(row.status))} tone={meetingStatusTone(row.status)} /> },
+      { key: 'minutes', header: t('organization', 'minutes'), render: (row) => row.minutes ?? '—' },
+      {
+        key: 'actions', header: '', className: 'w-96', render: (row) => <div className="flex flex-wrap justify-end gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => navigate(`/organization/governance/meetings/${row.id}`)}><ChevronRight size={14} />{t('organization', 'viewDetail')}</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/organization/governance/meetings/${row.id}/attendances`)}><UsersRound size={14} />{t('organization', 'manageAttendance')}</Button>
+          {row.status === 'PLANNED' && <PermissionGate permission="governance.update"><Button variant="outline" size="sm" onClick={() => startMeeting.mutate(row.id)}><Play size={14} />{t('organization', 'startMeeting')}</Button></PermissionGate>}
+          {row.status === 'ONGOING' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => completeMeeting.mutate(row.id)}><CheckCircle2 size={14} />{t('organization', 'completeMeeting')}</Button></PermissionGate>}
+          {(row.status === 'PLANNED' || row.status === 'ONGOING') && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => cancelMeeting.mutate(row.id)}><XCircle size={14} />{t('organization', 'cancelMeeting')}</Button></PermissionGate>}
+          <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => { setMinutesTarget(row); setMinutesText(row.minutes ?? ''); }}>{t('organization', 'publishMinutes')}</Button></PermissionGate>
+        </div>,
+      },
+    ];
     return <GovernanceTableShell title={t('organization', 'meetingsTitle')} description={t('organization', 'meetingsDescription')} action={t('organization', 'createMeeting')} icon={CalendarDays} t={t} onCreate={() => setCreateOpen(true)}>
+      <div className="flex items-center justify-end gap-2">
+        <Label htmlFor="meeting-type-filter" className="text-xs text-muted-foreground">{t('organization', 'meetingTypeLabel')}</Label>
+        <select id="meeting-type-filter" value={meetingTypeFilter} onChange={(e) => setMeetingTypeFilter(e.target.value as 'all' | MeetingType)} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
+          <option value="all">{t('organization', 'meetingTypeAll')}</option>
+          <option value="REGULAR">{t('organization', 'meetingTypeRegular')}</option>
+          <option value="GENERAL_ASSEMBLY">{t('organization', 'meetingTypeGeneralAssembly')}</option>
+        </select>
+      </div>
       <DataTable columns={columns} rows={meetings} empty={<EmptyState icon={CalendarDays} title={t('organization', 'noMeetings')} />} />
-      {createOpen && <ConfirmDialog open title={t('organization', 'createMeeting')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createMeeting.mutate({ ...meetingForm, participants: Number(meetingForm.participants) })} onCancel={() => setCreateOpen(false)}>
+      {createOpen && <ConfirmDialog open title={t('organization', 'createMeeting')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createMeeting.mutate({ ...meetingForm, participants: Number(meetingForm.participants), description: meetingForm.type === 'GENERAL_ASSEMBLY' ? (meetingForm.description.trim() ? meetingForm.description : null) : null })} onCancel={() => setCreateOpen(false)}>
         <div className="mt-4 space-y-3 text-left">
+          <div className="space-y-1"><Label htmlFor="meeting-type">{t('organization', 'meetingTypeLabel')} <span className="text-destructive" aria-hidden="true">*</span></Label><select id="meeting-type" value={meetingForm.type} onChange={(e) => setMeetingForm((v) => ({ ...v, type: e.target.value as MeetingType }))} required aria-required="true" className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="REGULAR">{t('organization', 'meetingTypeRegular')}</option><option value="GENERAL_ASSEMBLY">{t('organization', 'meetingTypeGeneralAssembly')}</option></select></div>
           <div className="space-y-1"><Label htmlFor="meeting-title">{t('organization', 'title')}</Label><Input id="meeting-title" value={meetingForm.title} onChange={(e) => setMeetingForm((v) => ({ ...v, title: e.target.value }))} /></div>
           <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><Label htmlFor="meeting-date">{t('organization', 'date')}</Label><Input id="meeting-date" type="date" value={meetingForm.date} onChange={(e) => setMeetingForm((v) => ({ ...v, date: e.target.value }))} /></div><div className="space-y-1"><Label htmlFor="meeting-participants">{t('organization', 'participants')}</Label><Input id="meeting-participants" type="number" min={0} value={meetingForm.participants} onChange={(e) => setMeetingForm((v) => ({ ...v, participants: Number(e.target.value) }))} /></div></div>
           <div className="space-y-1"><Label htmlFor="meeting-location">{t('organization', 'location')}</Label><Input id="meeting-location" value={meetingForm.location} onChange={(e) => setMeetingForm((v) => ({ ...v, location: e.target.value }))} /></div>
           <div className="space-y-1"><Label htmlFor="meeting-agenda">{t('organization', 'agenda')}</Label><Textarea id="meeting-agenda" value={meetingForm.agenda} onChange={(e) => setMeetingForm((v) => ({ ...v, agenda: e.target.value }))} /></div>
+          {meetingForm.type === 'GENERAL_ASSEMBLY' && <div className="space-y-1"><Label htmlFor="meeting-description">{t('organization', 'description')}</Label><Textarea id="meeting-description" value={meetingForm.description} onChange={(e) => setMeetingForm((v) => ({ ...v, description: e.target.value }))} /></div>}
         </div>
       </ConfirmDialog>}
       {minutesTarget && <ConfirmDialog open title={t('organization', 'publishMinutes')} description={t('organization', 'publishMinutesConfirm')} confirmLabel={t('organization', 'publishMinutes')} cancelLabel={t('organization', 'cancel')} onConfirm={() => publishMinutes.mutate(minutesText)} onCancel={() => setMinutesTarget(null)}>
@@ -314,12 +376,295 @@ function GovernanceTablePage({ t, kind }: { t: T; kind: 'assemblies' | 'meetings
   </GovernanceTableShell>;
 }
 
+const QUORUM_THRESHOLD_TYPES: QuorumThresholdType[] = ['PERCENTAGE', 'COUNT'];
+
+/** D-4C4-WEB-04/05 : seuil configurable, jamais une valeur par défaut — le formulaire exige type + valeur avant tout calcul. Figeage unique, non recalculable une fois posé (bouton disparaît, carte devient lecture seule). */
+function QuorumCard({ t, meetingId }: { t: T; meetingId: string }) {
+  const { currentTenant } = useTenant();
+  const { data: snapshot, isLoading } = useQuery({ queryKey: [...queryKeys.governance.quorumSnapshot(meetingId), currentTenant.id], queryFn: () => quorumService.getQuorumSnapshot(currentTenant.id, meetingId) });
+  const [thresholdType, setThresholdType] = useState<QuorumThresholdType>('PERCENTAGE');
+  const [thresholdValue, setThresholdValue] = useState('');
+  const compute = useMockMutation<Awaited<ReturnType<typeof quorumService.computeAndFreezeQuorumSnapshot>>, QuorumThresholdInput>({
+    mutationFn: (threshold) => quorumService.computeAndFreezeQuorumSnapshot(currentTenant.id, meetingId, threshold),
+    invalidateKeys: [[...queryKeys.governance.quorumSnapshot(meetingId), currentTenant.id]],
+    onSuccess: (result) => { if (!result) { notify.error(t('organization', 'quorumRejected')); return; } notify.success(t('organization', 'quorumComputed')); },
+  });
+  if (isLoading) return <Card><CardContent className="p-5"><TableSkeleton /></CardContent></Card>;
+  return <Card><CardHeader><CardTitle className="text-sm">{t('organization', 'quorumTitle')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5 pt-0">
+    {snapshot ? <div className="grid gap-4 sm:grid-cols-2">
+      <Info label={t('organization', 'quorumEligible')} value={formatNumber(snapshot.eligibleMemberCount)} icon={Users} />
+      <Info label={t('organization', 'quorumPresent')} value={formatNumber(snapshot.presentMemberCount)} icon={UsersRound} />
+      <Info label={t('organization', 'quorumThreshold')} value={snapshot.quorumThresholdType === 'PERCENTAGE' ? `${snapshot.quorumThresholdValue}%` : formatNumber(snapshot.quorumThresholdValue)} icon={ClipboardCheck} />
+      <div className="pt-1 sm:col-span-2"><StatusBadge label={t('organization', snapshot.quorumReached ? 'quorumReached' : 'quorumNotReached')} tone={snapshot.quorumReached ? 'success' : 'error'} /></div>
+    </div> : <>
+      <p className="text-xs text-muted-foreground">{t('organization', 'quorumNotComputed')}</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1"><Label htmlFor="quorum-threshold-type">{t('organization', 'quorumThresholdType')}</Label><select id="quorum-threshold-type" value={thresholdType} onChange={(e) => setThresholdType(e.target.value as QuorumThresholdType)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{QUORUM_THRESHOLD_TYPES.map((type) => <option key={type} value={type}>{t('organization', type === 'PERCENTAGE' ? 'quorumPercentage' : 'quorumCount')}</option>)}</select></div>
+        <div className="space-y-1"><Label htmlFor="quorum-threshold-value">{t('organization', 'quorumThresholdValue')}</Label><Input id="quorum-threshold-value" type="number" min={0} value={thresholdValue} onChange={(e) => setThresholdValue(e.target.value)} /></div>
+      </div>
+      <PermissionGate permission="governance.approve"><Button variant="outline" disabled={!thresholdValue || compute.isPending} onClick={() => compute.mutate({ type: thresholdType, value: Number(thresholdValue) })}>{t('organization', 'quorumCompute')}</Button></PermissionGate>
+    </>}
+  </CardContent></Card>;
+}
+
+const ASSEMBLY_DECISION_STATUS_TONE: Record<AssemblyDecisionStatus, 'info' | 'warning' | 'success' | 'error'> = { DRAFT: 'info', SUBMITTED: 'warning', VOTING: 'warning', DECIDED: 'success', CANCELLED: 'error' };
+function assemblyDecisionStatusKey(status: AssemblyDecisionStatus): string {
+  return status === 'DRAFT' ? 'decisionDraft' : status === 'SUBMITTED' ? 'decisionSubmitted' : status === 'VOTING' ? 'decisionVoting' : status === 'DECIDED' ? 'decisionDecided' : 'decisionCancelled';
+}
+
+/** D-4C4-WEB-06 : cycle de vie DRAFT → SUBMITTED → VOTING → DECIDED, annulation DRAFT/SUBMITTED → CANCELLED — chaque transition passe par une méthode de service dédiée, jamais un simple changement de champ. */
+function AssemblyDecisionsCard({ t, meetingId }: { t: T; meetingId: string }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { data: decisions = [], isLoading } = useQuery({ queryKey: [...queryKeys.governance.assemblyDecisions(meetingId), currentTenant.id], queryFn: () => assemblyDecisionService.listAssemblyDecisionsByMeeting(currentTenant.id, meetingId) });
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form, setForm] = useState({ title: '', description: '' });
+  const invalidate = [[...queryKeys.governance.assemblyDecisions(meetingId), currentTenant.id]];
+  const create = useMockMutation<AssemblyDecision | undefined, AssemblyDecisionInput>({ mutationFn: (input) => assemblyDecisionService.createAssemblyDecision(currentTenant.id, meetingId, input), invalidateKeys: invalidate, onSuccess: (result) => { if (!result) { notify.error(t('organization', 'decisionRejected')); return; } notify.success(t('organization', 'decisionCreated')); setCreateOpen(false); setForm({ title: '', description: '' }); } });
+  const submit = useMockMutation<AssemblyDecision | undefined, string>({ mutationFn: (decisionId) => assemblyDecisionService.submitAssemblyDecision(currentTenant.id, decisionId), invalidateKeys: invalidate, onSuccess: () => notify.success(t('organization', 'decisionSubmittedNotice')) });
+  const startVoting = useMockMutation<AssemblyDecision | undefined, string>({ mutationFn: (decisionId) => assemblyDecisionService.startAssemblyDecisionVoting(currentTenant.id, decisionId), invalidateKeys: invalidate, onSuccess: () => notify.success(t('organization', 'decisionVotingStarted')) });
+  const decide = useMockMutation<AssemblyDecision | undefined, string>({ mutationFn: (decisionId) => assemblyDecisionService.decideAssemblyDecision(currentTenant.id, decisionId), invalidateKeys: invalidate, onSuccess: () => notify.success(t('organization', 'decisionDecidedNotice')) });
+  const cancel = useMockMutation<AssemblyDecision | undefined, string>({ mutationFn: (decisionId) => assemblyDecisionService.cancelAssemblyDecision(currentTenant.id, decisionId), invalidateKeys: invalidate, onSuccess: () => notify.success(t('organization', 'decisionCancelledNotice')) });
+
+  const columns: TableColumn<AssemblyDecision>[] = [
+    { key: 'number', header: '#', className: 'w-12', render: (row) => row.decisionNumber },
+    { key: 'title', header: t('organization', 'decisionTitleLabel'), render: (row) => <span className="font-semibold">{row.title}</span> },
+    { key: 'status', header: t('organization', 'status'), render: (row) => <StatusBadge label={t('organization', assemblyDecisionStatusKey(row.status))} tone={ASSEMBLY_DECISION_STATUS_TONE[row.status]} /> },
+    {
+      key: 'actions', header: '', className: 'w-96', render: (row) => <div className="flex flex-wrap justify-end gap-1.5">
+        {(row.status === 'VOTING' || row.status === 'DECIDED') && <Button variant="outline" size="sm" onClick={() => navigate(`/organization/governance/meetings/${meetingId}/decisions/${row.id}/votes`)}><ClipboardCheck size={14} />{t('organization', 'manageVotes')}</Button>}
+        {row.status === 'DRAFT' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => submit.mutate(row.id)}>{t('organization', 'decisionSubmit')}</Button></PermissionGate>}
+        {row.status === 'SUBMITTED' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => startVoting.mutate(row.id)}>{t('organization', 'decisionStartVoting')}</Button></PermissionGate>}
+        {row.status === 'VOTING' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => decide.mutate(row.id)}><CheckCircle2 size={14} />{t('organization', 'decisionDecide')}</Button></PermissionGate>}
+        {(row.status === 'DRAFT' || row.status === 'SUBMITTED') && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => cancel.mutate(row.id)}><XCircle size={14} />{t('organization', 'decisionCancel')}</Button></PermissionGate>}
+      </div>,
+    },
+  ];
+
+  return <Card><CardHeader className="flex-row items-center justify-between space-y-0"><CardTitle className="text-sm">{t('organization', 'assemblyDecisionsTitle')}</CardTitle><PermissionGate permission="governance.create"><Button size="sm" onClick={() => setCreateOpen(true)}><Plus size={14} />{t('organization', 'createDecision')}</Button></PermissionGate></CardHeader>
+    <CardContent className="p-5 pt-0">
+      {isLoading ? <TableSkeleton /> : <DataTable columns={columns} rows={decisions} empty={<EmptyState icon={ClipboardCheck} title={t('organization', 'noDecisions')} />} />}
+      {createOpen && <ConfirmDialog open title={t('organization', 'createDecision')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => create.mutate({ title: form.title, description: form.description, createdBy: currentTenant.id })} onCancel={() => setCreateOpen(false)}>
+        <div className="mt-4 space-y-3 text-left">
+          <div className="space-y-1"><Label htmlFor="decision-title">{t('organization', 'decisionTitleLabel')}</Label><Input id="decision-title" value={form.title} onChange={(e) => setForm((v) => ({ ...v, title: e.target.value }))} /></div>
+          <div className="space-y-1"><Label htmlFor="decision-description">{t('organization', 'description')}</Label><Textarea id="decision-description" value={form.description} onChange={(e) => setForm((v) => ({ ...v, description: e.target.value }))} /></div>
+        </div>
+      </ConfirmDialog>}
+    </CardContent>
+  </Card>;
+}
+
+/**
+ * Page détail unique pour tout `Meeting` (REGULAR ou GENERAL_ASSEMBLY) —
+ * remplace l'ancienne `GeneralAssemblyDetail` autonome (correction
+ * post-implémentation Phase 4C-4, cf.
+ * docs/P1_GOVERNANCE_PHASE_4C4_GENERALASSEMBLY_MEETING_MIGRATION_UX_CORRECTION_REPORT.md
+ * §7) : une seule identité métier `Meeting`, pas de second modèle "détail AG"
+ * en parallèle. Quorum (D-4C4-WEB-04/05) et AssemblyDecision (D-4C4-WEB-06)
+ * ne s'affichent que pour `type === 'GENERAL_ASSEMBLY'` — inchangés par
+ * ailleurs, réutilisés tels quels. Présences reste accessible pour tout
+ * Meeting (D-4C3-WEB-02 ne distinguait déjà pas de type).
+ */
+function MeetingDetail({ t }: { t: T }) {
+  const { id = '' } = useParams(); const { currentTenant } = useTenant(); const navigate = useNavigate();
+  const { data: meeting, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.governance.meeting(id), currentTenant.id], queryFn: () => organizationService.getMeeting(currentTenant.id, id) });
+  if (isLoading) return <OrganizationPage title={t('organization', 'meetingDetail')} description=""><DetailSkeleton /></OrganizationPage>;
+  if (isError) return <OrganizationPage title={t('organization', 'meetingDetail')} description=""><ErrorState onRetry={refetch} /></OrganizationPage>;
+  if (!meeting) return <NotFoundPage />;
+  const isGeneralAssembly = meeting.type === 'GENERAL_ASSEMBLY';
+  return <OrganizationPage title={meeting.title} description={t('organization', 'meetingsTitle')} actions={<><BackButton label={t('organization', 'backToMeetings')} /><Button variant="outline" onClick={() => navigate(`/organization/governance/meetings/${meeting.id}/attendances`)}><UsersRound size={15} />{t('organization', 'manageAttendance')}</Button></>}>
+    <Card><CardHeader><CardTitle className="text-sm">{t('organization', 'meetingInfo')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5 pt-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusBadge label={t('organization', isGeneralAssembly ? 'meetingTypeGeneralAssembly' : 'meetingTypeRegular')} tone={isGeneralAssembly ? 'success' : 'default'} />
+        <StatusBadge label={t('organization', meetingStatusKey(meeting.status))} tone={meetingStatusTone(meeting.status)} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Info label={t('organization', 'meetingDate')} value={formatDate(meeting.date)} icon={CalendarDays} />
+        <Info label={t('organization', 'location')} value={meeting.location || '—'} icon={Building2} />
+        <Info label={t('organization', 'participants')} value={formatNumber(meeting.participants)} icon={UsersRound} />
+        <Info label={t('organization', 'minutes')} value={meeting.minutes ?? '—'} icon={FileText} />
+      </div>
+      {meeting.agenda && <Info label={t('organization', 'agenda')} value={meeting.agenda} icon={ClipboardCheck} />}
+      {isGeneralAssembly && meeting.description && <Info label={t('organization', 'description')} value={meeting.description} icon={FileText} />}
+    </CardContent></Card>
+    {isGeneralAssembly && <div className="grid gap-5 lg:grid-cols-2">
+      <QuorumCard t={t} meetingId={meeting.id} />
+      <div className="lg:col-span-2"><AssemblyDecisionsCard t={t} meetingId={meeting.id} /></div>
+    </div>}
+  </OrganizationPage>;
+}
+
+/** D-4C4-WEB-07/08/10 : gestion des Vote/VoteOption/MemberVote d'une AssemblyDecision — pas d'entrée de navigation dédiée, atteinte via "Gérer les votes" sur la carte Décisions. */
+function DecisionVotesPage({ t }: { t: T }) {
+  const { decisionId = '' } = useParams(); const { currentTenant } = useTenant();
+  const decisionQuery = useQuery({ queryKey: [...queryKeys.governance.assemblyDecision(decisionId), currentTenant.id], queryFn: () => assemblyDecisionService.getAssemblyDecision(currentTenant.id, decisionId) });
+  const votesQuery = useQuery({ queryKey: [...queryKeys.governance.decisionVotes(decisionId), currentTenant.id], queryFn: () => decisionVoteService.listVotesByDecision(currentTenant.id, decisionId) });
+  const membersQuery = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [subject, setSubject] = useState(''); const [optionsText, setOptionsText] = useState('');
+  const invalidateVotes = [[...queryKeys.governance.decisionVotes(decisionId), currentTenant.id]];
+  const createVote = useMockMutation<Vote | undefined, CreateDecisionVoteInput>({
+    mutationFn: (input) => decisionVoteService.createVoteForDecision(currentTenant.id, decisionId, input),
+    invalidateKeys: invalidateVotes,
+    onSuccess: (result) => { if (!result) { notify.error(t('organization', 'decisionVoteRejected')); return; } notify.success(t('organization', 'decisionVoteCreated')); setCreateOpen(false); setSubject(''); setOptionsText(''); },
+  });
+
+  if (decisionQuery.isLoading || votesQuery.isLoading || membersQuery.isLoading) return <OrganizationPage title={t('organization', 'manageVotes')} description=""><TableSkeleton /></OrganizationPage>;
+  if (decisionQuery.isError || votesQuery.isError || membersQuery.isError) return <OrganizationPage title={t('organization', 'manageVotes')} description=""><ErrorState onRetry={() => { decisionQuery.refetch(); votesQuery.refetch(); membersQuery.refetch(); }} /></OrganizationPage>;
+  if (!decisionQuery.data) return <NotFoundPage />;
+  const decision = decisionQuery.data;
+  const decisionVotes = votesQuery.data ?? [];
+  const members = membersQuery.data ?? [];
+
+  return <OrganizationPage title={t('organization', 'manageVotes')} description={decision.title} actions={<BackButton label={t('organization', 'backToDecision')} />}>
+    <Card><CardHeader className="flex-row items-center justify-between space-y-0"><CardTitle className="text-sm">{t('organization', 'votesTitle')}</CardTitle><PermissionGate permission="governance.create"><Button size="sm" onClick={() => setCreateOpen(true)}><Plus size={14} />{t('organization', 'createVote')}</Button></PermissionGate></CardHeader>
+      <CardContent className="space-y-3 p-5 pt-0">
+        {decisionVotes.map((vote) => <DecisionVoteCard key={vote.id} t={t} vote={vote} members={members} />)}
+        {decisionVotes.length === 0 && <EmptyState icon={ClipboardCheck} title={t('organization', 'noVotes')} />}
+      </CardContent>
+    </Card>
+    {createOpen && <ConfirmDialog open title={t('organization', 'createVote')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createVote.mutate({ subject, optionLabels: optionsText.split(',').map((label) => label.trim()).filter(Boolean) })} onCancel={() => setCreateOpen(false)}>
+      <div className="mt-4 space-y-3 text-left">
+        <div className="space-y-1"><Label htmlFor="decision-vote-subject">{t('organization', 'voteSubject')}</Label><Input id="decision-vote-subject" value={subject} onChange={(e) => setSubject(e.target.value)} /></div>
+        <div className="space-y-1"><Label htmlFor="decision-vote-options">{t('organization', 'voteOptionsLabel')}</Label><Input id="decision-vote-options" value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder={t('organization', 'voteOptionsPlaceholder')} /></div>
+      </div>
+    </ConfirmDialog>}
+  </OrganizationPage>;
+}
+
+/** Une ligne "Vote" + ses VoteOption + la liste de casting nominatif MemberVote — même pattern que MeetingAttendancePage (statuts par bouton, un par membre). */
+function DecisionVoteCard({ t, vote, members }: { t: T; vote: Vote; members: Member[] }) {
+  const { currentTenant } = useTenant();
+  const optionsQuery = useQuery({ queryKey: [...queryKeys.governance.voteOptions(vote.id), currentTenant.id], queryFn: () => decisionVoteService.listVoteOptions(currentTenant.id, vote.id) });
+  const memberVotesQuery = useQuery({ queryKey: [...queryKeys.governance.memberVotes(vote.id), currentTenant.id], queryFn: () => decisionVoteService.listMemberVotes(currentTenant.id, vote.id) });
+  const invalidate = [[...queryKeys.governance.memberVotes(vote.id), currentTenant.id]];
+  const cast = useMockMutation<MemberVote | undefined, { memberId: string; voteOptionId: string }>({
+    mutationFn: ({ memberId, voteOptionId }) => decisionVoteService.castMemberVote(currentTenant.id, vote.id, memberId, voteOptionId),
+    invalidateKeys: invalidate,
+    onSuccess: (result) => { if (!result) { notify.error(t('organization', 'memberVoteRejected')); return; } notify.success(t('organization', 'memberVoteCast')); },
+  });
+  const options = optionsQuery.data ?? [];
+  const castVotes = memberVotesQuery.data ?? [];
+  const castByMember = new Map(castVotes.map((item) => [item.memberId, item]));
+  const optionById = new Map(options.map((option) => [option.id, option]));
+
+  if (optionsQuery.isLoading || memberVotesQuery.isLoading) return <Card><CardContent className="p-4"><TableSkeleton /></CardContent></Card>;
+
+  return <Card><CardContent className="space-y-3 p-4">
+    <p className="text-sm font-semibold">{vote.subject}</p>
+    <div className="space-y-2">
+      {members.map((member) => {
+        const existing = castByMember.get(member.id);
+        return <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-2">
+          <span className="text-sm">{member.firstName} {member.lastName}{existing && <span className="ml-2 text-xs text-muted-foreground">{optionById.get(existing.voteOptionId)?.label}</span>}</span>
+          <PermissionGate permission="governance.create">
+            <div className="flex flex-wrap gap-1.5">
+              {options.map((option: VoteOption) => <Button key={option.id} variant={existing?.voteOptionId === option.id ? 'default' : 'outline'} size="sm" disabled={Boolean(existing)} onClick={() => cast.mutate({ memberId: member.id, voteOptionId: option.id })}>{option.label}</Button>)}
+            </div>
+          </PermissionGate>
+        </div>;
+      })}
+    </div>
+  </CardContent></Card>;
+}
+
+const ATTENDANCE_STATUS_OPTIONS: AttendanceStatus[] = ['PRESENT', 'ABSENT', 'LATE', 'EXCUSED'];
+const ATTENDANCE_STATUS_TONE: Record<AttendanceStatus, 'success' | 'error' | 'warning' | 'info'> = { PRESENT: 'success', ABSENT: 'error', LATE: 'warning', EXCUSED: 'info' };
+function attendanceStatusKey(status: AttendanceStatus): string {
+  return status === 'PRESENT' ? 'attendancePresent' : status === 'ABSENT' ? 'attendanceAbsent' : status === 'LATE' ? 'attendanceLate' : 'attendanceExcused';
+}
+
+/**
+ * `operationId` généré côté client à chaque action utilisateur — c'est le
+ * contrat minimal côté Web pour D-4C3-TECH-02 (identité de l'opération pour
+ * l'idempotence), sans construire d'infrastructure Offline/Outbox complète
+ * qui n'existe pas ailleurs dans ce projet (mandat IMPLEMENTATION GO §5/§21 :
+ * « ne pas inventer une architecture parallèle »). Le comportement réel de
+ * retransmission réseau reste Backend/Mobile Pending — voir
+ * docs/P1_GOVERNANCE_PHASE_4C3_IMPLEMENTATION_REPORT.md §9.
+ */
+function generateOperationId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `OP-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * Nouvelle page (D-4C3-WEB-02, Option A) — pas d'entrée de navigation dédiée :
+ * atteinte uniquement via le bouton "Gérer les présences" de la liste des
+ * réunions (mandat IMPLEMENTATION GO §17 : ne pas créer de nouvelle
+ * structure de navigation). La présence reste nominative sur l'ensemble des
+ * membres du tenant : aucune source ne définit de liste d'invités distincte
+ * du répertoire Members, donc aucune n'est inventée ici.
+ */
+function MeetingAttendancePage({ t }: { t: T }) {
+  const { meetingId = '' } = useParams();
+  const { currentTenant } = useTenant();
+  const meetingQuery = useQuery({ queryKey: [...queryKeys.governance.meeting(meetingId), currentTenant.id], queryFn: () => organizationService.getMeeting(currentTenant.id, meetingId) });
+  const membersQuery = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
+  const attendancesQuery = useQuery({ queryKey: [...queryKeys.governance.attendances(meetingId), currentTenant.id], queryFn: () => attendanceService.listAttendancesByMeeting(currentTenant.id, meetingId) });
+
+  const setAttendance = useMockMutation<Attendance | undefined, AttendanceInput>({
+    mutationFn: (input) => attendanceService.createAttendance(currentTenant.id, input),
+    invalidateKeys: [[...queryKeys.governance.attendances(meetingId), currentTenant.id]],
+    onSuccess: (result) => { if (!result) { notify.error(t('organization', 'attendanceRejected')); return; } notify.success(t('organization', 'attendanceSaved')); },
+  });
+  const removeAttendance = useMockMutation<Attendance | undefined, string>({
+    mutationFn: (attendanceId) => attendanceService.deleteAttendance(currentTenant.id, attendanceId),
+    invalidateKeys: [[...queryKeys.governance.attendances(meetingId), currentTenant.id]],
+    onSuccess: (result) => { if (!result) { notify.error(t('organization', 'attendanceRejected')); return; } notify.success(t('organization', 'attendanceRemoved')); },
+  });
+
+  if (meetingQuery.isLoading || membersQuery.isLoading || attendancesQuery.isLoading) return <OrganizationPage title={t('organization', 'manageAttendance')} description=""><TableSkeleton /></OrganizationPage>;
+  if (meetingQuery.isError || membersQuery.isError || attendancesQuery.isError) return <OrganizationPage title={t('organization', 'manageAttendance')} description=""><ErrorState onRetry={() => { meetingQuery.refetch(); membersQuery.refetch(); attendancesQuery.refetch(); }} /></OrganizationPage>;
+  if (!meetingQuery.data) return <NotFoundPage />;
+  const meeting = meetingQuery.data;
+  const members = membersQuery.data ?? [];
+  const attendances = attendancesQuery.data ?? [];
+  const attendanceByMember = new Map(attendances.map((item) => [item.memberId, item]));
+  const isOpen = meeting.status === 'PLANNED' || meeting.status === 'ONGOING';
+
+  const columns: TableColumn<Member>[] = [
+    { key: 'member', header: t('organization', 'member'), render: (row) => <span className="font-medium">{row.firstName} {row.lastName}</span> },
+    { key: 'status', header: t('organization', 'status'), render: (row) => { const existing = attendanceByMember.get(row.id); return existing ? <StatusBadge label={t('organization', attendanceStatusKey(existing.status))} tone={ATTENDANCE_STATUS_TONE[existing.status]} /> : <span className="text-xs text-muted-foreground">{t('organization', 'attendanceNotRecorded')}</span>; } },
+    {
+      key: 'actions', header: '', className: 'w-96', render: (row) => {
+        const existing = attendanceByMember.get(row.id);
+        return <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <PermissionGate permission={existing ? 'governance.update' : 'governance.create'}>
+            <div className="flex flex-wrap gap-1.5">
+              {ATTENDANCE_STATUS_OPTIONS.map((status) => <Button key={status} variant={existing?.status === status ? 'default' : 'outline'} size="sm" disabled={!isOpen} onClick={() => setAttendance.mutate({ meetingId, memberId: row.id, status, operationId: generateOperationId() })}>{t('organization', attendanceStatusKey(status))}</Button>)}
+            </div>
+          </PermissionGate>
+          {existing && <PermissionGate permission="governance.delete"><Button variant="outline" size="sm" disabled={!isOpen} onClick={() => removeAttendance.mutate(existing.id)}>{t('organization', 'delete')}</Button></PermissionGate>}
+        </div>;
+      },
+    },
+  ];
+
+  return <OrganizationPage title={t('organization', 'manageAttendance')} description={meeting.title} actions={<BackButton label={t('organization', 'backToMeetings')} />}>
+    <div className="flex items-center gap-3">
+      <StatusBadge label={t('organization', meetingStatusKey(meeting.status))} tone={meetingStatusTone(meeting.status)} />
+      {!isOpen && <p className="text-xs text-muted-foreground">{t('organization', 'attendanceLocked')}</p>}
+    </div>
+    <DataTable columns={columns} rows={members} empty={<EmptyState icon={UsersRound} title={t('organization', 'noMembers')} />} />
+  </OrganizationPage>;
+}
+
 /**
  * Le registre des tenants (ex-`/organization/tenants*`) vit désormais sous
  * Platform Administration (`src/features/platform/platform-module.tsx`,
  * routes `/platform/tenants*`) — voir docs/DECISION_PLATFORM_SAAS_TENANT_FINAL.md.
  * Organization ne représente plus que le tenant courant (Members/Governance).
  */
+/**
+ * `Assembly`/`GeneralAssembly` ne sont plus des points d'entrée autonomes —
+ * ces routes ne sont conservées que comme redirections pour ne pas casser
+ * d'éventuels liens/marque-pages existants vers les anciennes URLs
+ * (mandat correction post-implémentation §"ne pas casser des liens
+ * existants sans vérification d'usage"), jamais comme UI dédiée.
+ */
+function RedirectToMeeting() { const { id = '' } = useParams(); return <Navigate to={`/organization/governance/meetings/${id}`} replace />; }
+function RedirectToDecisionVotes() { const { meetingId = '', decisionId = '' } = useParams(); return <Navigate to={`/organization/governance/meetings/${meetingId}/decisions/${decisionId}/votes`} replace />; }
+
 export function OrganizationModule() {
   const { t } = useLocale();
   return (
@@ -330,10 +675,17 @@ export function OrganizationModule() {
       <Route path="members/:id/edit" element={<MemberEdit t={t} />} />
       <Route path="members/:id" element={<MemberDetail t={t} />} />
       <Route path="governance" element={<GovernanceOverview t={t} />} />
-      <Route path="governance/assemblies" element={<GovernanceTablePage t={t} kind="assemblies" />} />
-      <Route path="governance/meetings" element={<GovernanceTablePage t={t} kind="meetings" />} />
+      <Route path="governance/meetings" element={<PermissionRoute permission="governance.read"><GovernanceTablePage t={t} kind="meetings" /></PermissionRoute>} />
+      <Route path="governance/meetings/:meetingId/attendances" element={<PermissionRoute permission="governance.read"><MeetingAttendancePage t={t} /></PermissionRoute>} />
+      <Route path="governance/meetings/:meetingId/decisions/:decisionId/votes" element={<PermissionRoute permission="governance.read"><DecisionVotesPage t={t} /></PermissionRoute>} />
+      <Route path="governance/meetings/:id" element={<PermissionRoute permission="governance.read"><MeetingDetail t={t} /></PermissionRoute>} />
       <Route path="governance/votes" element={<GovernanceTablePage t={t} kind="votes" />} />
       <Route path="governance/board-mandates" element={<GovernanceTablePage t={t} kind="boardMandates" />} />
+      <Route path="governance/assemblies" element={<Navigate to="/organization/governance/meetings" replace />} />
+      <Route path="governance/general-assemblies" element={<Navigate to="/organization/governance/meetings" replace />} />
+      <Route path="governance/general-assemblies/create" element={<Navigate to="/organization/governance/meetings" replace />} />
+      <Route path="governance/general-assemblies/:id" element={<RedirectToMeeting />} />
+      <Route path="governance/general-assemblies/:meetingId/decisions/:decisionId/votes" element={<RedirectToDecisionVotes />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

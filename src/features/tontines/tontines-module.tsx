@@ -10,7 +10,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
-import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { tontinesService, type TontineInput, type CycleInput, type CycleMemberInput, type DrawInput, type WinnerInput } from '@/services/tontines.service';
 import { organizationService } from '@/services/organization.service';
@@ -53,8 +52,9 @@ function TontinesList({ t }: { t: T }) {
 }
 
 function TontineCreate({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, user.scope), queryFn: () => organizationService.listTenants(currentTenant.id, user.scope) });
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
+  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const [name, setName] = useState(''); const [type, setType] = useState<Tontine['type']>('tontine'); const [tenantId, setTenantId] = useState(currentTenant.id);
   const [error, setError] = useState<string | undefined>();
   const mutation = useMockMutation<Tontine, TontineInput>({

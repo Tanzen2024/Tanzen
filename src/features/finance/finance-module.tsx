@@ -1,20 +1,21 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Banknote, BarChart3, BarChart3 as ChartIcon, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, TrendingUp, UserCheck, WalletCards } from 'lucide-react';
+import { ArrowLeft, Ban, Banknote, BarChart3, BarChart3 as ChartIcon, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, WalletCards } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
-import { usePermissions } from '@/contexts/permission-context';
-import { NotFoundPage } from '@/routes';
+import { NotFoundPage, PermissionRoute } from '@/routes';
 import { financeService, type AccountInput, type DistributionInput } from '@/services/finance.service';
 import { creditService, type ApplicationInput, type LoanInput, type RepaymentInput, type GuarantorInput } from '@/services/credit.service';
+import { loanRuleService, type LoanRuleInput, type LoanRuleUpdateInput } from '@/services/loan-rule.service';
 import { organizationService } from '@/services/organization.service';
 import { tontinesService } from '@/services/tontines.service';
 import { queryKeys } from '@/services/query-keys';
@@ -26,6 +27,7 @@ import type { Transaction } from '@/mocks/finance/transactions';
 import type { Application } from '@/mocks/finance/applications';
 import type { Loan } from '@/mocks/finance/loans';
 import type { Distribution } from '@/mocks/finance/distributions';
+import type { LoanRule, LoanRuleApprovalLevel, LoanRuleGuaranteeType, LoanRuleInterestPeriod, LoanRuleInterestType, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { TableColumn } from '@/types/ui';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { formatFCFA, formatNumber } from '@/lib/utils';
@@ -59,8 +61,9 @@ function AccountsList({ t }: { t: T }) {
 }
 
 function AccountCreate({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, user.scope), queryFn: () => organizationService.listTenants(currentTenant.id, user.scope) });
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
+  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const [accountNumber, setAccountNumber] = useState(''); const [type, setType] = useState<AccountInput['type']>('savings'); const [tenantId, setTenantId] = useState(currentTenant.id); const [balance, setBalance] = useState('0'); const [status, setStatus] = useState<AccountInput['status']>('active');
   const [error, setError] = useState<string | undefined>();
   const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.createAccount>>, AccountInput>({
@@ -224,8 +227,9 @@ function ApplicationsList({ t }: { t: T }) {
 }
 
 function ApplicationCreate({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, user.scope), queryFn: () => organizationService.listTenants(currentTenant.id, user.scope) });
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
+  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const [applicant, setApplicant] = useState(''); const [requestedAmount, setRequestedAmount] = useState(''); const [purpose, setPurpose] = useState(''); const [tenantId, setTenantId] = useState(currentTenant.id); const [creditScore, setCreditScore] = useState(''); const [monthlyIncome, setMonthlyIncome] = useState(''); const [existingLoans, setExistingLoans] = useState('0');
   const [errors, setErrors] = useState<{ applicant?: string; requestedAmount?: string }>({});
   const mutation = useMockMutation<Awaited<ReturnType<typeof creditService.createApplication>>, ApplicationInput>({
@@ -393,6 +397,205 @@ function GuarantorsList({ t }: { t: T }) {
   </Page>;
 }
 
+type LoanRuleFormState = {
+  accountId: string; name: string; allowLoans: boolean; loanMode: LoanRuleLoanMode; minAmount: string; maxAmount: string; interestRate: string; interestType: LoanRuleInterestType; interestPeriod: LoanRuleInterestPeriod; durationMonths: string; maxActiveLoans: string; maxLoanExposure: string; requiresGuarantor: boolean; minGuarantors: string; maxGuarantors: string; guaranteeTypeRequired: LoanRuleGuaranteeType; guaranteeRatio: string; allowSelfGuarantee: boolean; requiresApproval: boolean; approvalLevel: LoanRuleApprovalLevel;
+};
+
+const defaultLoanRuleForm: LoanRuleFormState = { accountId: '', name: '', allowLoans: true, loanMode: 'INTERNAL', minAmount: '0', maxAmount: '', interestRate: '0', interestType: 'FIXED', interestPeriod: 'MONTHLY', durationMonths: '12', maxActiveLoans: '1', maxLoanExposure: '', requiresGuarantor: false, minGuarantors: '0', maxGuarantors: '1', guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: '100', allowSelfGuarantee: false, requiresApproval: true, approvalLevel: 'ADMIN' };
+
+function loanRuleFormToInput(form: LoanRuleFormState): LoanRuleInput {
+  return {
+    accountId: form.accountId, name: form.name.trim(), allowLoans: form.allowLoans, loanMode: form.loanMode,
+    minAmount: Number(form.minAmount) || 0, maxAmount: Number(form.maxAmount) || 0, interestRate: Number(form.interestRate) || 0,
+    interestType: form.interestType, interestPeriod: form.interestPeriod, durationMonths: Number(form.durationMonths) || 0,
+    maxActiveLoans: Number(form.maxActiveLoans) || 1, maxLoanExposure: form.maxLoanExposure === '' ? null : Number(form.maxLoanExposure),
+    requiresGuarantor: form.requiresGuarantor, minGuarantors: Number(form.minGuarantors) || 0, maxGuarantors: Number(form.maxGuarantors) || 0,
+    guaranteeTypeRequired: form.guaranteeTypeRequired, guaranteeRatio: Number(form.guaranteeRatio) || 0, allowSelfGuarantee: form.allowSelfGuarantee,
+    requiresApproval: form.requiresApproval, approvalLevel: form.requiresApproval ? form.approvalLevel : null,
+  };
+}
+
+/** accountId n'est jamais transmis à UPDATE (§9 du mandat : immuable après création). */
+function loanRuleFormToUpdateInput(form: LoanRuleFormState): LoanRuleUpdateInput {
+  const input: Partial<LoanRuleInput> = loanRuleFormToInput(form);
+  delete input.accountId;
+  return input;
+}
+
+function loanRuleStatusTone(status: LoanRule['status']): 'success' | 'default' { return status === 'ACTIVE' ? 'success' : 'default'; }
+function loanRuleStatusKey(status: LoanRule['status']): string { return status === 'ACTIVE' ? 'active' : 'inactive'; }
+
+function LoanRuleFormBody({ t, form, setForm, accounts, accountEditable, errors }: { t: T; form: LoanRuleFormState; setForm: (updater: LoanRuleFormState | ((prev: LoanRuleFormState) => LoanRuleFormState)) => void; accounts: Account[]; accountEditable: boolean; errors: { name?: string; accountId?: string; maxAmount?: string } }) {
+  const set = <K extends keyof LoanRuleFormState>(key: K, value: LoanRuleFormState[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  return <>
+    <FormSection title={t('finance', 'general')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2"><Label htmlFor="loan-rule-name">{t('finance', 'loanRuleName')}</Label><Input id="loan-rule-name" value={form.name} onChange={(event) => set('name', event.target.value)} aria-invalid={Boolean(errors.name)} /><FieldError message={errors.name} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-account">{t('finance', 'account')}</Label>{accountEditable ? <select id="loan-rule-account" value={form.accountId} onChange={(event) => set('accountId', event.target.value)} aria-invalid={Boolean(errors.accountId)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="">{t('finance', 'selectAccount')}</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.accountNumber}</option>)}</select> : <Input value={accounts.find((account) => account.id === form.accountId)?.accountNumber ?? form.accountId} disabled />}<FieldError message={errors.accountId} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-loan-mode">{t('finance', 'loanMode')}</Label><select id="loan-rule-loan-mode" value={form.loanMode} onChange={(event) => set('loanMode', event.target.value as LoanRuleLoanMode)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="NONE">{t('finance', 'loanModeNONE')}</option><option value="INTERNAL">{t('finance', 'loanModeINTERNAL')}</option><option value="EXTERNAL">{t('finance', 'loanModeEXTERNAL')}</option><option value="BOTH">{t('finance', 'loanModeBOTH')}</option></select></div>
+        <div className="flex items-center gap-2 pt-6"><Switch id="loan-rule-allow-loans" checked={form.allowLoans} onCheckedChange={(checked: boolean) => set('allowLoans', checked)} /><Label htmlFor="loan-rule-allow-loans">{t('finance', 'allowLoans')}</Label></div>
+      </div>
+    </FormSection>
+    <FormSection title={t('finance', 'loanTerms')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2"><Label htmlFor="loan-rule-min-amount">{t('finance', 'minAmount')}</Label><Input id="loan-rule-min-amount" type="number" inputMode="decimal" value={form.minAmount} onChange={(event) => set('minAmount', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-max-amount">{t('finance', 'maxAmount')}</Label><Input id="loan-rule-max-amount" type="number" inputMode="decimal" value={form.maxAmount} onChange={(event) => set('maxAmount', event.target.value)} aria-invalid={Boolean(errors.maxAmount)} /><FieldError message={errors.maxAmount} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-interest-rate">{t('finance', 'interestRate')}</Label><Input id="loan-rule-interest-rate" type="number" inputMode="decimal" value={form.interestRate} onChange={(event) => set('interestRate', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-duration">{t('finance', 'durationMonths')}</Label><Input id="loan-rule-duration" type="number" inputMode="numeric" value={form.durationMonths} onChange={(event) => set('durationMonths', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-interest-type">{t('finance', 'interestType')}</Label><select id="loan-rule-interest-type" value={form.interestType} onChange={(event) => set('interestType', event.target.value as LoanRuleInterestType)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="FIXED">{t('finance', 'interestTypeFIXED')}</option><option value="REDUCING">{t('finance', 'interestTypeREDUCING')}</option><option value="FLAT">{t('finance', 'interestTypeFLAT')}</option></select></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-interest-period">{t('finance', 'interestPeriod')}</Label><select id="loan-rule-interest-period" value={form.interestPeriod} onChange={(event) => set('interestPeriod', event.target.value as LoanRuleInterestPeriod)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="DAILY">{t('finance', 'interestPeriodDAILY')}</option><option value="WEEKLY">{t('finance', 'interestPeriodWEEKLY')}</option><option value="MONTHLY">{t('finance', 'interestPeriodMONTHLY')}</option><option value="YEARLY">{t('finance', 'interestPeriodYEARLY')}</option></select></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-max-active-loans">{t('finance', 'maxActiveLoans')}</Label><Input id="loan-rule-max-active-loans" type="number" inputMode="numeric" value={form.maxActiveLoans} onChange={(event) => set('maxActiveLoans', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-max-exposure">{t('finance', 'maxLoanExposure')}</Label><Input id="loan-rule-max-exposure" type="number" inputMode="decimal" value={form.maxLoanExposure} onChange={(event) => set('maxLoanExposure', event.target.value)} /></div>
+      </div>
+    </FormSection>
+    <FormSection title={t('finance', 'guarantees')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex items-center gap-2"><Switch id="loan-rule-requires-guarantor" checked={form.requiresGuarantor} onCheckedChange={(checked: boolean) => set('requiresGuarantor', checked)} /><Label htmlFor="loan-rule-requires-guarantor">{t('finance', 'requiresGuarantor')}</Label></div>
+        <div className="flex items-center gap-2"><Switch id="loan-rule-allow-self-guarantee" checked={form.allowSelfGuarantee} onCheckedChange={(checked: boolean) => set('allowSelfGuarantee', checked)} /><Label htmlFor="loan-rule-allow-self-guarantee">{t('finance', 'allowSelfGuarantee')}</Label></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-min-guarantors">{t('finance', 'minGuarantors')}</Label><Input id="loan-rule-min-guarantors" type="number" inputMode="numeric" value={form.minGuarantors} onChange={(event) => set('minGuarantors', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-max-guarantors">{t('finance', 'maxGuarantors')}</Label><Input id="loan-rule-max-guarantors" type="number" inputMode="numeric" value={form.maxGuarantors} onChange={(event) => set('maxGuarantors', event.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-guarantee-type">{t('finance', 'guaranteeTypeRequired')}</Label><select id="loan-rule-guarantee-type" value={form.guaranteeTypeRequired} onChange={(event) => set('guaranteeTypeRequired', event.target.value as LoanRuleGuaranteeType)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="PERSONAL">{t('finance', 'guaranteeTypePERSONAL')}</option><option value="GROUP">{t('finance', 'guaranteeTypeGROUP')}</option><option value="COLLATERAL">{t('finance', 'guaranteeTypeCOLLATERAL')}</option></select></div>
+        <div className="space-y-2"><Label htmlFor="loan-rule-guarantee-ratio">{t('finance', 'guaranteeRatio')}</Label><Input id="loan-rule-guarantee-ratio" type="number" inputMode="decimal" value={form.guaranteeRatio} onChange={(event) => set('guaranteeRatio', event.target.value)} /></div>
+      </div>
+    </FormSection>
+    <FormSection title={t('finance', 'approval')}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex items-center gap-2"><Switch id="loan-rule-requires-approval" checked={form.requiresApproval} onCheckedChange={(checked: boolean) => set('requiresApproval', checked)} /><Label htmlFor="loan-rule-requires-approval">{t('finance', 'requiresApproval')}</Label></div>
+        {form.requiresApproval && <div className="space-y-2"><Label htmlFor="loan-rule-approval-level">{t('finance', 'approvalLevel')}</Label><select id="loan-rule-approval-level" value={form.approvalLevel} onChange={(event) => set('approvalLevel', event.target.value as LoanRuleApprovalLevel)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="MEMBER">{t('finance', 'approvalLevelMEMBER')}</option><option value="BOARD">{t('finance', 'approvalLevelBOARD')}</option><option value="ADMIN">{t('finance', 'approvalLevelADMIN')}</option></select></div>}
+      </div>
+    </FormSection>
+  </>;
+}
+
+function LoanRulesList({ t }: { t: T }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant(); const [search, setSearch] = useState('');
+  const { data: rules = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.credit.loanRules(currentTenant.id), queryFn: () => loanRuleService.listLoanRules(currentTenant.id) });
+  const filtered = rules.filter((rule) => `${rule.name} ${rule.accountNumber}`.toLowerCase().includes(search.toLowerCase()));
+  if (isLoading) return <Page title={t('finance', 'loanRulesTitle')} description={t('finance', 'loanRulesDescription')}><TableSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'loanRulesTitle')} description={t('finance', 'loanRulesDescription')}><ErrorState onRetry={refetch} /></Page>;
+  const columns: TableColumn<LoanRule>[] = [
+    { key: 'name', header: t('finance', 'loanRuleName'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/loan-rules/${row.id}`)} className="text-left text-sm font-semibold text-primary">{row.name}</button> },
+    { key: 'accountNumber', header: t('finance', 'account'), render: (row) => <span className="font-mono text-xs">{row.accountNumber}</span> },
+    { key: 'maxAmount', header: t('finance', 'maxAmount'), render: (row) => <MoneyDisplay amount={row.maxAmount} /> },
+    { key: 'interestRate', header: t('finance', 'interestRate'), render: (row) => `${row.interestRate}%` },
+    { key: 'durationMonths', header: t('finance', 'durationMonths'), render: (row) => row.durationMonths },
+    { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', loanRuleStatusKey(row.status))} tone={loanRuleStatusTone(row.status)} /> },
+    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/loan-rules/${row.id}`)} aria-label={t('finance', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
+  ];
+  return <Page title={t('finance', 'loanRulesTitle')} description={t('finance', 'loanRulesDescription')} actions={<Button onClick={() => navigate('/finance/credit/loan-rules/create')}><Plus size={16} />{t('finance', 'createLoanRule')}</Button>}><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchTransaction')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={ListChecks} title={t('finance', 'noLoanRules')} />} /></Page>;
+}
+
+function LoanRuleCreate({ t }: { t: T }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
+  const [form, setForm] = useState<LoanRuleFormState>(defaultLoanRuleForm);
+  const [errors, setErrors] = useState<{ name?: string; accountId?: string; maxAmount?: string }>({});
+  const mutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.createLoanRule>>, LoanRuleInput>({
+    mutationFn: (input) => loanRuleService.createLoanRule(currentTenant.id, input),
+    invalidateKeys: [queryKeys.credit.loanRules(currentTenant.id)],
+    onSuccess: (rule) => { if (!rule) { notify.error(t('finance', 'loanRuleRejected')); return; } notify.success(t('finance', 'loanRuleCreated')); navigate(`/finance/credit/loan-rules/${rule.id}`); },
+  });
+  const handleSave = () => {
+    const nextErrors: typeof errors = {};
+    if (!form.name.trim()) nextErrors.name = t('finance', 'fieldRequired');
+    if (!form.accountId) nextErrors.accountId = t('finance', 'fieldRequired');
+    if (!form.maxAmount || Number(form.maxAmount) < (Number(form.minAmount) || 0)) nextErrors.maxAmount = t('finance', 'fieldRequired');
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+    mutation.mutate(loanRuleFormToInput(form));
+  };
+  return <Page title={t('finance', 'createLoanRule')} description={t('finance', 'loanRulesDescription')} actions={<Back label={t('finance', 'backToLoanRules')} />}><div className="grid gap-5 lg:grid-cols-2">
+    <LoanRuleFormBody t={t} form={form} setForm={setForm} accounts={accounts} accountEditable errors={errors} />
+    <div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/finance/credit/loan-rules')}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+  </div></Page>;
+}
+
+function LoanRuleDetail({ t }: { t: T }) {
+  const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const [confirmAction, setConfirmAction] = useState<'activate' | 'deactivate' | 'delete' | null>(null);
+  const { data: rule, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.credit.loanRule(id), currentTenant.id], queryFn: () => loanRuleService.getLoanRule(currentTenant.id, id) });
+  const invalidateKeys = [queryKeys.credit.loanRule(id), queryKeys.credit.loanRules(currentTenant.id)];
+  const activateMutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.activateLoanRule>>, void>({ mutationFn: () => loanRuleService.activateLoanRule(currentTenant.id, id), invalidateKeys, onSuccess: () => { notify.success(t('finance', 'loanRuleActivated')); setConfirmAction(null); } });
+  const deactivateMutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.deactivateLoanRule>>, void>({ mutationFn: () => loanRuleService.deactivateLoanRule(currentTenant.id, id), invalidateKeys, onSuccess: () => { notify.success(t('finance', 'loanRuleDeactivated')); setConfirmAction(null); } });
+  const deleteMutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.deleteLoanRule>>, void>({ mutationFn: () => loanRuleService.deleteLoanRule(currentTenant.id, id), invalidateKeys, onSuccess: () => { notify.success(t('finance', 'loanRuleDeleted')); navigate('/finance/credit/loan-rules'); } });
+  if (isLoading) return <Page title={t('finance', 'loanRuleDetail')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'loanRuleDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!rule) return <NotFoundPage />;
+  const isActive = rule.status === 'ACTIVE';
+  return <Page title={rule.name} description={rule.accountNumber} actions={<>
+    <Back label={t('finance', 'backToLoanRules')} />
+    <Button variant="outline" onClick={() => navigate(`/finance/credit/loan-rules/${rule.id}/edit`)}>{t('finance', 'edit')}</Button>
+    {isActive ? <Button variant="outline" onClick={() => setConfirmAction('deactivate')}><Ban size={15} />{t('finance', 'deactivateLoanRule')}</Button> : <Button variant="outline" onClick={() => setConfirmAction('activate')}><Check size={15} />{t('finance', 'activateLoanRule')}</Button>}
+    <Button variant="outline" className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300" onClick={() => setConfirmAction('delete')}><Trash2 size={15} />{t('finance', 'deleteLoanRule')}</Button>
+  </>}>
+    {confirmAction === 'activate' && <ConfirmDialog open title={t('finance', 'activateLoanRule')} description={t('finance', 'activateLoanRuleConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => activateMutation.mutate()} onCancel={() => setConfirmAction(null)} />}
+    {confirmAction === 'deactivate' && <ConfirmDialog open title={t('finance', 'deactivateLoanRule')} description={t('finance', 'deactivateLoanRuleConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deactivateMutation.mutate()} onCancel={() => setConfirmAction(null)} />}
+    {confirmAction === 'delete' && <ConfirmDialog open title={t('finance', 'deleteLoanRule')} description={t('finance', 'deleteLoanRuleConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate()} onCancel={() => setConfirmAction(null)} />}
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'general')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <Info label={t('finance', 'account')} value={rule.accountNumber} icon={Landmark} />
+        <Info label={t('finance', 'status')} value={<StatusBadge label={t('finance', loanRuleStatusKey(rule.status))} tone={loanRuleStatusTone(rule.status)} />} icon={ShieldCheck} />
+        <Info label={t('finance', 'allowLoans')} value={rule.allowLoans ? t('finance', 'yes') : t('finance', 'no')} icon={CreditCard} />
+        <Info label={t('finance', 'loanMode')} value={t('finance', `loanMode${rule.loanMode}`)} icon={SlidersHorizontal} />
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'loanTerms')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <Info label={t('finance', 'minAmount')} value={formatFCFA(rule.minAmount)} icon={Banknote} />
+        <Info label={t('finance', 'maxAmount')} value={formatFCFA(rule.maxAmount)} icon={Banknote} />
+        <Info label={t('finance', 'interestRate')} value={`${rule.interestRate}%`} icon={TrendingUp} />
+        <Info label={t('finance', 'interestType')} value={t('finance', `interestType${rule.interestType}`)} icon={TrendingUp} />
+        <Info label={t('finance', 'interestPeriod')} value={t('finance', `interestPeriod${rule.interestPeriod}`)} icon={CalendarClock} />
+        <Info label={t('finance', 'durationMonths')} value={String(rule.durationMonths)} icon={CalendarClock} />
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'exposure')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <Info label={t('finance', 'maxActiveLoans')} value={String(rule.maxActiveLoans)} icon={HandCoins} />
+        <Info label={t('finance', 'maxLoanExposure')} value={rule.maxLoanExposure !== null ? formatFCFA(rule.maxLoanExposure) : '—'} icon={HandCoins} />
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'guarantees')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <Info label={t('finance', 'requiresGuarantor')} value={rule.requiresGuarantor ? t('finance', 'yes') : t('finance', 'no')} icon={ShieldCheck} />
+        <Info label={t('finance', 'minGuarantors')} value={String(rule.minGuarantors)} icon={UserCheck} />
+        <Info label={t('finance', 'maxGuarantors')} value={String(rule.maxGuarantors)} icon={UserCheck} />
+        <Info label={t('finance', 'guaranteeTypeRequired')} value={t('finance', `guaranteeType${rule.guaranteeTypeRequired}`)} icon={ShieldCheck} />
+        <Info label={t('finance', 'guaranteeRatio')} value={`${rule.guaranteeRatio}%`} icon={ShieldCheck} />
+        <Info label={t('finance', 'allowSelfGuarantee')} value={rule.allowSelfGuarantee ? t('finance', 'yes') : t('finance', 'no')} icon={ShieldCheck} />
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'approval')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <Info label={t('finance', 'requiresApproval')} value={rule.requiresApproval ? t('finance', 'yes') : t('finance', 'no')} icon={Check} />
+        <Info label={t('finance', 'approvalLevel')} value={rule.approvalLevel ? t('finance', `approvalLevel${rule.approvalLevel}`) : '—'} icon={Check} />
+      </CardContent></Card>
+    </div>
+  </Page>;
+}
+
+function LoanRuleEdit({ t }: { t: T }) {
+  const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { data: rule, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.credit.loanRule(id), currentTenant.id], queryFn: () => loanRuleService.getLoanRule(currentTenant.id, id) });
+  const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
+  const [form, setForm] = useState<LoanRuleFormState | null>(null);
+  const [errors, setErrors] = useState<{ name?: string; maxAmount?: string }>({});
+  const mutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.updateLoanRule>>, LoanRuleUpdateInput>({
+    mutationFn: (patch) => loanRuleService.updateLoanRule(currentTenant.id, id, patch),
+    invalidateKeys: [queryKeys.credit.loanRule(id), queryKeys.credit.loanRules(currentTenant.id)],
+    onSuccess: (updated) => { if (!updated) { notify.error(t('finance', 'loanRuleRejected')); return; } notify.success(t('finance', 'loanRuleUpdated')); navigate(`/finance/credit/loan-rules/${id}`); },
+  });
+  if (isLoading) return <Page title={t('finance', 'editLoanRule')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'editLoanRule')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!rule) return <NotFoundPage />;
+  const current: LoanRuleFormState = form ?? { accountId: rule.accountId, name: rule.name, allowLoans: rule.allowLoans, loanMode: rule.loanMode, minAmount: String(rule.minAmount), maxAmount: String(rule.maxAmount), interestRate: String(rule.interestRate), interestType: rule.interestType, interestPeriod: rule.interestPeriod, durationMonths: String(rule.durationMonths), maxActiveLoans: String(rule.maxActiveLoans), maxLoanExposure: rule.maxLoanExposure === null ? '' : String(rule.maxLoanExposure), requiresGuarantor: rule.requiresGuarantor, minGuarantors: String(rule.minGuarantors), maxGuarantors: String(rule.maxGuarantors), guaranteeTypeRequired: rule.guaranteeTypeRequired, guaranteeRatio: String(rule.guaranteeRatio), allowSelfGuarantee: rule.allowSelfGuarantee, requiresApproval: rule.requiresApproval, approvalLevel: rule.approvalLevel ?? 'ADMIN' };
+  const setCurrent = (updater: LoanRuleFormState | ((prev: LoanRuleFormState) => LoanRuleFormState)) => setForm(typeof updater === 'function' ? (updater as (prev: LoanRuleFormState) => LoanRuleFormState)(current) : updater);
+  const handleSave = () => {
+    const nextErrors: typeof errors = {};
+    if (!current.name.trim()) nextErrors.name = t('finance', 'fieldRequired');
+    if (!current.maxAmount || Number(current.maxAmount) < (Number(current.minAmount) || 0)) nextErrors.maxAmount = t('finance', 'fieldRequired');
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+    mutation.mutate(loanRuleFormToUpdateInput(current));
+  };
+  return <Page title={t('finance', 'editLoanRule')} description={rule.name} actions={<Back label={t('finance', 'backToLoanRules')} />}><div className="grid gap-5 lg:grid-cols-2">
+    <LoanRuleFormBody t={t} form={current} setForm={setCurrent} accounts={accounts} accountEditable={false} errors={errors} />
+    <div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/finance/credit/loan-rules/${id}`)}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+  </div></Page>;
+}
+
 export function FinanceModule() {
   const { t } = useLocale();
   return (
@@ -413,6 +616,10 @@ export function FinanceModule() {
       <Route path="credit/loans/:id" element={<LoanDetail t={t} />} />
       <Route path="credit/repayments" element={<RepaymentsList t={t} />} />
       <Route path="credit/guarantors" element={<GuarantorsList t={t} />} />
+      <Route path="credit/loan-rules" element={<PermissionRoute permission="loanRules.manage"><LoanRulesList t={t} /></PermissionRoute>} />
+      <Route path="credit/loan-rules/create" element={<PermissionRoute permission="loanRules.manage"><LoanRuleCreate t={t} /></PermissionRoute>} />
+      <Route path="credit/loan-rules/:id/edit" element={<PermissionRoute permission="loanRules.manage"><LoanRuleEdit t={t} /></PermissionRoute>} />
+      <Route path="credit/loan-rules/:id" element={<PermissionRoute permission="loanRules.manage"><LoanRuleDetail t={t} /></PermissionRoute>} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

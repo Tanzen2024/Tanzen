@@ -28,10 +28,17 @@ export const queryKeys = {
     detail: (id: string) => ['members', 'detail', id] as const,
   },
   governance: {
-    assemblies: (tenantId: string) => ['governance', 'assemblies', tenantId] as const,
     meetings: (tenantId: string) => ['governance', 'meetings', tenantId] as const,
+    meeting: (id: string) => ['governance', 'meetings', 'detail', id] as const,
     votes: (tenantId: string) => ['governance', 'votes', tenantId] as const,
     board: (tenantId: string) => ['governance', 'board', tenantId] as const,
+    attendances: (meetingId: string) => ['governance', 'attendances', meetingId] as const,
+    quorumSnapshot: (meetingId: string) => ['governance', 'quorum-snapshot', meetingId] as const,
+    assemblyDecisions: (meetingId: string) => ['governance', 'assembly-decisions', meetingId] as const,
+    assemblyDecision: (id: string) => ['governance', 'assembly-decisions', 'detail', id] as const,
+    decisionVotes: (decisionId: string) => ['governance', 'decision-votes', decisionId] as const,
+    voteOptions: (voteId: string) => ['governance', 'vote-options', voteId] as const,
+    memberVotes: (voteId: string) => ['governance', 'member-votes', voteId] as const,
   },
   finance: {
     accounts: (tenantId: string) => ['finance', 'accounts', tenantId] as const,
@@ -52,6 +59,8 @@ export const queryKeys = {
     guarantorsByLoan: (loanId: string) => ['credit', 'guarantors', 'loan', loanId] as const,
     repayments: (tenantId: string) => ['credit', 'repayments', tenantId] as const,
     guarantors: (tenantId: string) => ['credit', 'guarantors', tenantId] as const,
+    loanRules: (tenantId: string) => ['credit', 'loan-rules', tenantId] as const,
+    loanRule: (id: string) => ['credit', 'loan-rules', 'detail', id] as const,
   },
   tontines: {
     list: (tenantId: string) => ['tontines', 'list', tenantId] as const,

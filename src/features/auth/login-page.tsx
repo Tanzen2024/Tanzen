@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, Lock, ArrowRight, Loader2 } from 'lucide-react';
+import { Mail, Lock, ArrowRight, Loader2, Info } from 'lucide-react';
 import { Logo } from './components/logo';
 import { useLocale } from '@/contexts/locale-context';
 import { authService } from '@/services/auth.service';
@@ -16,9 +16,14 @@ import { notify } from '@/lib/notify';
  * `/pricing`/`/signup`, qui n'existent plus dans ce projet — la
  * souscription est un parcours Commercial, pas une action du Tenant App.
  *
- * BACKEND PENDING — `authService.login()` ne vérifie aucun identifiant
- * réel, il pose seulement le drapeau de session locale qui permet à
- * `AuthGuard` de laisser passer (cf. docs/FIX_LOGOUT_TENANT_APP.md).
+ * BACKEND PENDING (D2, cf. docs/P0_USERS_DECISIONS_A_VALIDER.md) —
+ * `authService.login()` ne vérifie aucun identifiant réel et le déclare
+ * honnêtement (`{ ok: false, error: 'BACKEND_PENDING' }`) ; ce formulaire
+ * l'affiche explicitement (bandeau ci-dessous) plutôt que de laisser croire
+ * qu'une connexion a été vérifiée. Il pose néanmoins le drapeau de session
+ * locale qui permet à `AuthGuard` de laisser passer, pour ne pas rendre les
+ * écrans déjà construits inaccessibles (cf. docs/FIX_LOGOUT_TENANT_APP.md)
+ * — une session de démonstration, jamais présentée comme réelle.
  */
 export function LoginPage() {
   const navigate = useNavigate();
@@ -90,6 +95,10 @@ export function LoginPage() {
               {isLoading ? (<><Loader2 size={18} className="animate-spin" />{t('auth', 'submitting')}</>) : (<>{t('auth', 'submit')}<ArrowRight size={18} /></>)}
             </button>
           </form>
+          <div role="status" className="mt-6 flex items-start gap-2 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+            <Info size={15} className="mt-0.5 shrink-0 text-slate-400" aria-hidden="true" />
+            <span>{t('auth', 'backendPendingNotice')}</span>
+          </div>
         </div>
       </div>
     </main>
