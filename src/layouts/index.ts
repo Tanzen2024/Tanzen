@@ -3,3 +3,4 @@ export { AuthShell } from './auth-shell';
 export { ShellHeader } from './shell-header';
 export { ShellSidebar } from './shell-sidebar';
 export { TenantSwitcher } from './tenant-switcher';
+export { FiscalYearSelector } from './fiscal-year-selector';

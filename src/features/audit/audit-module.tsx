@@ -18,7 +18,7 @@ import { formatDate, formatNumber } from '@/lib/utils';
 
 type T = (section: 'audit', key: string, values?: Record<string, string>) => string;
 
-const AUDIT_MODULE_KEY: Record<AuditModule, string> = { credit: 'moduleCredit', tontines: 'moduleTontines', governance: 'moduleGovernance', finance: 'moduleFinance', organization: 'moduleOrganization', access: 'moduleAccess', system: 'moduleSystem' };
+const AUDIT_MODULE_KEY: Record<AuditModule, string> = { credit: 'moduleCredit', tontines: 'moduleTontines', governance: 'moduleGovernance', finance: 'moduleFinance', organization: 'moduleOrganization', access: 'moduleAccess', system: 'moduleSystem', settings: 'moduleSettings' };
 const EVENT_TYPE_KEY: Record<AuditEventType, string> = { loginSuccess: 'eventLoginSuccess', loginFailure: 'eventLoginFailure', mfaEvent: 'eventMfaEvent', permissionDenied: 'eventPermissionDenied', sessionRevoked: 'eventSessionRevoked', sensitiveAction: 'eventSensitiveAction', action: 'eventAction' };
 const EVENT_TYPE_ICON: Record<AuditEventType, typeof LogIn> = { loginSuccess: LogIn, loginFailure: UserX, mfaEvent: Fingerprint, permissionDenied: ShieldAlert, sessionRevoked: LogOut, sensitiveAction: KeyRound, action: Activity };
 const EVENT_TYPE_TONE: Record<AuditEventType, StatusTone> = { loginSuccess: 'success', loginFailure: 'error', mfaEvent: 'info', permissionDenied: 'error', sessionRevoked: 'warning', sensitiveAction: 'warning', action: 'default' };

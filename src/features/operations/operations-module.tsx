@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Ban, BellRing, Check, CheckCircle2, ClipboardList, CreditCard, Download, Eye, FileText, Filter, Image, Inbox, Landmark, Megaphone, Paperclip, Plus, RotateCcw, Scale, Sparkles, Trash2, Upload, UserCog, Users2, Workflow, X, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, BellRing, Check, CheckCircle2, ClipboardList, CreditCard, Download, Eye, FileText, Filter, Image, Inbox, Landmark, Megaphone, Paperclip, Plus, RotateCcw, Scale, Settings as SettingsIcon, Sparkles, Trash2, Upload, UserCog, Users2, Workflow, X, XCircle } from 'lucide-react';
 import { Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, MoneyDisplay, DateDisplay, PermissionGate, DetailPanel, ConfirmDialog, TableSkeleton, DetailSkeleton, ErrorState } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { useTenant } from '@/contexts/tenant-context';
 import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { workflowService, type ApprovalAction } from '@/services/workflow.service';
+import { settingsService } from '@/services/settings.service';
 import { notificationService } from '@/services/notification.service';
 import { documentService, type DocumentInput } from '@/services/document.service';
 import { organizationService } from '@/services/organization.service';
@@ -34,9 +35,9 @@ type T = (section: 'operations' | 'nav', key: string, values?: Record<string, st
 
 const REQUEST_STATUS_TONE: Record<WorkflowStatus, StatusTone> = { pending: 'warning', inProgress: 'info', approved: 'success', rejected: 'error', returned: 'warning', cancelled: 'default' };
 const REQUEST_STATUS_KEY: Record<WorkflowStatus, string> = { pending: 'statusPending', inProgress: 'statusInProgress', approved: 'statusApproved', rejected: 'statusRejected', returned: 'statusReturned', cancelled: 'statusCancelled' };
-const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance' };
-const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark };
-const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', cycle: 'entityCycle', assembly: 'entityAssembly', distribution: 'entityDistribution' };
+const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings' };
+const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon };
+const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', cycle: 'entityCycle', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
@@ -128,7 +129,7 @@ function WorkflowsHub({ t }: { t: T }) {
       </TabsList>
       <TabsContent value="definitions"><DefinitionsTab t={t} definitions={definitions} /></TabsContent>
       <TabsContent value="requests" className="space-y-4">
-        <FilterBar search={search} onSearchChange={setSearch} placeholder={t('operations', 'requestId')} filters={<><select aria-label={t('operations', 'filterByDomain')} value={domain} onChange={(e) => setDomain(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'domain')}</option><option value="credit">{t('operations', 'domainCredit')}</option><option value="tontines">{t('operations', 'domainTontines')}</option><option value="governance">{t('operations', 'domainGovernance')}</option><option value="finance">{t('operations', 'domainFinance')}</option></select><select aria-label={t('operations', 'filterByStatus')} value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'status')}</option><option value="pending">{t('operations', 'statusPending')}</option><option value="inProgress">{t('operations', 'statusInProgress')}</option><option value="approved">{t('operations', 'statusApproved')}</option><option value="rejected">{t('operations', 'statusRejected')}</option><option value="returned">{t('operations', 'statusReturned')}</option></select></>} />
+        <FilterBar search={search} onSearchChange={setSearch} placeholder={t('operations', 'requestId')} filters={<><select aria-label={t('operations', 'filterByDomain')} value={domain} onChange={(e) => setDomain(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'domain')}</option><option value="credit">{t('operations', 'domainCredit')}</option><option value="tontines">{t('operations', 'domainTontines')}</option><option value="governance">{t('operations', 'domainGovernance')}</option><option value="finance">{t('operations', 'domainFinance')}</option><option value="settings">{t('operations', 'domainSettings')}</option></select><select aria-label={t('operations', 'filterByStatus')} value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'status')}</option><option value="pending">{t('operations', 'statusPending')}</option><option value="inProgress">{t('operations', 'statusInProgress')}</option><option value="approved">{t('operations', 'statusApproved')}</option><option value="rejected">{t('operations', 'statusRejected')}</option><option value="returned">{t('operations', 'statusReturned')}</option></select></>} />
         <RequestsTable t={t} rows={filteredRequests} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={ClipboardList} title={t('operations', 'noRequests')} />} />
       </TabsContent>
       <TabsContent value="myApprovals"><RequestsTable t={t} rows={myApprovals} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={CheckCircle2} title={t('operations', 'noApprovals')} />} /></TabsContent>
@@ -144,11 +145,44 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'return' | 'cancel' | null>(null);
   const [comment, setComment] = useState('');
 
+  const isFiscalYearReopen = Boolean(request && request.domain === 'settings' && request.entityType === 'fiscalYear');
+
   const mutation = useMutation({
-    mutationFn: (action: 'approve' | 'reject' | 'return' | 'cancel') => action === 'cancel' ? workflowService.cancelRequest(currentTenant.id, requestId, user.name, comment || undefined) : workflowService.submitAction(currentTenant.id, requestId, action, user.name, comment || undefined),
-    onSuccess: () => {
+    mutationFn: async (action: 'approve' | 'reject' | 'return' | 'cancel') => {
+      /**
+       * D-FY-08 (VALIDÉE, Option B) : pour approve/reject d'une demande de
+       * réouverture d'exercice fiscal, on ne passe JAMAIS par
+       * `workflowService.submitAction` directement — `decideFiscalYearReopen`
+       * applique le contrôle d'auto-approbation (`requestedByUserId !==
+       * actorId`) AVANT toute mutation, contrôle que le RBAC seul ne peut pas
+       * garantir puisque role-admin détient à la fois `fiscalYears.manage` et
+       * `fiscalYears.approve`. `null` en retour signifie « bloqué ».
+       */
+      if (isFiscalYearReopen && (action === 'approve' || action === 'reject')) {
+        return settingsService.decideFiscalYearReopen(currentTenant.id, requestId, action, user.id, user.name, comment || undefined);
+      }
+      const result = action === 'cancel' ? await workflowService.cancelRequest(currentTenant.id, requestId, user.name, comment || undefined) : await workflowService.submitAction(currentTenant.id, requestId, action, user.name, comment || undefined, user.id);
+      /**
+       * §24-BIS : le moteur workflow reste agnostique du domaine — c'est ici,
+       * au seul point d'appel générique d'action (return/cancel, quel que soit
+       * le domaine — approve/reject de Fiscal Year passent par la branche
+       * ci-dessus), qu'un effet de bord propre à Fiscal Year est déclenché.
+       * `applyFiscalYearReopenDecision` est un no-op pour tout autre domaine
+       * (`credit`/`tontines`/`governance`/`finance`) et pour toute action qui
+       * ne fait pas passer le statut à `approved`.
+       */
+      if (result) await settingsService.applyFiscalYearReopenDecision(currentTenant.id, result);
+      return result;
+    },
+    onSuccess: (result, action) => {
+      if (!result && isFiscalYearReopen && (action === 'approve' || action === 'reject')) {
+        notify.error(t('operations', 'cannotActOwnRequest'));
+        setPendingAction(null); setComment('');
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: queryKeys.operations.workflowRequest(requestId) });
       queryClient.invalidateQueries({ queryKey: ['operations'] });
+      if (result?.domain === 'settings' && result.entityType === 'fiscalYear') queryClient.invalidateQueries({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id) });
       setPendingAction(null); setComment('');
     },
   });
@@ -178,21 +212,34 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           <Info label={t('operations', 'requestedBy')} value={request.requestedBy} icon={Users2} />
           <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt, locale)} icon={ClipboardList} />
           {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatFCFA(request.amount, locale)} icon={Landmark} />}
+          {request.justification && <Info label={t('operations', 'justification')} value={request.justification} icon={FileText} />}
           <StatusBadge label={t('operations', REQUEST_STATUS_KEY[request.status])} tone={REQUEST_STATUS_TONE[request.status]} />
         </CardContent></Card>
-        {canAct && currentStep && (
+        {canAct && currentStep && (() => {
+          /**
+           * D-FY-08 (VALIDÉE, Option B) — indication UI, PAS le contrôle réel :
+           * même détenteur de `fiscalYears.approve`, le demandeur ne doit pas
+           * être présenté comme pouvant approuver/rejeter sa propre demande de
+           * réouverture. Le vrai blocage a déjà lieu côté service
+           * (`settingsService.decideFiscalYearReopen`) — masquer les boutons
+           * ici n'est qu'un confort, jamais la seule protection.
+           */
+          const isSelfRequest = isFiscalYearReopen && Boolean(request.requestedByUserId) && request.requestedByUserId === user.id;
+          return (
           <Card><CardHeader><CardTitle className="text-sm">{currentStep.name}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
             <p className="text-xs text-muted-foreground">{t('operations', 'requiredPermission')}: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{currentStep.approverPermission}</code></p>
             <PermissionGate permission={currentStep.approverPermission} entityType={request.entityType} fallback={<p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'noPermission')}</p>}>
+              {isSelfRequest && <p data-testid="self-approval-notice" className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'cannotActOwnRequest')}</p>}
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => setPendingAction('approve')}><Check size={15} />{t('operations', 'approve')}</Button>
+                {!isSelfRequest && <Button onClick={() => setPendingAction('approve')}><Check size={15} />{t('operations', 'approve')}</Button>}
                 <Button variant="outline" onClick={() => setPendingAction('return')}><RotateCcw size={15} />{t('operations', 'returnAction')}</Button>
-                <Button variant="destructive" onClick={() => setPendingAction('reject')}><XCircle size={15} />{t('operations', 'reject')}</Button>
+                {!isSelfRequest && <Button variant="destructive" onClick={() => setPendingAction('reject')}><XCircle size={15} />{t('operations', 'reject')}</Button>}
                 <Button variant="outline" onClick={() => setPendingAction('cancel')}><Ban size={15} />{t('operations', 'cancelRequest')}</Button>
               </div>
             </PermissionGate>
           </CardContent></Card>
-        )}
+          );
+        })()}
       </div>
     </div>
     {pendingAction && <ConfirmDialog open title={confirmLabels[pendingAction].title} description={t('operations', 'commentPlaceholder')} confirmLabel={confirmLabels[pendingAction].confirm} cancelLabel={t('operations', 'cancel')} onConfirm={() => mutation.mutate(pendingAction)} onCancel={() => { setPendingAction(null); setComment(''); }}>

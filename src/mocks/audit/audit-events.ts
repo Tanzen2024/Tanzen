@@ -9,7 +9,8 @@ import type { WorkflowDomain } from '@/mocks/operations/workflow-definitions';
  * les recopie pas en dur ici. Aucun autre module ne doit créer son propre
  * tableau d'événements d'audit.
  */
-export type AuditModule = WorkflowDomain | 'organization' | 'access' | 'system';
+/** `'settings'` ajouté par IMPLEMENTATION GO — Fiscal Year (D-FY-06) : seul module transverse (hors Workflow Core) qui écrit désormais réellement dans ce tableau à l'exécution plutôt que de n'y figurer qu'en données de seed. */
+export type AuditModule = WorkflowDomain | 'organization' | 'access' | 'system' | 'settings';
 export type AuditEventType = 'loginSuccess' | 'loginFailure' | 'mfaEvent' | 'permissionDenied' | 'sessionRevoked' | 'sensitiveAction' | 'action';
 export type AuditStatus = 'success' | 'failure';
 

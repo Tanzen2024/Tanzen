@@ -85,3 +85,36 @@ describe('roleService', () => {
     expect(gone).toBeNull();
   });
 });
+
+describe('roleService — RBAC catalog: fiscalYears.approve (D-FY-07, VALIDÉE Option B — distinct de fiscalYears.manage)', () => {
+  it('fiscalYears.approve exists in the permission catalog, distinct from fiscalYears.manage', async () => {
+    const permissions = await roleService.listPermissions();
+    expect(permissions).toContain('fiscalYears.approve');
+    expect(permissions).toContain('fiscalYears.manage');
+  });
+
+  it('role-manager does NOT hold fiscalYears.approve (generic .approve-suffix filter, unchanged by the catalog addition)', async () => {
+    const role = await roleService.getRole('T-001', 'role-manager');
+    expect(role?.permissions).not.toContain('fiscalYears.approve');
+    expect(role?.permissions).toContain('fiscalYears.manage'); // .manage is untouched, still granted
+  });
+
+  it('role-viewer does NOT hold fiscalYears.approve (only .read-suffixed permissions)', async () => {
+    const role = await roleService.getRole('T-001', 'role-viewer');
+    expect(role?.permissions).not.toContain('fiscalYears.approve');
+  });
+
+  it('role-admin holds BOTH fiscalYears.manage and fiscalYears.approve — RBAC alone cannot separate requester from approver for this role (§7 mandat, backstop enforced at settingsService.decideFiscalYearReopen level, cf. settings.service.test.ts)', async () => {
+    const role = await roleService.getRole('T-001', 'role-admin');
+    expect(role?.permissions).toContain('fiscalYears.manage');
+    expect(role?.permissions).toContain('fiscalYears.approve');
+  });
+
+  it('other pre-existing .approve permissions are still correctly excluded from role-manager (regression: catalog addition did not break the generic filter)', async () => {
+    const role = await roleService.getRole('T-001', 'role-manager');
+    expect(role?.permissions).not.toContain('governance.approve');
+    expect(role?.permissions).not.toContain('loans.approve');
+    expect(role?.permissions).not.toContain('applications.approve');
+    expect(role?.permissions).not.toContain('distributions.approve');
+  });
+});

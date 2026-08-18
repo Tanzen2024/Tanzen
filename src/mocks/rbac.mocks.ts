@@ -74,7 +74,7 @@ export const permissionCatalog: Permission[] = [
   'sessions.read', 'sessions.revoke',
   'mfa.read', 'mfa.manage',
   'audit.read', 'audit.readSensitive',
-  'settings.read', 'localization.manage', 'fiscalYears.read', 'fiscalYears.manage',
+  'settings.read', 'localization.manage', 'fiscalYears.read', 'fiscalYears.manage', 'fiscalYears.approve',
   'branding.manage', 'notificationSettings.read', 'notificationSettings.manage',
   'securityPolicies.manage', 'modules.manage', 'integrations.manage',
 ];

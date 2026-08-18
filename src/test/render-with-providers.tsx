@@ -6,13 +6,15 @@ import { LocaleProvider } from '@/contexts/locale-context';
 import { ThemeProvider } from '@/contexts/theme-context';
 import { TenantProvider } from '@/contexts/tenant-context';
 import { PermissionProvider } from '@/contexts/permission-context';
+import { FiscalYearProvider } from '@/contexts/fiscal-year-context';
 
 /**
  * Reproduit l'ordre exact de `src/app/providers.tsx`
  * (QueryClientProvider > LocaleProvider > ThemeProvider > TenantProvider >
- * PermissionProvider), avec un `QueryClient` neuf par appel pour éviter
- * toute fuite d'état entre tests, et un `MemoryRouter` pour les composants
- * qui dépendent de `react-router-dom` (TenantSwitcher, PlatformScopeGuard).
+ * PermissionProvider > FiscalYearProvider), avec un `QueryClient` neuf par
+ * appel pour éviter toute fuite d'état entre tests, et un `MemoryRouter`
+ * pour les composants qui dépendent de `react-router-dom` (TenantSwitcher,
+ * FiscalYearSelector, PlatformScopeGuard).
  */
 export function renderWithProviders(ui: ReactElement, { route = '/' }: { route?: string } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -23,7 +25,9 @@ export function renderWithProviders(ui: ReactElement, { route = '/' }: { route?:
           <LocaleProvider>
             <ThemeProvider>
               <TenantProvider>
-                <PermissionProvider>{children}</PermissionProvider>
+                <PermissionProvider>
+                  <FiscalYearProvider>{children}</FiscalYearProvider>
+                </PermissionProvider>
               </TenantProvider>
             </ThemeProvider>
           </LocaleProvider>

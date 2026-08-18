@@ -99,6 +99,7 @@ export const queryKeys = {
     localization: (tenantId: string) => ['settings', 'localization', tenantId] as const,
     fiscalYears: (tenantId: string) => ['settings', 'fiscal-years', tenantId] as const,
     currentFiscalYear: (tenantId: string) => ['settings', 'fiscal-years', 'current', tenantId] as const,
+    reopenRequests: (tenantId: string) => ['settings', 'fiscal-years', 'reopen-requests', tenantId] as const,
     notificationChannels: (tenantId: string) => ['settings', 'notification-channels', tenantId] as const,
     notificationRules: (tenantId: string) => ['settings', 'notification-rules', tenantId] as const,
     notificationPreferences: (userId: string) => ['settings', 'notification-preferences', userId] as const,

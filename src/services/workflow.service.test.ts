@@ -78,3 +78,17 @@ describe('workflowService — INTEGRATION: submitAction advances currentStepOrde
     expect(request?.status).toBe('cancelled');
   });
 });
+
+describe('workflowService — submitAction actorId (D-FY-08 mandat §10: corrige actedBy, jamais renseigné jusqu\'ici — générique, pas limité à Fiscal Year)', () => {
+  it('ALLOW: submitAction sets step.actedBy when actorId is passed', async () => {
+    const request = await workflowService.submitAction('T-001', 'WR-005', 'approve', 'Amadou Mbaye', 'OK', 'U-001');
+    expect(request?.steps.find((step) => step.order === 1)?.actedBy).toBe('U-001');
+    expect(request?.currentStepOrder).toBe(2);
+  });
+
+  it('REGRESSION: submitAction without actorId leaves step.actedBy undefined — unchanged behavior for callers that do not pass it (Credit/Tontines/Governance/Finance untouched)', async () => {
+    const request = await workflowService.submitAction('T-001', 'WR-005', 'approve', 'Amadou Mbaye', 'Étape finale');
+    expect(request?.steps.find((step) => step.order === 2)?.actedBy).toBeUndefined();
+    expect(request?.status).toBe('approved');
+  });
+});

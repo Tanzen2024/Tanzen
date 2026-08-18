@@ -19,11 +19,33 @@ export type WorkflowRequest = {
   tenantId: string;
   workflowDefinitionId: string;
   domain: WorkflowDomain;
-  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution';
+  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear';
   entityId: string;
   entityLabel: string;
   amount?: number;
+  /**
+   * Champ générique optionnel — justification libre fournie par le
+   * demandeur, visible par l'approbateur dans l'écran de détail existant
+   * (`WorkflowDetail`). Ajouté pour la réouverture de Fiscal Year (§24-BIS,
+   * justification obligatoire), mais volontairement générique (pas
+   * `reopenReason`) : réutilisable par tout futur domaine ayant besoin du
+   * même contexte, sans dupliquer le mécanisme.
+   */
+  justification?: string;
+  /** Nom libre du demandeur — conservé pour compatibilité (affichage, seed data existante Credit/Tontines/Governance/Finance, jamais un identifiant fiable). */
   requestedBy: string;
+  /**
+   * D-FY-08 (VALIDÉE, Option B, cf.
+   * docs/P1_GLOBAL_FISCAL_YEAR_REOPEN_APPROVAL_DECISION_GATE_CLOSURE.md) :
+   * identifiant fiable du demandeur (`CurrentUser.id`), optionnel pour
+   * préserver la compatibilité avec les `WorkflowRequest` déjà en seed
+   * (Credit/Tontines/Governance/Finance), qui n'en portent pas et n'ont pas
+   * besoin d'un contrôle d'auto-approbation. Renseigné uniquement par
+   * `settingsService.requestFiscalYearReopen` à ce stade — c'est ce champ,
+   * comparé à l'acteur courant, qui bloque l'auto-approbation d'une demande
+   * de réouverture d'exercice fiscal (voir `settingsService.decideFiscalYearReopen`).
+   */
+  requestedByUserId?: string;
   requestedAt: string;
   status: WorkflowStatus;
   currentStepOrder: number;

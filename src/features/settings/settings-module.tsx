@@ -2,12 +2,14 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import { Bell, Building2, Cloud, Database, Globe2, KeyRound, Landmark, Lock, Mail, MapPin, Palette, Plug, RefreshCw, ShieldCheck, Sparkles, Webhook } from 'lucide-react';
+import { Bell, Building2, Cloud, Database, Eye, Globe2, KeyRound, Landmark, Lock, Mail, MapPin, Palette, Plug, Plus, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Webhook } from 'lucide-react';
 import { Route, Routes, useNavigate } from 'react-router-dom';
-import { PageHeader, DataTable, StatusBadge, EmptyState, FormSection, PermissionGate, ConfirmDialog } from '@/components';
+import { PageHeader, DataTable, StatusBadge, EmptyState, FormSection, PermissionGate, ConfirmDialog, FieldError } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -17,10 +19,11 @@ import { useTheme } from '@/contexts/theme-context';
 import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { organizationService } from '@/services/organization.service';
-import { settingsService } from '@/services/settings.service';
+import { settingsService, type CreateFiscalYearInput } from '@/services/settings.service';
 import { queryKeys } from '@/services/query-keys';
 import { supportedLocales } from '@/i18n';
 import type { FiscalYear, FiscalYearStatus } from '@/mocks/settings/fiscal-years';
+import { fiscalYearTransferCategories, type TransferabilityDecision } from '@/mocks/settings/fiscal-year-transfer-categories';
 import type { DateFormat, NumberFormatStyle } from '@/mocks/settings/localization-settings';
 import type { NotificationChannel, NotificationChannelType, NotificationRule, NotificationRuleTrigger } from '@/mocks/settings/notification-settings';
 import type { ModuleConfig, ModuleKey } from '@/mocks/settings/modules';
@@ -30,10 +33,13 @@ import type { Integration, IntegrationCategory, IntegrationStatus } from '@/mock
 import type { TableColumn, StatusTone } from '@/types/ui';
 import { formatDate } from '@/lib/utils';
 
-type T = (section: 'settings' | 'nav', key: string, values?: Record<string, string>) => string;
+type T = (section: 'settings' | 'nav' | 'system', key: string, values?: Record<string, string>) => string;
 
 const FY_STATUS_TONE: Record<FiscalYearStatus, StatusTone> = { open: 'success', closed: 'default', upcoming: 'info' };
 const FY_STATUS_KEY: Record<FiscalYearStatus, string> = { open: 'statusOpen', closed: 'statusClosed', upcoming: 'statusUpcoming' };
+/** Axe de transférabilité affiché à l'utilisateur (mandat "REOPEN APPROVAL + TRANSFER SELECTION CORRECTION") — distinct de l'axe D-FY-02 (`TransferClassification`), volontairement non affiché ici pour ne plus mélanger les deux questions. */
+const TRANSFERABILITY_TONE: Record<TransferabilityDecision, StatusTone> = { TRANSFERABLE: 'success', NOT_TRANSFERABLE: 'default', PARTIAL: 'info', UNDETERMINED: 'warning' };
+const TRANSFERABILITY_KEY: Record<TransferabilityDecision, string> = { TRANSFERABLE: 'transferabilityTransferable', NOT_TRANSFERABLE: 'transferabilityNotTransferable', PARTIAL: 'transferabilityPartial', UNDETERMINED: 'transferabilityUndetermined' };
 const CHANNEL_KEY: Record<NotificationChannelType, string> = { email: 'channelEmail', sms: 'channelSms', push: 'channelPush', inApp: 'channelInApp' };
 const TRIGGER_KEY: Record<NotificationRuleTrigger, string> = { loanOverdue: 'triggerLoanOverdue', applicationSubmitted: 'triggerApplicationSubmitted', cycleEndingSoon: 'triggerCycleEndingSoon', workflowPending: 'triggerWorkflowPending', sessionRevoked: 'triggerSessionRevoked', memberJoined: 'triggerMemberJoined' };
 const MODULE_LABEL_KEY: Record<ModuleKey, string> = { dashboard: 'moduleDashboard', organization: 'moduleOrganization', finance: 'moduleFinance', credit: 'moduleCredit', tontines: 'moduleTontines', operations: 'moduleOperations', accessSecurity: 'moduleAccessSecurity', audit: 'moduleAudit', settings: 'moduleSettings' };
@@ -117,13 +123,33 @@ function SettingsLocalization({ t }: { t: T }) {
 
 // ----------------------------------------------------------------------- Fiscal years
 
+const EMPTY_CREATE_FORM = { label: '', startDate: '', endDate: '' };
+
 function SettingsFiscalYears({ t }: { t: T }) {
   const { currentTenant } = useTenant();
+  const { can } = usePermissions();
+  const navigate = useNavigate();
   const { data: years = [] } = useQuery({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id), queryFn: () => settingsService.listFiscalYears(currentTenant.id) });
+  const { data: reopenRequests = [] } = useQuery({ queryKey: queryKeys.settings.reopenRequests(currentTenant.id), queryFn: () => settingsService.listReopenRequests(currentTenant.id) });
   const current = years.find((year) => year.isCurrent);
+  const pendingReopenByYearId = new Map(reopenRequests.filter((request) => request.status === 'pending' || request.status === 'inProgress').map((request) => [request.entityId, request]));
   const [closeTarget, setCloseTarget] = useState(false);
   const [openTarget, setOpenTarget] = useState<FiscalYear | null>(null);
-  useEffect(() => { setCloseTarget(false); setOpenTarget(null); }, [currentTenant.id]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createStep, setCreateStep] = useState<1 | 2>(1);
+  const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
+  const [createError, setCreateError] = useState<string | undefined>();
+  const [transferSelections, setTransferSelections] = useState<Set<string>>(new Set());
+  const [reopenTarget, setReopenTarget] = useState<FiscalYear | null>(null);
+  const [reopenJustification, setReopenJustification] = useState('');
+  const [reopenError, setReopenError] = useState<string | undefined>();
+  const resetCreateWizard = () => { setCreateOpen(false); setCreateStep(1); setCreateForm(EMPTY_CREATE_FORM); setCreateError(undefined); setTransferSelections(new Set()); };
+  const toggleTransferCategory = (categoryId: string) => setTransferSelections((current) => {
+    const next = new Set(current);
+    if (next.has(categoryId)) next.delete(categoryId); else next.add(categoryId);
+    return next;
+  });
+  useEffect(() => { setCloseTarget(false); setOpenTarget(null); resetCreateWizard(); setReopenTarget(null); setReopenError(undefined); }, [currentTenant.id]);
   const closeMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.closeCurrentFiscalYear>>, void>({
     mutationFn: () => settingsService.closeCurrentFiscalYear(currentTenant.id),
     invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
@@ -134,18 +160,114 @@ function SettingsFiscalYears({ t }: { t: T }) {
     invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
     onSuccess: () => { notify.success(t('settings', 'fiscalYearOpened')); setOpenTarget(null); },
   });
+  const createMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.createFiscalYear>>, CreateFiscalYearInput>({
+    mutationFn: (input) => settingsService.createFiscalYear(currentTenant.id, input),
+    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id)],
+    onSuccess: (year) => {
+      if (!year) { setCreateError(t('settings', 'fiscalYearInvalid')); setCreateStep(1); return; }
+      notify.success(t('settings', 'fiscalYearCreated', { label: year.label }));
+      resetCreateWizard();
+    },
+  });
+  /** §24-BIS : soumet une DEMANDE de réouverture (WorkflowRequest, WD-005) — ne rouvre plus directement l'exercice. Le passage effectif CLOSED→OPEN n'intervient qu'après approbation, dans Operations > Workflows (settingsService.applyFiscalYearReopenDecision). */
+  const reopenRequestMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.requestFiscalYearReopen>>, { fiscalYearId: string; justification: string }>({
+    mutationFn: ({ fiscalYearId, justification }) => settingsService.requestFiscalYearReopen(currentTenant.id, fiscalYearId, justification),
+    invalidateKeys: [queryKeys.settings.reopenRequests(currentTenant.id)],
+    onSuccess: (request) => {
+      if (!request) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
+      notify.success(t('settings', 'reopenRequestSubmitted'));
+      setReopenTarget(null);
+      setReopenJustification('');
+      setReopenError(undefined);
+    },
+  });
+  /** Étape 1 → 2 : ne crée rien encore, valide seulement les champs (mandat §15 « Continuer »). */
+  const handleContinueToTransferStep = () => {
+    if (!createForm.label.trim() || !createForm.startDate || !createForm.endDate) { setCreateError(t('settings', 'fieldRequired')); return; }
+    if (new Date(createForm.endDate) <= new Date(createForm.startDate)) { setCreateError(t('settings', 'fiscalYearInvalidPeriod')); return; }
+    setCreateError(undefined);
+    setCreateStep(2);
+  };
+  /** Étape 2 : création réelle (§12 « Créer l'exercice ») — seules les catégories cochées sont transmises ; aucune ne déclenche de copie de données (les catégories transférables sont déjà permanentes, cf. fiscalYearTransferCategories). */
+  const handleCreate = () => createMutation.mutate({ ...createForm, transferSelections: Array.from(transferSelections) });
+  const handleReopenRequest = () => {
+    if (!reopenTarget) return;
+    if (!reopenJustification.trim()) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
+    setReopenError(undefined);
+    reopenRequestMutation.mutate({ fiscalYearId: reopenTarget.id, justification: reopenJustification });
+  };
   const columns: TableColumn<FiscalYear>[] = [
     { key: 'label', header: t('settings', 'fiscalYear'), render: (row) => <span className="font-semibold">{row.label}</span> },
     { key: 'startDate', header: t('settings', 'startDate'), render: (row) => formatDate(row.startDate) },
     { key: 'endDate', header: t('settings', 'endDate'), render: (row) => formatDate(row.endDate) },
-    { key: 'status', header: t('settings', 'status'), render: (row) => <StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} /> },
-    { key: 'actions', header: '', className: 'w-40', render: (row) => row.status === 'upcoming' ? <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => setOpenTarget(row)}>{t('settings', 'openFiscalYear')}</Button></PermissionGate> : null },
+    { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1"><StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} />{pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}</div> },
+    { key: 'actions', header: '', className: 'w-52', render: (row) => {
+      const pendingRequest = pendingReopenByYearId.get(row.id);
+      return <>
+        {row.status === 'upcoming' && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => setOpenTarget(row)}>{t('settings', 'openFiscalYear')}</Button></PermissionGate>}
+        {row.status === 'closed' && pendingRequest && <Button variant="outline" size="sm" onClick={() => navigate(`/operations/workflows/${pendingRequest.id}`)}><Eye size={14} />{t('settings', 'viewReopenRequest')}</Button>}
+        {row.status === 'closed' && !pendingRequest && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => { setReopenTarget(row); setReopenJustification(''); setReopenError(undefined); }}><RotateCcw size={14} />{t('settings', 'requestReopenFiscalYear')}</Button></PermissionGate>}
+      </>;
+    } },
   ];
-  return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')} actions={current && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" onClick={() => setCloseTarget(true)}>{t('settings', 'closeFiscalYear')}</Button></PermissionGate>}>
+  if (!can('fiscalYears.read')) {
+    return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')}><EmptyState icon={Lock} title={t('system', 'unauthorizedTitle')} description={t('system', 'unauthorizedDescription')} /></Page>;
+  }
+  return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')} actions={<div className="flex gap-2">{current && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" onClick={() => setCloseTarget(true)}>{t('settings', 'closeFiscalYear')}</Button></PermissionGate>}<PermissionGate permission="fiscalYears.manage"><Button onClick={() => setCreateOpen(true)}><Plus size={16} />{t('settings', 'createFiscalYear')}</Button></PermissionGate></div>}>
     {current && <Card className="border-primary/30 bg-primary/5"><CardContent className="flex items-center gap-4 p-5"><span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><Landmark size={20} /></span><div><p className="text-xs text-muted-foreground">{t('settings', 'currentFiscalYear')}</p><p className="text-lg font-semibold">{current.label}</p><p className="text-xs text-muted-foreground">{formatDate(current.startDate)} → {formatDate(current.endDate)}</p></div></CardContent></Card>}
     <Card><CardHeader><CardTitle className="text-sm">{t('settings', 'history')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={years} empty={<EmptyState icon={Landmark} title={t('settings', 'noFiscalYears')} />} /></CardContent></Card>
     {closeTarget && <ConfirmDialog open title={t('settings', 'closeFiscalYear')} description={t('settings', 'closeFiscalYearConfirm')} confirmLabel={t('settings', 'closeFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => closeMutation.mutate()} onCancel={() => setCloseTarget(false)} />}
     {openTarget && <ConfirmDialog open title={t('settings', 'openFiscalYear')} description={t('settings', 'openFiscalYearConfirm')} confirmLabel={t('settings', 'openFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => openMutation.mutate(openTarget.id)} onCancel={() => setOpenTarget(null)} />}
+    {createOpen && createStep === 1 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep1Title')} description={t('settings', 'createFiscalYearDescription')} confirmLabel={t('settings', 'continueAction')} cancelLabel={t('settings', 'cancel')} onConfirm={handleContinueToTransferStep} onCancel={resetCreateWizard}>
+      <div className="mt-4 space-y-3 text-left">
+        {current && <p className="text-xs text-muted-foreground">{t('settings', 'previousFiscalYear', { label: current.label })}</p>}
+        <div className="space-y-1"><Label htmlFor="fy-create-label">{t('settings', 'fiscalYear')}</Label><Input id="fy-create-label" value={createForm.label} onChange={(event) => setCreateForm((value) => ({ ...value, label: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1"><Label htmlFor="fy-create-start">{t('settings', 'startDate')}</Label><Input id="fy-create-start" type="date" value={createForm.startDate} onChange={(event) => setCreateForm((value) => ({ ...value, startDate: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
+          <div className="space-y-1"><Label htmlFor="fy-create-end">{t('settings', 'endDate')}</Label><Input id="fy-create-end" type="date" value={createForm.endDate} onChange={(event) => setCreateForm((value) => ({ ...value, endDate: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
+        </div>
+        <FieldError message={createError} />
+      </div>
+    </ConfirmDialog>}
+    {createOpen && createStep === 2 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep2Title')} description={t('settings', 'transferStepDescription', { source: current?.label ?? '—', target: createForm.label })} confirmLabel={t('settings', 'createFiscalYearAction')} cancelLabel={t('settings', 'back')} onConfirm={handleCreate} onCancel={() => setCreateStep(1)}>
+      {/* Un seul conteneur défilant pour la liste ET le résumé — évite que le résumé (dont la hauteur varie avec la sélection) ne pousse les boutons hors de l'écran (bug constaté et corrigé). */}
+      <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto pr-1 text-left">
+        {fiscalYearTransferCategories.map((category) => {
+          const checked = transferSelections.has(category.id);
+          return (
+            <div key={category.id} className={`flex items-start gap-3 rounded-lg border p-3 ${category.transferable ? 'border-border' : 'border-dashed border-border/70 bg-muted/30'}`}>
+              {category.transferable
+                ? <Checkbox id={`transfer-${category.id}`} checked={checked} onCheckedChange={() => toggleTransferCategory(category.id)} className="mt-0.5" />
+                : <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><Lock size={12} /></span>}
+              <label htmlFor={category.transferable ? `transfer-${category.id}` : undefined} className={`min-w-0 flex-1 ${category.transferable ? 'cursor-pointer' : ''}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-medium">{t('settings', category.labelKey)}</p>
+                  <StatusBadge label={t('settings', TRANSFERABILITY_KEY[category.transferability])} tone={TRANSFERABILITY_TONE[category.transferability]} />
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">{t('settings', category.transferabilityReasonKey)}</p>
+              </label>
+            </div>
+          );
+        })}
+        <div data-testid="transfer-summary" className="space-y-1.5 rounded-lg border border-dashed border-border p-3 text-xs leading-5">
+          <p className="font-semibold text-foreground">{t('settings', 'transferSummarySelected')}</p>
+          {fiscalYearTransferCategories.filter((category) => category.transferable && transferSelections.has(category.id)).length === 0
+            ? <p className="text-muted-foreground">{t('settings', 'transferSummaryNone')}</p>
+            : fiscalYearTransferCategories.filter((category) => category.transferable && transferSelections.has(category.id)).map((category) => <p key={category.id} className="text-emerald-600">✓ {t('settings', category.labelKey)}</p>)}
+          <p className="mt-2 font-semibold text-foreground">{t('settings', 'transferSummaryNotSelected')}</p>
+          {fiscalYearTransferCategories.filter((category) => !category.transferable || !transferSelections.has(category.id)).map((category) => <p key={category.id} className="text-muted-foreground">— {t('settings', category.labelKey)}</p>)}
+        </div>
+      </div>
+      <FieldError message={createError} />
+    </ConfirmDialog>}
+    {reopenTarget && <ConfirmDialog open title={t('settings', 'requestReopenFiscalYear')} description={t('settings', 'requestReopenFiscalYearDescription', { label: reopenTarget.label })} confirmLabel={t('settings', 'submitReopenRequest')} cancelLabel={t('settings', 'cancel')} onConfirm={handleReopenRequest} onCancel={() => { setReopenTarget(null); setReopenJustification(''); setReopenError(undefined); }}>
+      <div className="mt-4 space-y-1 text-left">
+        <Label htmlFor="fy-reopen-justification">{t('settings', 'reopenJustificationLabel')}</Label>
+        <Textarea id="fy-reopen-justification" value={reopenJustification} onChange={(event) => setReopenJustification(event.target.value)} aria-invalid={Boolean(reopenError)} />
+        <FieldError message={reopenError} />
+        <p className="text-xs text-muted-foreground">{t('settings', 'reopenApprovalNotice')}</p>
+      </div>
+    </ConfirmDialog>}
   </Page>;
 }
 
