@@ -124,8 +124,10 @@ function buildOverview(tenantId: string): DashboardOverview {
   if (applicationsInReview[0]) importantNotifications.push({ id: `notif-app-${applicationsInReview[0].id}`, priority: 'high', titleKey: 'loanReview', detail: `${applicationsInReview[0].applicant} · ${applicationsInReview[0].requestedAmount.toLocaleString('fr-FR')} FCFA`, date: applicationsInReview[0].submittedDate });
   const overdueLoans = tenantLoans.filter((loan) => lateLoanIds.has(loan.id));
   if (overdueLoans[0]) importantNotifications.push({ id: `notif-loan-${overdueLoans[0].id}`, priority: 'high', titleKey: 'overdueRepayment', detail: `${overdueLoans[0].borrower} · ${overdueLoans[0].outstanding.toLocaleString('fr-FR')} FCFA`, date: overdueLoans[0].nextPaymentDate });
-  const pendingMembers = tenantMembers.filter((member) => member.status === 'pending');
-  if (pendingMembers[0]) importantNotifications.push({ id: `notif-member-${pendingMembers[0].id}`, priority: 'medium', titleKey: 'pendingMember', detail: `${pendingMembers[0].firstName} ${pendingMembers[0].lastName} · ${pendingMembers[0].tenantName}`, date: pendingMembers[0].joinedAt });
+  // D-MEM-04 (définitive, docs/P1_MEMBERS_USERS_D_MEM_04_STATUS_ADDENDUM.md) : le statut
+  // 'pending' (demande d'adhésion en attente) est retiré du vocabulaire Member — cette
+  // notification/approbation ne peut plus jamais se déclencher (aucun membre ne peut plus
+  // être 'pending'), retirée plutôt que conservée comme code mort silencieusement inatteignable.
   const now = Date.now();
   const soonClosingCycles = tenantCycles.filter((cycle) => cycle.status === 'statusOpen' && new Date(cycle.endDate).getTime() - now < 45 * 86_400_000);
   if (soonClosingCycles[0]) {
@@ -135,7 +137,7 @@ function buildOverview(tenantId: string): DashboardOverview {
 
   const pendingApprovals: DashboardOverview['pendingApprovals'] = [];
   applicationsInReview.slice(0, 2).forEach((application) => pendingApprovals.push({ id: `approval-app-${application.id}`, typeKey: 'approvalLoan', requester: application.applicant, amount: application.requestedAmount, date: application.submittedDate }));
-  pendingMembers.slice(0, 1).forEach((member) => pendingApprovals.push({ id: `approval-member-${member.id}`, typeKey: 'approvalMembership', requester: `${member.firstName} ${member.lastName}`, amount: 0, date: member.joinedAt }));
+  // 'approvalMembership' (membre en attente d'adhésion) retiré — D-MEM-04, voir ci-dessus.
 
   return { kpis, loansDistribution, recentActivity, recentTransactions, upcomingPayments, loanDueDates, upcomingDraws, importantNotifications, pendingApprovals };
 }

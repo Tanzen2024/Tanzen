@@ -1,5 +1,7 @@
 ﻿import { describe, it, expect } from 'vitest';
 import { organizationService } from './organization.service';
+import { userService } from './user.service';
+import { currentUser } from '@/mocks/rbac.mocks';
 
 describe('organizationService — Tenants (special case: scope-gated repository)', () => {
   it('ALLOW: tenant scope sees only its own tenant in listTenants', async () => {
@@ -48,6 +50,186 @@ describe('organizationService — Members (business data: never scope-bypassed)'
     expect(result).toBeNull();
     const after = await organizationService.getMember('T-002', 'M-002');
     expect(after?.status).toBe(before?.status);
+  });
+});
+
+describe('organizationService — createMember (P1 MEMBERS: alignement du modèle canonique)', () => {
+  it('ALLOW: creates a member with a generated uuid, tenant-derived identity, and technical defaults', async () => {
+    const member = await organizationService.createMember({ firstName: 'Nouveau', lastName: 'Membre', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    expect(member).not.toBeNull();
+    expect(member?.uuid).toBeTruthy();
+    expect(member?.uuid).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(member?.tenantId).toBe('T-001');
+    expect(member?.syncStatus).toBe('synced');
+    expect(member?.version).toBe(1);
+    expect(member?.createdBy).toBe(currentUser.id);
+    expect(member?.updatedBy).toBe(currentUser.id);
+    expect(member?.deletedAt).toBeNull();
+  });
+
+  it('ALLOW: two members can be created with the same uuid-independent identity as long as no unique constraint collides', async () => {
+    const first = await organizationService.createMember({ firstName: 'Distinct1', lastName: 'Testeur', matricule: '', gender: 'female', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    const second = await organizationService.createMember({ firstName: 'Distinct2', lastName: 'Testeur', matricule: '', gender: 'female', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    expect(first?.uuid).not.toBe(second?.uuid);
+  });
+
+  it('ALLOW: joinedAt defaults to today when omitted, but accepts an explicit historical date', async () => {
+    const member = await organizationService.createMember({ firstName: 'Historique', lastName: 'Adhesion', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga', joinedAt: '2019-05-01' });
+    expect(member?.joinedAt).toBe('2019-05-01');
+  });
+
+  it('ALLOW: matricule uniqueness is scoped to the tenant (D-MEM-03, Option B — UNIQUE(tenant_id, matricule)) — same matricule allowed across different tenants', async () => {
+    const t001 = await organizationService.createMember({ firstName: 'Mat1', lastName: 'Un', matricule: 'MAT-UNIQUE-01', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    expect(t001).not.toBeNull();
+    const otherTenantAllowed = await organizationService.createMember({ firstName: 'Mat2', lastName: 'Deux', matricule: 'MAT-UNIQUE-01', gender: 'female', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    expect(otherTenantAllowed).not.toBeNull();
+    expect(otherTenantAllowed?.matricule).toBe('MAT-UNIQUE-01');
+  });
+
+  it('DENY: matricule uniqueness is enforced within the SAME tenant (D-MEM-03)', async () => {
+    const first = await organizationService.createMember({ firstName: 'Mat3', lastName: 'Trois', matricule: 'MAT-UNIQUE-02', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    expect(first).not.toBeNull();
+    const sameTenantCollision = await organizationService.createMember({ firstName: 'Mat4', lastName: 'Quatre', matricule: 'MAT-UNIQUE-02', gender: 'female', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    expect(sameTenantCollision).toBeNull();
+  });
+
+  it('DENY: phone uniqueness is scoped to the tenant (UNIQUE(tenant_id, phone)) — same phone allowed across different tenants', async () => {
+    const t001 = await organizationService.createMember({ firstName: 'Phone1', lastName: 'T001', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    expect(t001).not.toBeNull();
+    const sameTenantCollision = await organizationService.createMember({ firstName: 'Phone2', lastName: 'T001bis', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    expect(sameTenantCollision).toBeNull();
+    const otherTenantAllowed = await organizationService.createMember({ firstName: 'Phone3', lastName: 'T002', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    expect(otherTenantAllowed).not.toBeNull();
+  });
+
+  it('DENY: email uniqueness is scoped to the tenant (UNIQUE(tenant_id, email))', async () => {
+    const first = await organizationService.createMember({ firstName: 'Mail1', lastName: 'Un', matricule: '', gender: 'female', email: 'doublon@example.sn', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    expect(first).not.toBeNull();
+    const collision = await organizationService.createMember({ firstName: 'Mail2', lastName: 'Deux', matricule: '', gender: 'female', email: 'doublon@example.sn', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    expect(collision).toBeNull();
+  });
+
+  it('DENY: identity uniqueness — same (tenant_id, first_name, last_name, join_date) is refused', async () => {
+    const first = await organizationService.createMember({ firstName: 'Identite', lastName: 'Doublon', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-004', tenantName: 'Association Jappo', joinedAt: '2026-01-15' });
+    expect(first).not.toBeNull();
+    const collision = await organizationService.createMember({ firstName: 'Identite', lastName: 'Doublon', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-004', tenantName: 'Association Jappo', joinedAt: '2026-01-15' });
+    expect(collision).toBeNull();
+    const differentDateAllowed = await organizationService.createMember({ firstName: 'Identite', lastName: 'Doublon', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-004', tenantName: 'Association Jappo', joinedAt: '2026-02-20' });
+    expect(differentDateAllowed).not.toBeNull();
+  });
+
+  it('ALLOW: empty matricule/phone/email never collide with each other (SQL NULL semantics, not empty-string equality)', async () => {
+    const first = await organizationService.createMember({ firstName: 'Vide1', lastName: 'Un', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-005', tenantName: 'Tontine Avenir', joinedAt: '2026-03-01' });
+    const second = await organizationService.createMember({ firstName: 'Vide2', lastName: 'Deux', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-005', tenantName: 'Tontine Avenir', joinedAt: '2026-03-02' });
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+  });
+
+  it('findMemberDuplicate reports the specific reason (matricule/phone/email/identity), matching what createMember enforces — tenant-scoped for matricule (D-MEM-03)', async () => {
+    const matricule = await organizationService.findMemberDuplicate('T-001', { matricule: 'MAT-UNIQUE-01', firstName: 'X', lastName: 'Y', joinedAt: '2026-01-01' });
+    expect(matricule).toBe('matricule');
+    const crossTenantAllowed = await organizationService.findMemberDuplicate('T-999-INEXISTANT', { matricule: 'MAT-UNIQUE-01', firstName: 'X', lastName: 'Y', joinedAt: '2026-01-01' });
+    expect(crossTenantAllowed).toBeNull();
+    const none = await organizationService.findMemberDuplicate('T-001', { firstName: 'Inexistant', lastName: 'Personne', joinedAt: '2026-01-01' });
+    expect(none).toBeNull();
+  });
+});
+
+describe('organizationService — updateMember technical fields (P1 MEMBERS)', () => {
+  it('ALLOW: updateMember increments version and stamps updatedAt/updatedBy', async () => {
+    // `getMember` renvoie une référence mutable directe (pattern déjà utilisé partout dans ce
+    // fichier mock) — on capture les valeurs primitives AVANT la mutation, pas l'objet lui-même.
+    const before = await organizationService.getMember('T-001', 'M-001');
+    const versionBefore = before?.version ?? 0;
+    const updatedAtBefore = before?.updatedAt;
+    const result = await organizationService.updateMember('T-001', 'M-001', { occupation: 'Nouvelle profession' });
+    expect(result?.version).toBe(versionBefore + 1);
+    expect(result?.updatedBy).toBe(currentUser.id);
+    expect(result?.updatedAt).not.toBe(updatedAtBefore);
+  });
+
+  it('ALLOW: updateMember accepts the same matricule across two different tenants (D-MEM-03, tenant-scoped)', async () => {
+    const a = await organizationService.createMember({ firstName: 'UpdA', lastName: 'Tenant1', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    const b = await organizationService.createMember({ firstName: 'UpdB', lastName: 'Tenant2', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    await organizationService.updateMember('T-001', a!.id, { matricule: 'MAT-CROSS-UPD' });
+    const result = await organizationService.updateMember('T-002', b!.id, { matricule: 'MAT-CROSS-UPD' });
+    expect(result).not.toBeNull();
+    expect(result?.matricule).toBe('MAT-CROSS-UPD');
+  });
+
+  it('DENY: updateMember refuses a matricule collision with another member of the SAME tenant (excluding itself)', async () => {
+    const a = await organizationService.createMember({ firstName: 'UpdC', lastName: 'SameTenant1', matricule: 'MAT-SAME-UPD', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    const b = await organizationService.createMember({ firstName: 'UpdD', lastName: 'SameTenant2', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    expect(a).not.toBeNull(); expect(b).not.toBeNull();
+    const result = await organizationService.updateMember('T-003', b!.id, { matricule: 'MAT-SAME-UPD' });
+    expect(result).toBeNull();
+  });
+
+  it('ALLOW: updateMember does not flag a member against its own unchanged matricule/phone/email/identity', async () => {
+    const a = await organizationService.createMember({ firstName: 'UpdE', lastName: 'Self', matricule: 'MAT-SELF-UPD', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-004', tenantName: 'Association Jappo' });
+    const result = await organizationService.updateMember('T-004', a!.id, { matricule: 'MAT-SELF-UPD', occupation: 'Toujours la même' });
+    expect(result).not.toBeNull();
+    expect(result?.matricule).toBe('MAT-SELF-UPD');
+  });
+});
+
+describe('organizationService — Member.status (D-MEM-04, définitive — vocabulaire limité à ACTIVE/INACTIVE/SUSPENDED/EXITED, PENDING supprimé)', () => {
+  it('ALLOW: the 4 canonical values all function correctly', async () => {
+    const active = await organizationService.createMember({ firstName: 'StatusActive', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    expect(active?.status).toBe('active');
+    const inactive = await organizationService.updateMember('T-001', active!.id, { status: 'inactive' });
+    expect(inactive?.status).toBe('inactive');
+    const suspended = await organizationService.updateMember('T-001', active!.id, { status: 'suspended' });
+    expect(suspended?.status).toBe('suspended');
+    const exited = await organizationService.updateMember('T-001', active!.id, { status: 'exited' });
+    expect(exited?.status).toBe('exited');
+    expect(exited?.statusHistory.at(-1)?.status).toBe('exited');
+    expect(exited?.statusHistory.length).toBe(4); // active (création) + inactive + suspended + exited
+  });
+
+  it('MIGRATION (D-MEM-04): M-004, anciennement "pending", est désormais "active" — historique recoloré, aucune trace fonctionnelle de "pending" ne subsiste', async () => {
+    const member = await organizationService.getMember('T-004', 'M-004');
+    expect(member?.status).toBe('active');
+    expect(member?.statusHistory.every((entry) => (entry.status as string) !== 'pending')).toBe(true);
+  });
+
+});
+
+/**
+ * Aucune valeur `pending` ne peut plus être créée pour `Member` — garanti au niveau du
+ * système de types (`MemberStatus`, `src/mocks/organization/members.ts`, n'inclut plus
+ * `'pending'` dans son union), pas par un contrôle runtime : toute tentative de
+ * `status: 'pending'` sur `Member` échoue à la compilation (`npm run typecheck`), avant même
+ * d'atteindre l'exécution des tests.
+ */
+
+describe('organizationService — Vote.result REGRESSION (D-MEM-04 scope: Member.status only, never Vote.result)', () => {
+  it('ALLOW: a newly created Vote still defaults to result="pending" — unaffected by the Member status migration', async () => {
+    const vote = await organizationService.createVote('T-001', { subject: 'Vote régression D-MEM-04', date: '2026-12-15' });
+    expect(vote?.result).toBe('pending');
+  });
+});
+
+describe('USER vs MEMBER — no automatic relation, no cross-creation (mandat P1 MEMBERS/USERS)', () => {
+  it('creating a Member never creates a SystemUser', async () => {
+    const usersBefore = (await userService.list('T-001', 'platform')).length;
+    await organizationService.createMember({ firstName: 'SansUser', lastName: 'Membre', matricule: '', gender: 'male', email: '', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    const usersAfter = (await userService.list('T-001', 'platform')).length;
+    expect(usersAfter).toBe(usersBefore);
+  });
+
+  it('creating a SystemUser never creates a Member', async () => {
+    const membersBefore = (await organizationService.listMembers('T-001')).length;
+    await userService.create({ name: 'Sans Membre', email: 'sans.membre@sutura.sn', tenantId: 'T-001', tenantName: 'Coopérative Sutura', roleIds: ['role-viewer'] });
+    const membersAfter = (await organizationService.listMembers('T-001')).length;
+    expect(membersAfter).toBe(membersBefore);
+  });
+
+  it('Member has no userId field and SystemUser has no memberId field — no implicit relation exists', async () => {
+    const member = await organizationService.getMember('T-001', 'M-001');
+    const user = await userService.get('T-001', currentUser.id);
+    expect(member && 'userId' in member).toBe(false);
+    expect(user && 'memberId' in user).toBe(false);
   });
 });
 

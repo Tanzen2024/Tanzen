@@ -3,7 +3,7 @@ import { getTenantScoped } from './tenant-scope';
 import { tontines, type Tontine } from '@/mocks/tontines/tontines';
 import { tontineCycles, type TontineCycleStatus, type TontineCycle, type CycleMember, type CycleDraw } from '@/mocks/tontines/tontine-cycles';
 
-export type TontineInput = Pick<Tontine, 'name' | 'type' | 'tenantId'>;
+export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId'>;
 export type CycleInput = { tontineId: string; cycleNumber: number; startDate: string; endDate: string; expectedTotal: number };
 export type CycleMemberInput = { memberId: string; memberName: string; position: number; expectedAmount: number };
 export type DrawInput = { cycleId: string; drawNumber: number; date: string; contributionPool: number };

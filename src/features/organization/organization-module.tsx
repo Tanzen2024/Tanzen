@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Building2, CalendarDays, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, ShieldCheck, UserCog, UserRound, Users, UsersRound, WalletCards, XCircle } from 'lucide-react';
+import { ArrowLeft, Building2, CalendarDays, Camera, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, ShieldCheck, UserCog, UserRound, Users, UsersRound, WalletCards, X, XCircle } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -22,7 +22,6 @@ import { decisionVoteService, type CreateDecisionVoteInput } from '@/services/de
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import type { Tenant } from '@/mocks/organization/tenants';
 import type { Member } from '@/mocks/organization/members';
 import type { Contribution } from '@/mocks/finance/contributions';
 import type { Loan } from '@/mocks/finance/loans';
@@ -40,7 +39,7 @@ import { formatDate, formatNumber } from '@/lib/utils';
 
 type T = (section: 'organization' | 'nav', key: string, values?: Record<string, string>) => string;
 
-const statusTone = { active: 'success' as const, inactive: 'default' as const, pending: 'warning' as const, suspended: 'error' as const, ongoing: 'success' as const, expired: 'default' as const, upcoming: 'info' as const, adopted: 'success' as const, rejected: 'error' as const, repaid: 'success' as const, overdue: 'error' as const, completed: 'success' as const };
+const statusTone = { active: 'success' as const, inactive: 'default' as const, pending: 'warning' as const, suspended: 'error' as const, exited: 'default' as const, ongoing: 'success' as const, expired: 'default' as const, upcoming: 'info' as const, adopted: 'success' as const, rejected: 'error' as const, repaid: 'success' as const, overdue: 'error' as const, completed: 'success' as const };
 
 function OrganizationPage({ title, description, actions, children }: { title: string; description: string; actions?: ReactNode; children: ReactNode }) {
   return <div className="mx-auto max-w-[1600px] space-y-6 p-5 sm:p-7"><PageHeader eyebrow="ORGANIZATION" title={title} description={description} actions={actions} />{children}</div>;
@@ -66,51 +65,131 @@ function MembersDirectory({ t }: { t: T }) {
     { key: 'status', header: t('organization', 'status'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/organization/members/${row.id}`)} aria-label={t('organization', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
   ];
-  return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')} actions={<PermissionGate permission="members.create"><Button onClick={() => navigate('/organization/members/create')}><Plus size={16} />{t('organization', 'addMember')}</Button></PermissionGate>}><FilterBar search={search} onSearchChange={setSearch} placeholder={`${t('organization', 'firstName')}…`} filters={<select value={status} onChange={(event) => setStatus(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('organization', 'status')}</option><option value="active">{t('organization', 'active')}</option><option value="pending">{t('organization', 'pending')}</option><option value="inactive">{t('organization', 'inactive')}</option><option value="suspended">{t('organization', 'suspended')}</option></select>} /><div className="grid gap-3 sm:grid-cols-3"><Metric label={t('organization', 'members')} value={formatNumber(members.length)} icon={Users} /><Metric label={t('organization', 'active')} value={formatNumber(members.filter((member) => member.status === 'active').length)} icon={ShieldCheck} /><Metric label={t('organization', 'pending')} value={formatNumber(members.filter((member) => member.status === 'pending').length)} icon={ClipboardCheck} /></div><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Users} title={t('organization', 'noMembers')} />} /></OrganizationPage>;
+  return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')} actions={<PermissionGate permission="members.create"><Button onClick={() => navigate('/organization/members/create')}><Plus size={16} />{t('organization', 'addMember')}</Button></PermissionGate>}><FilterBar search={search} onSearchChange={setSearch} placeholder={`${t('organization', 'firstName')}…`} filters={<select value={status} onChange={(event) => setStatus(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('organization', 'status')}</option><option value="active">{t('organization', 'active')}</option><option value="inactive">{t('organization', 'inactive')}</option><option value="suspended">{t('organization', 'suspended')}</option><option value="exited">{t('organization', 'exited')}</option></select>} /><div className="grid gap-3 sm:grid-cols-3"><Metric label={t('organization', 'members')} value={formatNumber(members.length)} icon={Users} /><Metric label={t('organization', 'active')} value={formatNumber(members.filter((member) => member.status === 'active').length)} icon={ShieldCheck} /><Metric label={t('organization', 'exited')} value={formatNumber(members.filter((member) => member.status === 'exited').length)} icon={ClipboardCheck} /></div><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Users} title={t('organization', 'noMembers')} />} /></OrganizationPage>;
 }
 
 function Metric({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) { return <Card><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={17} /></span><div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 font-heading text-xl font-semibold">{value}</p></div></CardContent></Card>; }
 
-type MemberFormValues = { firstName: string; lastName: string; email: string; phone: string; occupation: string; nationality: string; address: string; tenantId: string; status: Member['status'] };
-type MemberFormErrors = Partial<Record<'firstName' | 'lastName' | 'email', string>>;
+type MemberFormValues = { firstName: string; lastName: string; matricule: string; gender: Member['gender']; email: string; phone: string; joinedAt: string; occupation: string; nationality: string; address: string; tenantId: string; status: Member['status'] };
+type MemberFormErrors = Partial<Record<'firstName' | 'lastName' | 'email' | 'matricule' | 'phone' | 'general', string>>;
 
+/** `email`/`phone`/`matricule`/`joinedAt` nullable au sens du dictionnaire (mandat P1 MEMBERS) — non rendus obligatoires ici, aucune règle métier existante ne le justifiait (vérifié : `email` n'est consommé qu'en affichage ailleurs dans l'app, jamais comme clé d'un mécanisme obligatoire). */
 function validateMember(values: MemberFormValues, t: T): MemberFormErrors {
   const errors: MemberFormErrors = {};
   if (!values.firstName.trim()) errors.firstName = t('organization', 'fieldRequired');
+  if (values.firstName.length > 100) errors.firstName = t('organization', 'fieldTooLong');
   if (!values.lastName.trim()) errors.lastName = t('organization', 'fieldRequired');
-  if (!values.email.trim()) errors.email = t('organization', 'fieldRequired');
-  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = t('organization', 'invalidEmail');
+  if (values.lastName.length > 100) errors.lastName = t('organization', 'fieldTooLong');
+  if (values.matricule.length > 50) errors.matricule = t('organization', 'fieldTooLong');
+  if (values.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = t('organization', 'invalidEmail');
+  if (values.email.length > 255) errors.email = t('organization', 'fieldTooLong');
+  if (values.phone.length > 50) errors.phone = t('organization', 'fieldTooLong');
   return errors;
 }
 
-function MemberFormFields({ values, onChange, errors, tenants, t }: { values: MemberFormValues; onChange: (patch: Partial<MemberFormValues>) => void; errors: MemberFormErrors; tenants: Tenant[]; t: T }) {
-  return <><FormSection title={t('organization', 'personalInfo')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="member-first-name">{t('organization', 'firstName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-first-name" value={values.firstName} onChange={(event) => onChange({ firstName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.firstName)} aria-describedby={errors.firstName ? 'member-first-name-error' : undefined} /><span id="member-first-name-error"><FieldError message={errors.firstName} /></span></div><div className="space-y-2"><Label htmlFor="member-last-name">{t('organization', 'lastName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-last-name" value={values.lastName} onChange={(event) => onChange({ lastName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.lastName)} aria-describedby={errors.lastName ? 'member-last-name-error' : undefined} /><span id="member-last-name-error"><FieldError message={errors.lastName} /></span></div><div className="space-y-2"><Label htmlFor="member-email">{t('organization', 'email')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-email" type="email" value={values.email} onChange={(event) => onChange({ email: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'member-email-error' : undefined} /><span id="member-email-error"><FieldError message={errors.email} /></span></div><div className="space-y-2"><Label htmlFor="member-phone">{t('organization', 'phone')}</Label><Input id="member-phone" value={values.phone} onChange={(event) => onChange({ phone: event.target.value })} /></div><div className="space-y-2"><Label htmlFor="member-occupation">{t('organization', 'occupation')}</Label><Input id="member-occupation" value={values.occupation} onChange={(event) => onChange({ occupation: event.target.value })} /></div><div className="space-y-2"><Label htmlFor="member-nationality">{t('organization', 'nationality')}</Label><Input id="member-nationality" value={values.nationality} onChange={(event) => onChange({ nationality: event.target.value })} /></div><div className="space-y-2 sm:col-span-2"><Label htmlFor="member-address">{t('organization', 'address')}</Label><Input id="member-address" value={values.address} onChange={(event) => onChange({ address: event.target.value })} /></div></div></FormSection><FormSection title={t('organization', 'general')}><div className="space-y-4"><div className="space-y-2"><Label htmlFor="member-tenant">{t('organization', 'tenants')}</Label><select id="member-tenant" value={values.tenantId} onChange={(event) => onChange({ tenantId: event.target.value })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></div><div className="space-y-2"><Label htmlFor="member-status-select">{t('organization', 'memberStatus')}</Label><select id="member-status-select" value={values.status} onChange={(event) => onChange({ status: event.target.value as MemberFormValues['status'] })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="active">{t('organization', 'active')}</option><option value="pending">{t('organization', 'pending')}</option></select></div></div></FormSection></>;
+/**
+ * Contrôle d'unicité — appelé après la validation de forme, avant l'appel à
+ * `createMember`/`updateMember` (qui reste l'autorité finale, non
+ * contournable : voir `organizationService.createMember`). Ce second appel
+ * côté service (`findMemberDuplicate`) sert uniquement à produire un message
+ * d'erreur distinct par contrainte, ce que le service de création seul ne
+ * peut pas communiquer (il ne renvoie qu'un succès/échec générique, comme le
+ * reste de l'architecture mock du projet).
+ */
+async function checkMemberDuplicate(tenantId: string, values: MemberFormValues, excludeMemberId: string | undefined, t: T): Promise<MemberFormErrors> {
+  const reason = await organizationService.findMemberDuplicate(tenantId, { matricule: values.matricule.trim() || undefined, phone: values.phone.trim() || undefined, email: values.email.trim() || undefined, firstName: values.firstName.trim(), lastName: values.lastName.trim(), joinedAt: values.joinedAt || new Date().toISOString().slice(0, 10) }, excludeMemberId);
+  if (reason === 'matricule') return { matricule: t('organization', 'duplicateMatricule') };
+  if (reason === 'phone') return { phone: t('organization', 'duplicatePhone') };
+  if (reason === 'email') return { email: t('organization', 'duplicateEmail') };
+  if (reason === 'identity') return { general: t('organization', 'duplicateIdentity') };
+  return {};
+}
+
+function MemberPhotoField({ t }: { t: T }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  const handleFile = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { notify.error(t('organization', 'invalidPhotoType')); return; }
+    if (file.size > 5 * 1024 * 1024) { notify.error(t('organization', 'photoTooLarge')); return; }
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(URL.createObjectURL(file));
+    setFileName(file.name);
+  };
+  const handleRemove = () => { if (preview) URL.revokeObjectURL(preview); setPreview(null); setFileName(null); };
+  return <div className="space-y-2">
+    <Label>{t('organization', 'memberPhoto')}</Label>
+    <div className="flex items-center gap-4">
+      <span className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-muted-foreground">
+        {preview ? <img src={preview} alt="" className="size-full object-cover" /> : <Camera size={22} aria-hidden="true" />}
+      </span>
+      <div className="space-y-1.5">
+        <div className="flex gap-2">
+          <Label htmlFor="member-photo-input" className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted">
+            <Camera size={15} />{t('organization', preview ? 'changePhoto' : 'selectPhoto')}
+          </Label>
+          <input id="member-photo-input" type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
+          {preview && <Button type="button" variant="ghost" size="sm" onClick={handleRemove}><X size={14} />{t('organization', 'removePhoto')}</Button>}
+        </div>
+        {fileName && <p className="text-xs text-muted-foreground">{fileName}</p>}
+        <p className="text-xs text-muted-foreground">{t('organization', 'memberPhotoHint')}</p>
+      </div>
+    </div>
+  </div>;
+}
+
+function MemberFormFields({ values, onChange, errors, t }: { values: MemberFormValues; onChange: (patch: Partial<MemberFormValues>) => void; errors: MemberFormErrors; t: T }) {
+  return <><FormSection title={t('organization', 'personalInfo')}><div className="grid gap-4 sm:grid-cols-2">
+    <div className="space-y-2"><Label htmlFor="member-first-name">{t('organization', 'firstName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-first-name" value={values.firstName} onChange={(event) => onChange({ firstName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.firstName)} aria-describedby={errors.firstName ? 'member-first-name-error' : undefined} /><span id="member-first-name-error"><FieldError message={errors.firstName} /></span></div>
+    <div className="space-y-2"><Label htmlFor="member-last-name">{t('organization', 'lastName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-last-name" value={values.lastName} onChange={(event) => onChange({ lastName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.lastName)} aria-describedby={errors.lastName ? 'member-last-name-error' : undefined} /><span id="member-last-name-error"><FieldError message={errors.lastName} /></span></div>
+    <div className="space-y-2"><Label htmlFor="member-matricule">{t('organization', 'matricule')}</Label><Input id="member-matricule" value={values.matricule} onChange={(event) => onChange({ matricule: event.target.value })} aria-invalid={Boolean(errors.matricule)} aria-describedby={errors.matricule ? 'member-matricule-error' : undefined} /><span id="member-matricule-error"><FieldError message={errors.matricule} /></span></div>
+    <div className="space-y-2"><Label htmlFor="member-gender">{t('organization', 'gender')}</Label><select id="member-gender" value={values.gender} onChange={(event) => onChange({ gender: event.target.value as MemberFormValues['gender'] })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="">{t('organization', 'genderUnspecified')}</option><option value="male">{t('organization', 'male')}</option><option value="female">{t('organization', 'female')}</option></select></div>
+    <div className="space-y-2"><Label htmlFor="member-email">{t('organization', 'email')}</Label><Input id="member-email" type="email" value={values.email} onChange={(event) => onChange({ email: event.target.value })} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'member-email-error' : undefined} /><span id="member-email-error"><FieldError message={errors.email} /></span></div>
+    <div className="space-y-2"><Label htmlFor="member-phone">{t('organization', 'phone')}</Label><Input id="member-phone" value={values.phone} onChange={(event) => onChange({ phone: event.target.value })} aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? 'member-phone-error' : undefined} /><span id="member-phone-error"><FieldError message={errors.phone} /></span></div>
+    <div className="space-y-2"><Label htmlFor="member-joined-at">{t('organization', 'joinDateLabel')}</Label><Input id="member-joined-at" type="date" value={values.joinedAt} onChange={(event) => onChange({ joinedAt: event.target.value })} /></div>
+    <div className="space-y-2"><Label htmlFor="member-occupation">{t('organization', 'occupation')}</Label><Input id="member-occupation" value={values.occupation} onChange={(event) => onChange({ occupation: event.target.value })} /></div>
+    <div className="space-y-2"><Label htmlFor="member-nationality">{t('organization', 'nationality')}</Label><Input id="member-nationality" value={values.nationality} onChange={(event) => onChange({ nationality: event.target.value })} /></div>
+    <div className="space-y-2 sm:col-span-2"><Label htmlFor="member-address">{t('organization', 'address')}</Label><Input id="member-address" value={values.address} onChange={(event) => onChange({ address: event.target.value })} /></div>
+    <div className="sm:col-span-2"><MemberPhotoField t={t} /></div>
+  </div></FormSection>
+    {errors.general && <p className="text-sm text-destructive" role="alert">{errors.general}</p>}
+  </>;
 }
 
 function MemberCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
-  const [values, setValues] = useState<MemberFormValues>({ firstName: '', lastName: '', email: '', phone: '', occupation: '', nationality: 'Sénégalaise', address: '', tenantId: currentTenant.id, status: 'pending' });
+  // D-MEM-04 (définitive) : un nouveau membre est toujours créé 'active' — 'pending' est retiré
+  // du vocabulaire officiel, aucun contrôle de statut n'est donc plus exposé à la création.
+  const [values, setValues] = useState<MemberFormValues>({ firstName: '', lastName: '', matricule: '', gender: '', email: '', phone: '', joinedAt: '', occupation: '', nationality: 'Sénégalaise', address: '', tenantId: currentTenant.id, status: 'active' });
   const [errors, setErrors] = useState<MemberFormErrors>({});
-  const mutation = useMockMutation<Member, ReturnType<typeof buildMemberInput>>({
+  const [isChecking, setIsChecking] = useState(false);
+  const mutation = useMockMutation<Member | undefined, MemberInput>({
     mutationFn: (input) => organizationService.createMember(input),
     invalidateKeys: [queryKeys.members.list(currentTenant.id)],
-    onSuccess: (member) => { notify.success(t('organization', 'memberCreated')); navigate(`/organization/members/${member.id}`); },
+    onSuccess: (member) => {
+      if (!member) { setErrors({ general: t('organization', 'memberCreateFailed') }); return; }
+      notify.success(t('organization', 'memberCreated')); navigate(`/organization/members/${member.id}`);
+    },
   });
-  const handleSave = () => {
+  const handleSave = async () => {
     const nextErrors = validateMember(values, t);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-    const tenant = tenants.find((item) => item.id === values.tenantId);
-    mutation.mutate(buildMemberInput(values, tenant?.name ?? ''));
+    if (Object.keys(nextErrors).length > 0) { setErrors(nextErrors); return; }
+    setIsChecking(true);
+    const duplicateErrors = await checkMemberDuplicate(currentTenant.id, values, undefined, t);
+    setIsChecking(false);
+    if (Object.keys(duplicateErrors).length > 0) { setErrors(duplicateErrors); return; }
+    setErrors({});
+    mutation.mutate(buildMemberInput(values, currentTenant.name));
   };
-  return <OrganizationPage title={t('organization', 'addMember')} description={t('organization', 'membersDescription')} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} tenants={tenants} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/organization/members')}>{t('organization', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
+  const isBusy = mutation.isPending || isChecking;
+  return <OrganizationPage title={t('organization', 'addMember')} description={t('organization', 'membersDescription')} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate('/organization/members')}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
 }
 
+/** Le tenant n'est plus un champ de formulaire (dérivé de `currentTenant`, jamais éditable — cf. `MemberFormFields`) : la valeur transmise ici est toujours celle du contexte tenant courant, jamais une sélection utilisateur. `gender` n'est plus forcé à une valeur par défaut arbitraire (bug corrigé — voir `MemberGenderValue`). */
 function buildMemberInput(values: MemberFormValues, tenantName: string): MemberInput {
-  const { tenantId, ...rest } = values;
-  return { ...rest, tenantId, tenantName };
+  const { tenantId, joinedAt, ...rest } = values;
+  return { ...rest, tenantId, tenantName, joinedAt: joinedAt || undefined };
 }
 
 function MemberDetail({ t }: { t: T }) {
@@ -144,23 +223,29 @@ function MemberEdit({ t }: { t: T }) {
 
 function MemberEditForm({ t, member }: { t: T; member: Member }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
-  const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, email: member.email, phone: member.phone, occupation: member.occupation, nationality: member.nationality, address: member.address, tenantId: member.tenantId, status: member.status });
+  const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, matricule: member.matricule, gender: member.gender, email: member.email, phone: member.phone, joinedAt: member.joinedAt, occupation: member.occupation, nationality: member.nationality, address: member.address, tenantId: member.tenantId, status: member.status });
   const [errors, setErrors] = useState<MemberFormErrors>({});
+  const [isChecking, setIsChecking] = useState(false);
   const mutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
     mutationFn: (patch) => organizationService.updateMember(currentTenant.id, member.id, patch),
     invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(member.id)],
-    onSuccess: () => { notify.success(t('organization', 'memberUpdated')); navigate(`/organization/members/${member.id}`); },
+    onSuccess: (result) => {
+      if (!result) { setErrors({ general: t('organization', 'memberCreateFailed') }); return; }
+      notify.success(t('organization', 'memberUpdated')); navigate(`/organization/members/${member.id}`);
+    },
   });
-  const handleSave = () => {
+  const handleSave = async () => {
     const nextErrors = validateMember(values, t);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-    const tenant = tenants.find((item) => item.id === values.tenantId);
-    mutation.mutate(buildMemberInput(values, tenant?.name ?? member.tenantName));
+    if (Object.keys(nextErrors).length > 0) { setErrors(nextErrors); return; }
+    setIsChecking(true);
+    const duplicateErrors = await checkMemberDuplicate(currentTenant.id, values, member.id, t);
+    setIsChecking(false);
+    if (Object.keys(duplicateErrors).length > 0) { setErrors(duplicateErrors); return; }
+    setErrors({});
+    mutation.mutate(buildMemberInput(values, member.tenantName));
   };
-  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} tenants={tenants} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
+  const isBusy = mutation.isPending || isChecking;
+  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
 }
 
 function MemberTabs({ t, member }: { t: T; member: Member }) {

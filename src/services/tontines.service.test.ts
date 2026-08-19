@@ -10,6 +10,49 @@ describe('tontinesService — Tontines', () => {
   });
 });
 
+describe('tontinesService — createTontine (Tontine.valueType)', () => {
+  it('creates a MONEY tontine with the requesting tenant', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Tontine de 10000', valueType: 'MONEY', tenantId: 'T-002' });
+    expect(tontine.valueType).toBe('MONEY');
+    expect(tontine.tenantId).toBe('T-002');
+    expect(tontine.status).toBe('statusActive');
+  });
+
+  it('the historical structure field `type` no longer exists on the model — valueType is the sole classification', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Sans type historique', valueType: 'MONEY', tenantId: 'T-002' });
+    expect('type' in tontine).toBe(false);
+    expect(Object.keys(tontine).sort()).toEqual(['activeCycles', 'createdAt', 'id', 'memberCount', 'name', 'status', 'tenantId', 'totalContributions', 'valueType']);
+  });
+
+  it('creates a GOODS tontine', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Tontine en nature', valueType: 'GOODS', tenantId: 'T-002' });
+    expect(tontine.valueType).toBe('GOODS');
+  });
+
+  it('a newly created tontine is only visible to its own tenant (isolation preserved)', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Tontine isolée', valueType: 'MONEY', tenantId: 'T-003' });
+    const ownTenant = await tontinesService.getTontine('T-003', tontine.id);
+    const otherTenant = await tontinesService.getTontine('T-001', tontine.id);
+    expect(ownTenant?.id).toBe(tontine.id);
+    expect(otherTenant).toBeNull();
+  });
+
+  it('a tontine can be created without a first cycle (cycle organization stays optional)', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Sans cycle', valueType: 'MONEY', tenantId: 'T-002' });
+    const cycles = await tontinesService.listCyclesByTontine('T-002', tontine.id);
+    expect(cycles).toEqual([]);
+  });
+
+  it('chaining createTontine then createCycle (the TontineCreate "first cycle" flow) attaches the cycle to the new tontine as cycleNumber 1', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Avec premier cycle', valueType: 'GOODS', tenantId: 'T-002' });
+    const cycle = await tontinesService.createCycle('T-002', { tontineId: tontine.id, cycleNumber: 1, startDate: '2026-06-15', endDate: '2026-09-15', expectedTotal: 1_000_000 });
+    expect(cycle?.tontineId).toBe(tontine.id);
+    expect(cycle?.cycleNumber).toBe(1);
+    const cycles = await tontinesService.listCyclesByTontine('T-002', tontine.id);
+    expect(cycles.map((item) => item.id)).toEqual([cycle?.id]);
+  });
+});
+
 describe('tontinesService — Cycles: two-step tenant scoping via parent Tontine', () => {
   it('DENY: listCyclesByTontine returns an empty list for a tontine of another tenant', async () => {
     const result = await tontinesService.listCyclesByTontine('T-001', 'TON-001');

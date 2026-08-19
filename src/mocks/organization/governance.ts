@@ -24,7 +24,12 @@ export type MeetingType = 'REGULAR' | 'GENERAL_ASSEMBLY';
  * `GeneralAssembly.description` lors de la migration (aucune perte de
  * donnée existante, cf. mandat IMPLEMENTATION GO §25), null/non pertinent
  * pour un Meeting REGULAR. `uuid`/`sync_status`/`version`/timestamps
- * restent volontairement exclus (aucun besoin Web démontré).
+ * restent volontairement exclus (aucun besoin Web démontré) — convention
+ * par défaut du projet, à laquelle `Member` (`mocks/organization/members.ts`)
+ * déroge explicitement pour ces mêmes champs, décision fermée par D-MEM-02
+ * (Option C, `docs/P1_MEMBERS_USERS_DECISION_GATE_CLOSURE.md` §7) : le
+ * dictionnaire canonique les exige nommément pour `Member`, contrairement à
+ * `Meeting` et aux autres entités de ce fichier.
  *
  * L'ancienne entité autonome `Assembly` (`AS-001..004`) a été repliée ici par
  * la correction post-implémentation Phase 4C-4 (cf.

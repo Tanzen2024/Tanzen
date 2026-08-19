@@ -3,7 +3,7 @@ import { getTenantScoped } from './tenant-scope';
 import { tenants } from '@/mocks/organization/tenants';
 import { members, type Member } from '@/mocks/organization/members';
 import { meetings, votes, boardMembers, type Meeting, type MeetingType, type Vote, type BoardMember } from '@/mocks/organization/governance';
-import type { PlatformScope } from '@/mocks/rbac.mocks';
+import { currentUser, type PlatformScope } from '@/mocks/rbac.mocks';
 
 /**
  * Séparation Commercial/Tenant (2026-08-16) : `createTenant`/`updateTenant`
@@ -14,7 +14,8 @@ import type { PlatformScope } from '@/mocks/rbac.mocks';
  * contient jamais qu'un seul élément en pratique (scope toujours
  * `'tenant'` ici). Voir docs/COMMERCIAL_TENANT_EXECUTION_PLAN.md §21.
  */
-export type MemberInput = Pick<Member, 'firstName' | 'lastName' | 'email' | 'phone' | 'occupation' | 'nationality' | 'address' | 'status'> & { tenantId: string; tenantName: string };
+/** `matricule`/`gender`/`joinedAt` ajoutés au formulaire (mandat P1 MEMBERS — alignement du modèle canonique) ; `joinedAt` reste optionnel en entrée (défaut : date du jour, comportement préexistant conservé). */
+export type MemberInput = Pick<Member, 'firstName' | 'lastName' | 'email' | 'phone' | 'occupation' | 'nationality' | 'address' | 'status' | 'gender' | 'matricule'> & { tenantId: string; tenantName: string; joinedAt?: string };
 /**
  * `type`/`description` optionnels : `type` par défaut à REGULAR (D-4C4-WEB-02).
  * Correction post-implémentation Phase 4C-4 (cf.
@@ -54,10 +55,50 @@ export const organizationService = {
 
   listMembers: (tenantId: string) => mockRequest(() => members.filter((member) => member.tenantId === tenantId)),
   getMember: (tenantId: string, memberId: string) => mockRequest(() => getTenantScoped(members, (member) => member.id === memberId, tenantId)),
+  /**
+   * Contraintes du dictionnaire canonique `members`, telles que closes par
+   * D-MEM-03 (Option B, `docs/P1_MEMBERS_USERS_DECISION_GATE_CLOSURE.md` §8) —
+   * appliquées ici au niveau service, jamais contournables par une
+   * validation UI seule :
+   * - `UNIQUE(tenant_id, matricule)` — tenant-scopée (D-MEM-03, Option B ;
+   *   remplace l'ancienne portée globale de l'implémentation précédente) ;
+   * - `UNIQUE(tenant_id, phone)`, `UNIQUE(tenant_id, email)` ;
+   * - `UNIQUE(tenant_id, first_name, last_name, join_date)`.
+   * Les trois champs `matricule`/`phone`/`email` sont nullable (dictionnaire) :
+   * une valeur vide n'entre jamais en collision avec une autre valeur vide
+   * (sémantique SQL NULL usuelle), cohérent avec la convention déjà en place
+   * pour `phone`/`email` (chaîne vide = non renseigné, jamais `null`).
+   */
+  findMemberDuplicate: (tenantId: string, input: { matricule?: string; phone?: string; email?: string; firstName: string; lastName: string; joinedAt: string }, excludeMemberId?: string) =>
+    mockRequest(() => {
+      const tenantCandidates = members.filter((item) => item.tenantId === tenantId && item.id !== excludeMemberId);
+      if (input.matricule && tenantCandidates.some((item) => item.matricule === input.matricule)) return 'matricule' as const;
+      if (input.phone && tenantCandidates.some((item) => item.phone === input.phone)) return 'phone' as const;
+      if (input.email && tenantCandidates.some((item) => item.email === input.email)) return 'email' as const;
+      if (tenantCandidates.some((item) => item.firstName === input.firstName && item.lastName === input.lastName && item.joinedAt === input.joinedAt)) return 'identity' as const;
+      return null;
+    }),
   createMember: (input: MemberInput) =>
     mockRequest(() => {
-      const joinedAt = new Date().toISOString().slice(0, 10);
-      const member: Member = { id: `M-${String(members.length + 1).padStart(3, '0')}`, joinedAt, birthDate: '', idNumber: '', gender: 'female', positions: [], accounts: [], documents: [], activities: [], governanceParticipation: [], statusHistory: [{ status: input.status, since: joinedAt }], ...input };
+      const joinedAt = input.joinedAt || new Date().toISOString().slice(0, 10);
+      const tenantMembers = members.filter((item) => item.tenantId === input.tenantId);
+      if (input.matricule && tenantMembers.some((item) => item.matricule === input.matricule)) return undefined;
+      if (input.phone && tenantMembers.some((item) => item.phone === input.phone)) return undefined;
+      if (input.email && tenantMembers.some((item) => item.email === input.email)) return undefined;
+      if (tenantMembers.some((item) => item.firstName === input.firstName && item.lastName === input.lastName && item.joinedAt === joinedAt)) return undefined;
+      const now = new Date().toISOString();
+      const member: Member = {
+        id: `M-${String(members.length + 1).padStart(3, '0')}`,
+        uuid: crypto.randomUUID(),
+        joinedAt,
+        birthDate: '', idNumber: '',
+        positions: [], accounts: [], documents: [], activities: [], governanceParticipation: [],
+        statusHistory: [{ status: input.status, since: joinedAt }],
+        syncStatus: 'synced', version: 1,
+        createdAt: now, updatedAt: now, deletedAt: null,
+        createdBy: currentUser.id, updatedBy: currentUser.id,
+        ...input,
+      };
       members.push(member);
       return member;
     }),
@@ -66,10 +107,21 @@ export const organizationService = {
     mockRequest(() => {
       const member = getTenantScoped(members, (item) => item.id === memberId, tenantId);
       if (!member) return undefined;
+      const tenantMembers = members.filter((item) => item.tenantId === tenantId && item.id !== memberId);
+      if (patch.matricule && tenantMembers.some((item) => item.matricule === patch.matricule)) return undefined;
+      if (patch.phone && tenantMembers.some((item) => item.phone === patch.phone)) return undefined;
+      if (patch.email && tenantMembers.some((item) => item.email === patch.email)) return undefined;
+      const nextFirstName = patch.firstName ?? member.firstName;
+      const nextLastName = patch.lastName ?? member.lastName;
+      const nextJoinedAt = patch.joinedAt ?? member.joinedAt;
+      if (tenantMembers.some((item) => item.firstName === nextFirstName && item.lastName === nextLastName && item.joinedAt === nextJoinedAt)) return undefined;
       if (patch.status && patch.status !== member.status) {
         member.statusHistory.push({ status: patch.status, since: new Date().toISOString().slice(0, 10) });
       }
       Object.assign(member, patch);
+      member.updatedAt = new Date().toISOString();
+      member.updatedBy = currentUser.id;
+      member.version += 1;
       return member;
     }),
 
