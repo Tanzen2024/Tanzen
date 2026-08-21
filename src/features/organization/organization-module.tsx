@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Building2, CalendarDays, Camera, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, ShieldCheck, UserCog, UserRound, Users, UsersRound, WalletCards, X, XCircle } from 'lucide-react';
+import { ArrowLeft, Building2, CalendarDays, Camera, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, Printer, ShieldCheck, Trash2, UserCog, UserRound, Users, UsersRound, WalletCards, X, XCircle } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
+import { PageHeader, DataTable, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -36,10 +36,15 @@ import type { PositionRole } from '@/mocks/organization/members';
 import { Textarea } from '@/components/ui/textarea';
 import type { TableColumn } from '@/types/ui';
 import { formatDate, formatNumber } from '@/lib/utils';
+import { useMemberDirectory } from './hooks/use-member-directory';
+import { MemberToolbar } from './components/member-toolbar';
+import { MemberTable } from './components/member-table';
+import { MemberPagination } from './components/member-pagination';
+import { MemberAvatar, getInitials } from './components/member-avatar';
 
 type T = (section: 'organization' | 'nav', key: string, values?: Record<string, string>) => string;
 
-const statusTone = { active: 'success' as const, inactive: 'default' as const, pending: 'warning' as const, suspended: 'error' as const, exited: 'default' as const, ongoing: 'success' as const, expired: 'default' as const, upcoming: 'info' as const, adopted: 'success' as const, rejected: 'error' as const, repaid: 'success' as const, overdue: 'error' as const, completed: 'success' as const };
+export const statusTone = { active: 'success' as const, inactive: 'default' as const, pending: 'warning' as const, suspended: 'error' as const, exited: 'default' as const, ongoing: 'success' as const, expired: 'default' as const, upcoming: 'info' as const, adopted: 'success' as const, rejected: 'error' as const, repaid: 'success' as const, overdue: 'error' as const, completed: 'success' as const };
 
 function OrganizationPage({ title, description, actions, children }: { title: string; description: string; actions?: ReactNode; children: ReactNode }) {
   return <div className="mx-auto max-w-[1600px] space-y-6 p-5 sm:p-7"><PageHeader eyebrow="ORGANIZATION" title={title} description={description} actions={actions} />{children}</div>;
@@ -47,30 +52,43 @@ function OrganizationPage({ title, description, actions, children }: { title: st
 
 function BackButton({ label }: { label: string }) { const navigate = useNavigate(); return <Button variant="ghost" size="sm" onClick={() => navigate(-1)}><ArrowLeft size={15} />{label}</Button>; }
 
-function Avatar({ name, large = false }: { name: string; large?: boolean }) { const initials = name.split(' ').map((word) => word[0]).join('').slice(0, 2); return <span aria-hidden="true" className={`grid shrink-0 place-items-center rounded-xl bg-primary/10 font-semibold text-primary ${large ? 'size-14 text-lg' : 'size-9 text-xs'}`}>{initials}</span>; }
+/** Réservé aux identités sans concept de photo (ex. lignes Bureau & Mandats, qui n'ont qu'un `memberName` textuel) — `MemberAvatar` (photo + fallback) est le composant à utiliser partout où un `Member` complet est disponible. Réutilise `getInitials`, la même logique de fallback que `MemberAvatar`, jamais une seconde implémentation. */
+export function Avatar({ name, large = false }: { name: string; large?: boolean }) { return <span aria-hidden="true" className={`grid shrink-0 place-items-center rounded-xl bg-primary/10 font-semibold text-primary ${large ? 'size-14 text-lg' : 'size-9 text-xs'}`}>{getInitials(name)}</span>; }
 
 function Info({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Mail }) { return <div className="flex gap-3"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon size={15} /></span><div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div></div>; }
 
 function MembersDirectory({ t }: { t: T }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant(); const [search, setSearch] = useState(''); const [status, setStatus] = useState('all');
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
   const { data: members = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
-  const filtered = members.filter((member) => `${member.firstName} ${member.lastName} ${member.email} ${member.tenantName}`.toLowerCase().includes(search.toLowerCase()) && (status === 'all' || member.status === status));
+  const directory = useMemberDirectory(members);
+  const [confirmDelete, setConfirmDelete] = useState<Member | null>(null);
+  const deleteMutation = useMockMutation<Member | undefined, string>({
+    mutationFn: (memberId) => organizationService.updateMember(currentTenant.id, memberId, { status: 'exited' }),
+    invalidateKeys: [queryKeys.members.list(currentTenant.id)],
+    onSuccess: () => { notify.success(t('organization', 'memberDeleted')); setConfirmDelete(null); },
+  });
   if (isLoading) return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')}><TableSkeleton /></OrganizationPage>;
   if (isError) return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')}><ErrorState onRetry={refetch} /></OrganizationPage>;
-  const columns: TableColumn<Member>[] = [
-    { key: 'member', header: t('organization', 'member'), render: (row) => <button type="button" onClick={() => navigate(`/organization/members/${row.id}`)} className="flex items-center gap-3 text-left"><Avatar name={`${row.firstName} ${row.lastName}`} /><span><span className="block font-semibold">{row.firstName} {row.lastName}</span><span className="block text-xs text-muted-foreground">{row.id} · {row.email}</span></span></button> },
-    { key: 'tenant', header: t('organization', 'tenants'), render: (row) => row.tenantName },
-    { key: 'role', header: t('organization', 'role'), render: (row) => row.positions.length ? t('organization', row.positions[0].role) : t('organization', 'member') },
-    { key: 'joined', header: t('organization', 'joined'), render: (row) => <DateDisplay value={row.joinedAt} /> },
-    { key: 'status', header: t('organization', 'status'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> },
-    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/organization/members/${row.id}`)} aria-label={t('organization', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
-  ];
-  return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')} actions={<PermissionGate permission="members.create"><Button onClick={() => navigate('/organization/members/create')}><Plus size={16} />{t('organization', 'addMember')}</Button></PermissionGate>}><FilterBar search={search} onSearchChange={setSearch} placeholder={`${t('organization', 'firstName')}…`} filters={<select value={status} onChange={(event) => setStatus(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('organization', 'status')}</option><option value="active">{t('organization', 'active')}</option><option value="inactive">{t('organization', 'inactive')}</option><option value="suspended">{t('organization', 'suspended')}</option><option value="exited">{t('organization', 'exited')}</option></select>} /><div className="grid gap-3 sm:grid-cols-3"><Metric label={t('organization', 'members')} value={formatNumber(members.length)} icon={Users} /><Metric label={t('organization', 'active')} value={formatNumber(members.filter((member) => member.status === 'active').length)} icon={ShieldCheck} /><Metric label={t('organization', 'exited')} value={formatNumber(members.filter((member) => member.status === 'exited').length)} icon={ClipboardCheck} /></div><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Users} title={t('organization', 'noMembers')} />} /></OrganizationPage>;
+  return <OrganizationPage title={t('organization', 'membersTitle')} description={t('organization', 'membersDescription')} actions={<PermissionGate permission="members.create"><Button onClick={() => navigate('/organization/members/create')}><Plus size={16} />{t('organization', 'addMember')}</Button></PermissionGate>}>
+    <MemberToolbar t={t} searchInput={directory.searchInput} onSearchChange={directory.setSearchInput} status={directory.status} onStatusChange={directory.setStatus} role={directory.role} onRoleChange={directory.setRole} availableRoles={directory.availableRoles} resultCount={directory.total} hasActiveFilters={directory.hasActiveFilters} onReset={directory.resetFilters} />
+    <MemberTable
+      t={t} rows={directory.rows} sortKey={directory.sortKey} sortDirection={directory.sortDirection} onSort={directory.toggleSort}
+      onView={(member) => navigate(`/organization/members/${member.id}`)}
+      onEdit={(member) => navigate(`/organization/members/${member.id}/edit`)}
+      onPrint={(member) => navigate(`/organization/members/${member.id}?print=1`)}
+      onDelete={(member) => setConfirmDelete(member)}
+      emptyTitle={t('organization', directory.totalUnfiltered === 0 ? 'noMembers' : 'noMembersFound')}
+      emptyDescription={directory.totalUnfiltered === 0 ? undefined : t('organization', 'noMembersFoundHint')}
+      emptyAction={directory.hasActiveFilters ? <Button variant="outline" size="sm" onClick={directory.resetFilters}>{t('organization', 'resetFilters')}</Button> : undefined}
+    />
+    <MemberPagination t={t} page={directory.page} pageCount={directory.pageCount} pageSize={directory.pageSize} total={directory.total} onPageChange={directory.setPage} onPageSizeChange={directory.setPageSize} />
+    {confirmDelete && <ConfirmDialog open title={t('organization', 'deleteMember')} description={t('organization', 'deleteMemberConfirm')} confirmLabel={t('organization', 'deleteMember')} cancelLabel={t('organization', 'cancel')} onConfirm={() => deleteMutation.mutate(confirmDelete.id)} onCancel={() => setConfirmDelete(null)} />}
+  </OrganizationPage>;
 }
 
 function Metric({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) { return <Card><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={17} /></span><div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-0.5 font-heading text-xl font-semibold">{value}</p></div></CardContent></Card>; }
 
-type MemberFormValues = { firstName: string; lastName: string; matricule: string; gender: Member['gender']; email: string; phone: string; joinedAt: string; occupation: string; nationality: string; address: string; tenantId: string; status: Member['status'] };
+type MemberFormValues = { firstName: string; lastName: string; matricule: string; gender: Member['gender']; email: string; phone: string; joinedAt: string; occupation: string; nationality: string; address: string; photoUrl: string; tenantId: string; status: Member['status'] };
 type MemberFormErrors = Partial<Record<'firstName' | 'lastName' | 'email' | 'matricule' | 'phone' | 'general', string>>;
 
 /** `email`/`phone`/`matricule`/`joinedAt` nullable au sens du dictionnaire (mandat P1 MEMBERS) — non rendus obligatoires ici, aucune règle métier existante ne le justifiait (vérifié : `email` n'est consommé qu'en affichage ailleurs dans l'app, jamais comme clé d'un mécanisme obligatoire). */
@@ -105,32 +123,38 @@ async function checkMemberDuplicate(tenantId: string, values: MemberFormValues, 
   return {};
 }
 
-function MemberPhotoField({ t }: { t: T }) {
-  const [preview, setPreview] = useState<string | null>(null);
+/**
+ * Contrôlé par `photoUrl` (data URI, cf. `Member.photoUrl`) plutôt qu'un aperçu local
+ * jamais persisté : `FileReader.readAsDataURL` remplace l'ancien `URL.createObjectURL`
+ * (piège de révocation — un blob révoqué à la fermeture du formulaire aurait cassé la
+ * référence une fois enregistrée dans `members`). Aucune dépendance ajoutée, aucune
+ * architecture de stockage de fichiers créée : le data URI est la valeur elle-même.
+ */
+function MemberPhotoField({ t, value, onChange }: { t: T; value: string; onChange: (photoUrl: string) => void }) {
   const [fileName, setFileName] = useState<string | null>(null);
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   const handleFile = (file: File | null) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) { notify.error(t('organization', 'invalidPhotoType')); return; }
     if (file.size > 5 * 1024 * 1024) { notify.error(t('organization', 'photoTooLarge')); return; }
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(URL.createObjectURL(file));
+    const reader = new FileReader();
+    reader.onload = () => { if (typeof reader.result === 'string') onChange(reader.result); };
+    reader.readAsDataURL(file);
     setFileName(file.name);
   };
-  const handleRemove = () => { if (preview) URL.revokeObjectURL(preview); setPreview(null); setFileName(null); };
+  const handleRemove = () => { onChange(''); setFileName(null); };
   return <div className="space-y-2">
     <Label>{t('organization', 'memberPhoto')}</Label>
     <div className="flex items-center gap-4">
       <span className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-muted-foreground">
-        {preview ? <img src={preview} alt="" className="size-full object-cover" /> : <Camera size={22} aria-hidden="true" />}
+        {value ? <img src={value} alt="" className="size-full object-cover" /> : <Camera size={22} aria-hidden="true" />}
       </span>
       <div className="space-y-1.5">
         <div className="flex gap-2">
           <Label htmlFor="member-photo-input" className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted">
-            <Camera size={15} />{t('organization', preview ? 'changePhoto' : 'selectPhoto')}
+            <Camera size={15} />{t('organization', value ? 'changePhoto' : 'selectPhoto')}
           </Label>
           <input id="member-photo-input" type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
-          {preview && <Button type="button" variant="ghost" size="sm" onClick={handleRemove}><X size={14} />{t('organization', 'removePhoto')}</Button>}
+          {value && <Button type="button" variant="ghost" size="sm" onClick={handleRemove}><X size={14} />{t('organization', 'removePhoto')}</Button>}
         </div>
         {fileName && <p className="text-xs text-muted-foreground">{fileName}</p>}
         <p className="text-xs text-muted-foreground">{t('organization', 'memberPhotoHint')}</p>
@@ -151,7 +175,7 @@ function MemberFormFields({ values, onChange, errors, t }: { values: MemberFormV
     <div className="space-y-2"><Label htmlFor="member-occupation">{t('organization', 'occupation')}</Label><Input id="member-occupation" value={values.occupation} onChange={(event) => onChange({ occupation: event.target.value })} /></div>
     <div className="space-y-2"><Label htmlFor="member-nationality">{t('organization', 'nationality')}</Label><Input id="member-nationality" value={values.nationality} onChange={(event) => onChange({ nationality: event.target.value })} /></div>
     <div className="space-y-2 sm:col-span-2"><Label htmlFor="member-address">{t('organization', 'address')}</Label><Input id="member-address" value={values.address} onChange={(event) => onChange({ address: event.target.value })} /></div>
-    <div className="sm:col-span-2"><MemberPhotoField t={t} /></div>
+    <div className="sm:col-span-2"><MemberPhotoField t={t} value={values.photoUrl} onChange={(photoUrl) => onChange({ photoUrl })} /></div>
   </div></FormSection>
     {errors.general && <p className="text-sm text-destructive" role="alert">{errors.general}</p>}
   </>;
@@ -161,7 +185,7 @@ function MemberCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   // D-MEM-04 (définitive) : un nouveau membre est toujours créé 'active' — 'pending' est retiré
   // du vocabulaire officiel, aucun contrôle de statut n'est donc plus exposé à la création.
-  const [values, setValues] = useState<MemberFormValues>({ firstName: '', lastName: '', matricule: '', gender: '', email: '', phone: '', joinedAt: '', occupation: '', nationality: 'Sénégalaise', address: '', tenantId: currentTenant.id, status: 'active' });
+  const [values, setValues] = useState<MemberFormValues>({ firstName: '', lastName: '', matricule: '', gender: '', email: '', phone: '', joinedAt: '', occupation: '', nationality: 'Sénégalaise', address: '', photoUrl: '', tenantId: currentTenant.id, status: 'active' });
   const [errors, setErrors] = useState<MemberFormErrors>({});
   const [isChecking, setIsChecking] = useState(false);
   const mutation = useMockMutation<Member | undefined, MemberInput>({
@@ -192,14 +216,29 @@ function buildMemberInput(values: MemberFormValues, tenantName: string): MemberI
   return { ...rest, tenantId, tenantName, joinedAt: joinedAt || undefined };
 }
 
+/** Impression scopée à la fiche membre : masque tout le reste de l'app (sidebar/header compris) sans toucher aux fichiers de layout — pure CSS @media print ciblant l'id `member-print-area`. */
+function MemberPrintStyles() {
+  return <style>{`@media print { body * { visibility: hidden; } #member-print-area, #member-print-area * { visibility: visible; } #member-print-area { position: absolute; inset: 0; padding: 24px; } }`}</style>;
+}
+
 function MemberDetail({ t }: { t: T }) {
   const navigate = useNavigate(); const { id = '' } = useParams(); const { currentTenant } = useTenant();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [confirmStatus, setConfirmStatus] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: member, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.members.detail(id), currentTenant.id], queryFn: () => organizationService.getMember(currentTenant.id, id) });
   const statusMutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
     mutationFn: (patch) => organizationService.updateMember(currentTenant.id, id, patch),
     invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(id)],
     onSuccess: (_, patch) => { notify.success(t('organization', patch.status === 'suspended' ? 'memberSuspended' : 'memberReactivated')); setConfirmStatus(false); },
+  });
+  /** `?print=1` déclenché depuis le menu d'actions de la liste (`MemberTable`) — réutilise le même mécanisme d'impression que le bouton « Imprimer » de cette page, sans dupliquer la logique. Le hook doit rester avant tout `return` conditionnel (règles des Hooks) : la garde `member` se fait à l'intérieur de l'effet, pas en sautant son appel. */
+  useEffect(() => { if (member && searchParams.get('print') === '1') { window.print(); setSearchParams((current) => { current.delete('print'); return current; }, { replace: true }); } }, [member, searchParams, setSearchParams]);
+  /** "Supprimer" est une transition de statut vers `exited` (déjà présent et fermé par D-MEM-04, jamais utilisé jusqu'ici) via `updateMember` — cohérent avec `statusHistory` append-only : aucune suppression physique n'existe nulle part dans ce modèle, une vraie suppression casserait l'historique/l'audit déjà en place. */
+  const deleteMutation = useMockMutation<Member | undefined, void>({
+    mutationFn: () => organizationService.updateMember(currentTenant.id, id, { status: 'exited' }),
+    invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(id)],
+    onSuccess: () => { notify.success(t('organization', 'memberDeleted')); setConfirmDelete(false); navigate('/organization/members'); },
   });
   if (isLoading) return <OrganizationPage title={t('organization', 'memberDetail')} description=""><DetailSkeleton /></OrganizationPage>;
   if (isError) return <OrganizationPage title={t('organization', 'memberDetail')} description=""><ErrorState onRetry={refetch} /></OrganizationPage>;
@@ -207,8 +246,14 @@ function MemberDetail({ t }: { t: T }) {
   const fullName = `${member.firstName} ${member.lastName}`;
   const isSuspended = member.status === 'suspended';
   const nextStatus: Member['status'] = isSuspended ? 'active' : 'suspended';
-  return <OrganizationPage title={fullName} description={`${member.id} · ${member.tenantName}`} actions={<><BackButton label={t('organization', 'backToMembers')} /><PermissionGate permission="members.update"><Button variant="outline" onClick={() => setConfirmStatus(true)}>{isSuspended ? <ShieldCheck size={15} /> : <UserCog size={15} />}{t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')}</Button></PermissionGate><Button variant="outline" onClick={() => navigate(`/organization/members/${member.id}/edit`)}><Edit3 size={15} />{t('organization', 'editMember')}</Button></>}><div className="grid gap-5 lg:grid-cols-[280px_1fr]"><Card className="h-fit"><CardContent className="flex flex-col items-center p-6 text-center"><Avatar name={fullName} large /><h2 className="mt-4 text-lg font-semibold">{fullName}</h2><p className="mt-1 text-sm text-muted-foreground">{member.occupation}</p><div className="mt-4"><StatusBadge label={t('organization', member.status)} tone={statusTone[member.status]} /></div><div className="mt-5 w-full space-y-3 border-t border-border pt-5 text-left"><Info label={t('organization', 'email')} value={member.email} icon={Mail} /><Info label={t('organization', 'phone')} value={member.phone} icon={Mail} /><Info label={t('organization', 'tenants')} value={member.tenantName} icon={Building2} /></div></CardContent></Card><MemberTabs t={t} member={member} /></div>
+  return <OrganizationPage title={fullName} description={`${member.id} · ${member.tenantName}`} actions={<><BackButton label={t('organization', 'backToMembers')} /><Button variant="outline" onClick={() => window.print()}><Printer size={15} />{t('organization', 'print')}</Button><PermissionGate permission="members.update"><Button variant="outline" onClick={() => setConfirmStatus(true)}>{isSuspended ? <ShieldCheck size={15} /> : <UserCog size={15} />}{t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')}</Button></PermissionGate><Button variant="outline" onClick={() => navigate(`/organization/members/${member.id}/edit`)}><Edit3 size={15} />{t('organization', 'editMember')}</Button><PermissionGate permission="members.delete"><Button variant="outline" onClick={() => setConfirmDelete(true)}><Trash2 size={15} />{t('organization', 'deleteMember')}</Button></PermissionGate></>}>
+    <MemberPrintStyles />
+    <div id="member-print-area" className="grid gap-5 lg:grid-cols-[280px_1fr]">
+      {/* PageHeader (titre/référence) est un frère de ce conteneur, donc masqué par les règles d'impression scopées — dupliqué ici, visible uniquement à l'impression (`print:block`), pour que la fiche imprimée reste complète sans toucher au composant partagé PageHeader. */}
+      <div className="hidden print:block lg:col-span-2"><h1 className="text-xl font-semibold">{fullName}</h1><p className="text-sm text-muted-foreground">{member.id} · {member.tenantName}</p></div>
+      <Card className="h-fit"><CardContent className="flex flex-col items-center p-6 text-center"><MemberAvatar member={member} size="lg" /><h2 className="mt-4 text-lg font-semibold">{fullName}</h2><p className="mt-1 text-sm text-muted-foreground">{member.occupation}</p><div className="mt-4"><StatusBadge label={t('organization', member.status)} tone={statusTone[member.status]} /></div><div className="mt-5 w-full space-y-3 border-t border-border pt-5 text-left"><Info label={t('organization', 'email')} value={member.email} icon={Mail} /><Info label={t('organization', 'phone')} value={member.phone} icon={Mail} /><Info label={t('organization', 'tenants')} value={member.tenantName} icon={Building2} /></div></CardContent></Card><MemberTabs t={t} member={member} /></div>
     {confirmStatus && <ConfirmDialog open title={t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')} description={t('organization', isSuspended ? 'reactivateMemberConfirm' : 'suspendMemberConfirm')} confirmLabel={t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')} cancelLabel={t('organization', 'cancel')} onConfirm={() => statusMutation.mutate({ status: nextStatus })} onCancel={() => setConfirmStatus(false)} />}
+    {confirmDelete && <ConfirmDialog open title={t('organization', 'deleteMember')} description={t('organization', 'deleteMemberConfirm')} confirmLabel={t('organization', 'deleteMember')} cancelLabel={t('organization', 'cancel')} onConfirm={() => deleteMutation.mutate()} onCancel={() => setConfirmDelete(false)} />}
   </OrganizationPage>;
 }
 
@@ -223,7 +268,7 @@ function MemberEdit({ t }: { t: T }) {
 
 function MemberEditForm({ t, member }: { t: T; member: Member }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, matricule: member.matricule, gender: member.gender, email: member.email, phone: member.phone, joinedAt: member.joinedAt, occupation: member.occupation, nationality: member.nationality, address: member.address, tenantId: member.tenantId, status: member.status });
+  const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, matricule: member.matricule, gender: member.gender, email: member.email, phone: member.phone, joinedAt: member.joinedAt, occupation: member.occupation, nationality: member.nationality, address: member.address, photoUrl: member.photoUrl, tenantId: member.tenantId, status: member.status });
   const [errors, setErrors] = useState<MemberFormErrors>({});
   const [isChecking, setIsChecking] = useState(false);
   const mutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
@@ -261,7 +306,7 @@ function MemberOverviewTab({ t, member }: { t: T; member: Member }) {
   return <><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('organization', 'accounts')} value={formatNumber(member.accounts.length)} icon={WalletCards} /><Metric label={t('organization', 'contributions')} value={formatNumber(contributions.length)} icon={Landmark} /><Metric label={t('organization', 'loans')} value={formatNumber(loans.length)} icon={Network} /></div><Card className="mt-4"><CardHeader><CardTitle className="text-sm">{t('organization', 'activity')}</CardTitle></CardHeader><CardContent><Timeline items={member.activities.map((item) => ({ id: item.id, title: item.type, description: item.description, date: formatDate(item.date), tone: 'default' as const }))} /></CardContent></Card></>;
 }
 
-function PersonalTab({ t, member }: { t: T; member: Member }) { const fields = [['firstName', member.firstName], ['lastName', member.lastName], ['gender', t('organization', member.gender)], ['birthDate', formatDate(member.birthDate)], ['nationality', member.nationality], ['idNumber', member.idNumber], ['occupation', member.occupation], ['joined', formatDate(member.joinedAt)]]; return <Card><CardHeader><CardTitle className="text-sm">{t('organization', 'personalInfo')}</CardTitle></CardHeader><CardContent className="grid gap-5 sm:grid-cols-2">{fields.map(([label, value]) => <Info key={label} label={t('organization', label)} value={value} icon={UserRound} />)}</CardContent></Card>; }
+function PersonalTab({ t, member }: { t: T; member: Member }) { const fields = [['firstName', member.firstName], ['lastName', member.lastName], ['gender', t('organization', member.gender)], ['birthDate', formatDate(member.birthDate)], ['nationality', member.nationality], ['idNumber', member.idNumber], ['occupation', member.occupation], ['address', member.address || '—'], ['joined', formatDate(member.joinedAt)]]; return <Card><CardHeader><CardTitle className="text-sm">{t('organization', 'personalInfo')}</CardTitle></CardHeader><CardContent className="grid gap-5 sm:grid-cols-2">{fields.map(([label, value]) => <Info key={label} label={t('organization', label)} value={value} icon={UserRound} />)}</CardContent></Card>; }
 function PositionsTab({ t, member }: { t: T; member: Member }) { return <div className="space-y-3">{member.positions.map((position) => <Card key={position.id}><CardContent className="flex flex-wrap items-center gap-4 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><UserCog size={17} /></span><div className="min-w-40 flex-1"><p className="text-sm font-semibold">{t('organization', position.role)}</p><p className="text-xs text-muted-foreground">{position.tenantName}</p></div><div><p className="text-xs text-muted-foreground">{t('organization', 'mandateStart')}</p><p className="text-sm"><DateDisplay value={position.startDate} /></p></div><div><p className="text-xs text-muted-foreground">{t('organization', 'mandateEnd')}</p><p className="text-sm">{position.endDate ? <DateDisplay value={position.endDate} /> : '—'}</p></div><StatusBadge label={position.endDate ? t('organization', 'expired') : t('organization', 'ongoing')} tone={position.endDate ? 'default' : 'success'} /></CardContent></Card>)}{member.positions.length === 0 && <EmptyState icon={UserCog} title={t('organization', 'noPositions')} />}</div>; }
 function AccountsTab({ t, member }: { t: T; member: Member }) { return <div className="grid gap-4 sm:grid-cols-2">{member.accounts.map((account) => <Card key={account.id}><CardContent className="p-5"><div className="flex items-center justify-between"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><WalletCards size={17} /></span><StatusBadge label={t('organization', 'active')} tone="success" /></div><p className="mt-4 text-xs text-muted-foreground">{t('organization', account.type)}</p><p className="mt-1 font-mono text-sm font-semibold">{account.accountNumber}</p><p className="mt-4 font-heading text-xl font-semibold"><MoneyDisplay amount={account.balance} /></p><p className="mt-1 text-xs text-muted-foreground">{t('organization', 'balance')}</p></CardContent></Card>)}{member.accounts.length === 0 && <EmptyState icon={WalletCards} title={t('organization', 'noAccounts')} />}</div>; }
 
@@ -447,7 +492,8 @@ function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'votes' | '
     </GovernanceTableShell>;
   }
 
-  const columns: TableColumn<BoardMember>[] = [{ key: 'memberName', header: t('organization', 'boardMemberName'), render: (row) => <button type="button" onClick={() => navigate(`/organization/members/${row.memberId}`)} className="flex items-center gap-3 text-left"><Avatar name={row.memberName} /><span><span className="block font-semibold">{row.memberName}</span><span className="block text-xs text-muted-foreground">{row.memberId}</span></span></button> }, { key: 'position', header: t('organization', 'position'), render: (row) => t('organization', row.position) }, { key: 'mandateStart', header: t('organization', 'mandateStart'), render: (row) => <DateDisplay value={row.mandateStart} /> }, { key: 'mandateEnd', header: t('organization', 'mandateEnd'), render: (row) => <DateDisplay value={row.mandateEnd} /> }, { key: 'status', header: t('organization', 'mandateStatus'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> }, { key: 'actions', header: '', className: 'w-40', render: (row) => row.status === 'ongoing' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => setMandateTarget(row)}>{t('organization', 'endMandate')}</Button></PermissionGate> }];
+  const memberById = new Map(members.map((item) => [item.id, item]));
+  const columns: TableColumn<BoardMember>[] = [{ key: 'memberName', header: t('organization', 'boardMemberName'), render: (row) => { const boardMember = memberById.get(row.memberId); return <button type="button" onClick={() => navigate(`/organization/members/${row.memberId}`)} className="flex items-center gap-3 text-left">{boardMember ? <MemberAvatar member={boardMember} /> : <Avatar name={row.memberName} />}<span><span className="block font-semibold">{row.memberName}</span><span className="block text-xs text-muted-foreground">{row.memberId}</span></span></button>; } }, { key: 'position', header: t('organization', 'position'), render: (row) => t('organization', row.position) }, { key: 'mandateStart', header: t('organization', 'mandateStart'), render: (row) => <DateDisplay value={row.mandateStart} /> }, { key: 'mandateEnd', header: t('organization', 'mandateEnd'), render: (row) => <DateDisplay value={row.mandateEnd} /> }, { key: 'status', header: t('organization', 'mandateStatus'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> }, { key: 'actions', header: '', className: 'w-40', render: (row) => row.status === 'ongoing' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => setMandateTarget(row)}>{t('organization', 'endMandate')}</Button></PermissionGate> }];
   return <GovernanceTableShell title={t('organization', 'boardMandatesTitle')} description={t('organization', 'boardMandatesDescription')} action={t('organization', 'addBoardMember')} icon={UserCog} t={t} onCreate={() => setCreateOpen(true)}>
     <DataTable columns={columns} rows={boardMembers} empty={<EmptyState icon={UserCog} title={t('organization', 'noBoardMembers')} />} />
     {createOpen && <ConfirmDialog open title={t('organization', 'addBoardMember')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => { const member = members.find((m) => m.id === boardForm.memberId); if (!member) return; createBoardMember.mutate({ memberId: member.id, memberName: `${member.firstName} ${member.lastName}`, position: boardForm.position, mandateStart: boardForm.mandateStart, mandateEnd: boardForm.mandateEnd }); }} onCancel={() => setCreateOpen(false)}>

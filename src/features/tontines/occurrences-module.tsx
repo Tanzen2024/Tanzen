@@ -6,7 +6,7 @@
  * représentées ici (D-TON-04-05/-06/-13/-19/-20/-21, réceptions successives,
  * correction/régularisation/annulation, clôtures Turn/Occurrence distinctes).
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CalendarClock, CalendarDays, CheckCircle2, ChevronRight, CircleStop, Plus, RotateCcw, ScrollText, Undo2, UsersRound } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -18,9 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
 import { tontineTurnsService } from '@/services/tontine-turns.service';
-import { tontinesService } from '@/services/tontines.service';
 import { ContributionTable } from './contributions-module';
-import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import type { TontineOccurrenceStatus, TontineTurnStatus, BeneficiaryReceptionStatus, ReceptionOperation } from '@/mocks/tontines/tontine-occurrences';
@@ -40,31 +38,77 @@ function Page({ title, description, actions, children }: { title: string; descri
 function Back({ label, onClick }: { label: string; onClick: () => void }) { return <Button variant="ghost" size="sm" onClick={onClick}>{label}</Button>; }
 function Info({ label, value }: { label: string; value: string }) { return <div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div>; }
 
-export function OccurrenceList({ t }: { t: T }) {
-  const { tontineId = '', cycleId = '' } = useParams();
+/** Table chronologique réutilisable — utilisée par `OccurrenceList` (page dédiée) et par l'onglet « Calendrier des occurrences » de `CycleDetail` (mandat P1), pour éviter toute duplication de colonnes. */
+export function OccurrenceCalendarTable({ t, tontineId, periodId, occurrences }: { t: T; tontineId: string; periodId: string; occurrences: (Awaited<ReturnType<typeof tontineTurnsService.listOccurrencesByPeriod>>)[number][] }) {
   const navigate = useNavigate();
-  const { currentTenant } = useTenant();
-  const { data: cycle, isLoading: isCycleLoading, isError: isCycleError, refetch: refetchCycle } = useQuery({ queryKey: [...queryKeys.tontines.cycle(cycleId), currentTenant.id], queryFn: () => tontinesService.getCycle(currentTenant.id, cycleId) });
-  const { data: occurrences = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'occurrences', cycleId, currentTenant.id], queryFn: () => tontineTurnsService.listOccurrencesByCycle(currentTenant.id, cycleId), enabled: Boolean(cycle) });
-  if (isCycleLoading) return <Page title={t('tontines', 'occurrencesTitle')}><TableSkeleton /></Page>;
-  if (isCycleError) return <Page title={t('tontines', 'occurrencesTitle')}><ErrorState onRetry={refetchCycle} /></Page>;
-  if (!cycle) return <NotFoundPage />;
-  if (isLoading) return <Page title={t('tontines', 'occurrencesTitle')}><TableSkeleton /></Page>;
-  if (isError) return <Page title={t('tontines', 'occurrencesTitle')}><ErrorState onRetry={refetch} /></Page>;
   const columns: TableColumn<(typeof occurrences)[number]>[] = [
-    { key: 'occurrenceNumber', header: t('tontines', 'occurrenceNumber'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/occurrences/${row.id}`)} className="font-semibold text-primary">#{row.occurrenceNumber}</button> },
+    { key: 'occurrenceNumber', header: t('tontines', 'occurrenceNumber'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.id}`)} className="font-semibold text-primary">#{row.occurrenceNumber}</button> },
     { key: 'plannedDate', header: t('tontines', 'plannedDate'), render: (row) => <DateDisplay value={row.plannedDate} /> },
     { key: 'actualDate', header: t('tontines', 'actualDate'), render: (row) => row.actualDate ? <DateDisplay value={row.actualDate} /> : <span className="text-muted-foreground">—</span> },
     { key: 'status', header: t('tontines', 'occurrenceStatus'), render: (row) => <StatusBadge label={t('tontines', STATUS_LABEL_KEY[row.status])} tone={OCC_TONE[row.status]} /> },
-    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/occurrences/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
+    { key: 'turn', header: t('tontines', 'turn'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.id}/turn`)} className="flex items-center gap-1 text-primary hover:underline">{t('tontines', 'turn')}<ChevronRight size={14} /></button> },
+    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
   ];
-  return <Page title={t('tontines', 'occurrencesTitle')} description={`${cycle.id} · ${t('tontines', 'occurrencesDescription')}`} actions={<Back label={t('tontines', 'backToCycles')} onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}`)} />}>
-    <DataTable columns={columns} rows={occurrences} empty={<EmptyState icon={CalendarDays} title={t('tontines', 'noOccurrences')} />} />
+  return <DataTable columns={columns} rows={occurrences} empty={<EmptyState icon={CalendarDays} title={t('tontines', 'noOccurrences')} />} />;
+}
+
+export function OccurrenceList({ t }: { t: T }) {
+  const { tontineId = '', periodId = '' } = useParams();
+  const navigate = useNavigate();
+  const { currentTenant } = useTenant();
+  const { data: period, isLoading: isPeriodLoading, isError: isPeriodError, refetch: refetchPeriod } = useQuery({ queryKey: ['tontines', 'period', periodId, currentTenant.id], queryFn: () => tontineTurnsService.getPeriod(currentTenant.id, periodId) });
+  const { data: occurrences = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'occurrences', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listOccurrencesByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
+  if (isPeriodLoading) return <Page title={t('tontines', 'occurrencesTitle')}><TableSkeleton /></Page>;
+  if (isPeriodError) return <Page title={t('tontines', 'occurrencesTitle')}><ErrorState onRetry={refetchPeriod} /></Page>;
+  if (!period) return <NotFoundPage />;
+  if (isLoading) return <Page title={t('tontines', 'occurrencesTitle')}><TableSkeleton /></Page>;
+  if (isError) return <Page title={t('tontines', 'occurrencesTitle')}><ErrorState onRetry={refetch} /></Page>;
+  return <Page title={t('tontines', 'occurrencesTitle')} description={`${period.id} · ${t('tontines', 'occurrencesDescription')}`} actions={<><Back label={t('tontines', 'backToPeriod')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}`)} /><PermissionGate permission="cycles.manage"><Button onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/create`)}><Plus size={16} />{t('tontines', 'createOccurrence')}</Button></PermissionGate></>}>
+    <OccurrenceCalendarTable t={t} tontineId={tontineId} periodId={periodId} occurrences={occurrences} />
+  </Page>;
+}
+
+export function OccurrenceCreate({ t }: { t: T }) {
+  const { tontineId = '', periodId = '' } = useParams();
+  const navigate = useNavigate();
+  const { currentTenant } = useTenant();
+  const { data: period, isLoading: isPeriodLoading, isError: isPeriodError, refetch: refetchPeriod } = useQuery({ queryKey: ['tontines', 'period', periodId, currentTenant.id], queryFn: () => tontineTurnsService.getPeriod(currentTenant.id, periodId) });
+  const { data: occurrences = [] } = useQuery({ queryKey: ['tontines', 'occurrences', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listOccurrencesByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
+  const [occurrenceNumber, setOccurrenceNumber] = useState(1);
+  const [plannedDate, setPlannedDate] = useState('');
+  const [error, setError] = useState<string | undefined>();
+  const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createOccurrence>>, { periodId: string; occurrenceNumber: number; plannedDate: string }>({
+    mutationFn: (input) => tontineTurnsService.createOccurrence(currentTenant.id, input),
+    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id]],
+    onSuccess: (occurrence) => {
+      if (!occurrence) { notify.error(t('tontines', 'occurrenceNumberTaken')); return; }
+      notify.success(t('tontines', 'occurrenceCreated'));
+      navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrence.id}`);
+    },
+  });
+  const [numberTouched, setNumberTouched] = useState(false);
+  useEffect(() => {
+    if (!numberTouched) setOccurrenceNumber(occurrences.length + 1);
+  }, [occurrences.length, numberTouched]);
+  if (isPeriodLoading) return <Page title={t('tontines', 'createOccurrence')}><DetailSkeleton /></Page>;
+  if (isPeriodError) return <Page title={t('tontines', 'createOccurrence')}><ErrorState onRetry={refetchPeriod} /></Page>;
+  if (!period) return <NotFoundPage />;
+  const handleSave = () => {
+    if (!plannedDate) { setError(t('tontines', 'fieldRequired')); return; }
+    setError(undefined);
+    mutation.mutate({ periodId, occurrenceNumber, plannedDate });
+  };
+  return <Page title={t('tontines', 'createOccurrence')} description={period.id} actions={<Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences`)} />}>
+    <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'general')}</CardTitle></CardHeader><CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+      <div className="space-y-2"><Label htmlFor="occurrence-number">{t('tontines', 'occurrenceNumber')}</Label><Input id="occurrence-number" type="number" min={1} value={occurrenceNumber} onChange={(event) => { setNumberTouched(true); setOccurrenceNumber(Number(event.target.value)); }} /></div>
+      <div className="space-y-2"><Label htmlFor="occurrence-planned-date">{t('tontines', 'plannedDate')}</Label><Input id="occurrence-planned-date" type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div>
+    </CardContent></Card>
+    <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences`)}>{t('tontines', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('tontines', 'saving') : t('tontines', 'save')}</Button></div>
   </Page>;
 }
 
 export function OccurrenceDetail({ t }: { t: T }) {
-  const { tontineId = '', cycleId = '', occurrenceId = '' } = useParams();
+  const { tontineId = '', periodId = '', occurrenceId = '' } = useParams();
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
   const { data: occurrence, isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getOccurrence(currentTenant.id, occurrenceId) });
@@ -73,7 +117,7 @@ export function OccurrenceDetail({ t }: { t: T }) {
   const [confirmClose, setConfirmClose] = useState(false);
   const closeMutation = useMockMutation({
     mutationFn: () => tontineTurnsService.closeOccurrence(currentTenant.id, occurrenceId),
-    invalidateKeys: [['tontines', 'occurrence', occurrenceId, currentTenant.id], ['tontines', 'occurrences', cycleId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'occurrence', occurrenceId, currentTenant.id], ['tontines', 'occurrences', periodId, currentTenant.id]],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'turnClosePrecondition')); return; }
       notify.success(t('tontines', 'occurrenceClosed'));
@@ -83,7 +127,7 @@ export function OccurrenceDetail({ t }: { t: T }) {
   if (isLoading) return <Page title={t('tontines', 'occurrenceDetail')}><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('tontines', 'occurrenceDetail')}><ErrorState onRetry={refetch} /></Page>;
   if (!occurrence) return <NotFoundPage />;
-  return <Page title={`${t('tontines', 'occurrenceNumber')} ${occurrence.occurrenceNumber}`} description={occurrence.id} actions={<><Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/occurrences`)} />{occurrence.status === 'OPEN' && turn?.status === 'CLOSED' && <PermissionGate permission="cycles.manage"><Button variant="outline" onClick={() => setConfirmClose(true)}><CircleStop size={15} />{t('tontines', 'closeOccurrence')}</Button></PermissionGate>}</>}>
+  return <Page title={`${t('tontines', 'occurrenceNumber')} ${occurrence.occurrenceNumber}`} description={occurrence.id} actions={<><Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences`)} />{occurrence.status === 'OPEN' && turn?.status === 'CLOSED' && <PermissionGate permission="cycles.manage"><Button variant="outline" onClick={() => setConfirmClose(true)}><CircleStop size={15} />{t('tontines', 'closeOccurrence')}</Button></PermissionGate>}</>}>
     {confirmClose && <ConfirmDialog open title={t('tontines', 'closeOccurrence')} description={t('tontines', 'closeOccurrenceConfirm')} confirmLabel={t('tontines', 'confirm')} cancelLabel={t('tontines', 'cancel')} onConfirm={() => closeMutation.mutate(undefined)} onCancel={() => setConfirmClose(false)} />}
     <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-3">
       <Info label={t('tontines', 'plannedDate')} value={new Date(occurrence.plannedDate).toLocaleDateString('fr-FR')} />
@@ -91,7 +135,7 @@ export function OccurrenceDetail({ t }: { t: T }) {
       <div><p className="text-[11px] text-muted-foreground">{t('tontines', 'occurrenceStatus')}</p><StatusBadge label={t('tontines', STATUS_LABEL_KEY[occurrence.status])} tone={OCC_TONE[occurrence.status]} /></div>
     </CardContent></Card>
     <Card><CardHeader className="flex-row items-center justify-between"><CardTitle className="text-sm">{t('tontines', 'turn')}</CardTitle>{turn && <StatusBadge label={t('tontines', STATUS_LABEL_KEY[turn.status])} tone={OCC_TONE[turn.status]} />}</CardHeader><CardContent>
-      {turn ? <Button variant="outline" onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/occurrences/${occurrenceId}/turn`)}><UsersRound size={15} />{t('tontines', 'beneficiaries')}<ChevronRight size={14} /></Button> : <EmptyState icon={CalendarClock} title={t('tontines', 'noOccurrences')} />}
+      {turn ? <Button variant="outline" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrenceId}/turn`)}><UsersRound size={15} />{t('tontines', 'beneficiaries')}<ChevronRight size={14} /></Button> : <EmptyState icon={CalendarClock} title={t('tontines', 'noOccurrences')} />}
     </CardContent></Card>
     <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'occurrenceContributions')}</CardTitle></CardHeader><CardContent className="p-0"><ContributionTable t={t} rows={contributions} /></CardContent></Card>
   </Page>;
@@ -182,7 +226,7 @@ function BeneficiaryCard({ t, beneficiary, turnClosed }: { t: T; beneficiary: Aw
 }
 
 export function TurnDetail({ t }: { t: T }) {
-  const { tontineId = '', cycleId = '', occurrenceId = '' } = useParams();
+  const { tontineId = '', periodId = '', occurrenceId = '' } = useParams();
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
   const { data: turn, isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'turn-by-occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getTurnByOccurrence(currentTenant.id, occurrenceId) });
@@ -201,7 +245,7 @@ export function TurnDetail({ t }: { t: T }) {
   if (isError) return <Page title={t('tontines', 'turnDetail')}><ErrorState onRetry={refetch} /></Page>;
   if (!turn) return <NotFoundPage />;
   const allReceived = beneficiaries.length > 0 && beneficiaries.every((item) => item.status === 'RECEIVED');
-  return <Page title={`${t('tontines', 'turn')} #${turn.turnNumber}`} description={turn.id} actions={<><Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/occurrences/${occurrenceId}`)} />{turn.status === 'OPEN' && <PermissionGate permission="cycles.manage"><Button variant="outline" disabled={!allReceived} onClick={() => setConfirmClose(true)}><CheckCircle2 size={15} />{t('tontines', 'closeTurn')}</Button></PermissionGate>}</>}>
+  return <Page title={`${t('tontines', 'turn')} #${turn.turnNumber}`} description={turn.id} actions={<><Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrenceId}`)} />{turn.status === 'OPEN' && <PermissionGate permission="cycles.manage"><Button variant="outline" disabled={!allReceived} onClick={() => setConfirmClose(true)}><CheckCircle2 size={15} />{t('tontines', 'closeTurn')}</Button></PermissionGate>}</>}>
     {confirmClose && <ConfirmDialog open title={t('tontines', 'closeTurn')} description={t('tontines', 'closeTurnConfirm')} confirmLabel={t('tontines', 'confirm')} cancelLabel={t('tontines', 'cancel')} onConfirm={() => closeMutation.mutate(undefined)} onCancel={() => setConfirmClose(false)} />}
     <div className="flex items-center gap-3"><StatusBadge label={t('tontines', STATUS_LABEL_KEY[turn.status])} tone={OCC_TONE[turn.status]} /><span className="text-xs text-muted-foreground">{formatNumber(beneficiaries.length)} {t('tontines', 'beneficiaries').toLowerCase()}</span></div>
     {beneficiaries.length === 0 ? <EmptyState icon={UsersRound} title={t('tontines', 'noBeneficiaries')} /> : (

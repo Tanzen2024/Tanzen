@@ -15,7 +15,8 @@ import { currentUser, type PlatformScope } from '@/mocks/rbac.mocks';
  * `'tenant'` ici). Voir docs/COMMERCIAL_TENANT_EXECUTION_PLAN.md §21.
  */
 /** `matricule`/`gender`/`joinedAt` ajoutés au formulaire (mandat P1 MEMBERS — alignement du modèle canonique) ; `joinedAt` reste optionnel en entrée (défaut : date du jour, comportement préexistant conservé). */
-export type MemberInput = Pick<Member, 'firstName' | 'lastName' | 'email' | 'phone' | 'occupation' | 'nationality' | 'address' | 'status' | 'gender' | 'matricule'> & { tenantId: string; tenantName: string; joinedAt?: string };
+/** `photoUrl` optionnel (défaut `''`, jamais requis) : de nombreux appelants pré-existants (tests d'autres services, ex. `tontine-turns.service.test.ts`) construisent un `MemberInput` sans le connaître — le rendre obligatoire aurait cassé des modules hors du périmètre Membres. */
+export type MemberInput = Pick<Member, 'firstName' | 'lastName' | 'email' | 'phone' | 'occupation' | 'nationality' | 'address' | 'status' | 'gender' | 'matricule'> & { tenantId: string; tenantName: string; joinedAt?: string; photoUrl?: string };
 /**
  * `type`/`description` optionnels : `type` par défaut à REGULAR (D-4C4-WEB-02).
  * Correction post-implémentation Phase 4C-4 (cf.
@@ -97,6 +98,7 @@ export const organizationService = {
         syncStatus: 'synced', version: 1,
         createdAt: now, updatedAt: now, deletedAt: null,
         createdBy: currentUser.id, updatedBy: currentUser.id,
+        photoUrl: '',
         ...input,
       };
       members.push(member);

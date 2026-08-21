@@ -12,6 +12,8 @@
  * docs/P1_TONTINE_D-TON-04_REVISION_FINAL_DECISION_GATE.md §5.
  */
 
+import type { UnitCode } from '@/constants/units';
+
 export type ValueType = 'MONEY' | 'GOODS';
 export type TontineOccurrenceStatus = 'OPEN' | 'CLOSED';
 export type TontineTurnStatus = 'OPEN' | 'CLOSED';
@@ -22,17 +24,27 @@ export type ReceptionOperationType = 'reception' | 'correction' | 'regularizatio
 export type TontineAdhesion = {
   id: string;
   tenantId: string;
-  tontineId: string;
+  /** Parent direct — mandat « adhésions gérées au niveau de la Période » : une Adhésion appartient à UNE Période, jamais à la Tontine directement (le `tontineId` se retrouve via `period.tontineId` quand nécessaire). */
+  periodId: string;
   memberId: string;
   memberName: string;
+  /** Sert de date de début pour la règle d'éligibilité (§10 mandat refonte) — jamais renommée `startDate` pour ne pas casser l'existant, mais joue exactement ce rôle. */
   joinedAt: string;
+  /** Renseignée uniquement quand `status` passe à `exited` (clôture logique, jamais de suppression) — sert de date de fin pour l'éligibilité. */
+  endDate: string | null;
   status: 'active' | 'exited';
 };
+
+/** Un adhérent ne peut participer à une occurrence que si son adhésion est active à la date de celle-ci (§10, règle obligatoire) — `date` doit être `occurrence.actualDate ?? occurrence.plannedDate` (aucune notion de « date d'occurrence » unique canonique n'existe au-delà de ces deux champs). */
+export function isAdhesionActiveAt(adhesion: TontineAdhesion, date: string): boolean {
+  return adhesion.joinedAt <= date && (adhesion.endDate === null || adhesion.endDate >= date);
+}
 
 export type TontineOccurrence = {
   id: string;
   tenantId: string;
-  tontineCycleId: string;
+  /** Parent temporel — remplace l'ancien `tontineCycleId` (mandat refonte Tontine→Période→Occurrence). `TontineCycle` reste une structure légataire séparée, jamais référencée ici. */
+  periodId: string;
   occurrenceNumber: number;
   plannedDate: string;
   actualDate: string | null;
@@ -101,8 +113,12 @@ export type TontineContribution = {
   tontineOccurrenceId: string;
   valueType: ValueType;
   expectedAmount?: number;
+  /** Devise préremplie depuis `Tontine.currency` à la création (mandat devise/unité) — jamais imposée après coup, l'utilisateur reste libre de la modifier faute de règle métier l'interdisant. */
+  currency?: string;
   expectedQuantity?: number;
   item?: string;
+  /** Unité préremplie depuis `Tontine.unit` à la création — même statut que `currency` ci-dessus. */
+  unit?: UnitCode;
   paidAmount: number;
   paidQuantity: number;
   paidAt: string | null;
@@ -140,18 +156,28 @@ export function computeBeneficiaryStatus(beneficiary: TontineTurnBeneficiary): B
   return 'PARTIAL';
 }
 
+/**
+ * Rattachement à PER-001 (TON-001/T-002) ou PER-002 (TON-002/T-005) — dérivé
+ * sans ambiguïté des Contributions/Bénéficiaires déjà seedés qui référencent
+ * ces adhésions (CTB-001/TB-001 → ADH-001 → OCC-001 → PER-001, etc., mandat
+ * « adhésions au niveau de la période » §29 : ne pas réutiliser artificiellement
+ * une adhésion entre deux périodes — chaque ADH-xxx garde ici l'unique période
+ * à laquelle son historique la rattache déjà).
+ */
 export const tontineAdhesions: TontineAdhesion[] = [
-  { id: 'ADH-001', tenantId: 'T-002', tontineId: 'TON-001', memberId: 'M-001', memberName: 'Fatou Ndiaye', joinedAt: '2026-01-01', status: 'active' },
-  { id: 'ADH-002', tenantId: 'T-002', tontineId: 'TON-001', memberId: 'M-002', memberName: 'Mamadou Sow', joinedAt: '2026-01-01', status: 'active' },
-  { id: 'ADH-003', tenantId: 'T-002', tontineId: 'TON-001', memberId: 'M-007', memberName: 'Khadija Mbaye', joinedAt: '2026-01-01', status: 'active' },
-  { id: 'ADH-004', tenantId: 'T-002', tontineId: 'TON-001', memberId: 'M-006', memberName: 'Cheikh Diop', joinedAt: '2026-01-01', status: 'active' },
-  { id: 'ADH-005', tenantId: 'T-005', tontineId: 'TON-002', memberId: 'M-005', memberName: 'Awa Cissé', joinedAt: '2026-07-01', status: 'active' },
+  { id: 'ADH-001', tenantId: 'T-002', periodId: 'PER-001', memberId: 'M-001', memberName: 'Fatou Ndiaye', joinedAt: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'ADH-002', tenantId: 'T-002', periodId: 'PER-001', memberId: 'M-002', memberName: 'Mamadou Sow', joinedAt: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'ADH-003', tenantId: 'T-002', periodId: 'PER-001', memberId: 'M-007', memberName: 'Khadija Mbaye', joinedAt: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'ADH-004', tenantId: 'T-002', periodId: 'PER-001', memberId: 'M-006', memberName: 'Cheikh Diop', joinedAt: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'ADH-005', tenantId: 'T-005', periodId: 'PER-002', memberId: 'M-005', memberName: 'Awa Cissé', joinedAt: '2026-07-01', endDate: null, status: 'active' },
+  /** Illustre le cas « ancien adhérent » requis par le mandat refonte (§7-9, adhésion historisée, jamais supprimée) — un membre déjà présent dans les mocks (M-008, Ibrahima Sarr), rejoint PER-001 avant le cycle courant puis sorti. */
+  { id: 'ADH-006', tenantId: 'T-002', periodId: 'PER-001', memberId: 'M-008', memberName: 'Ibrahima Sarr', joinedAt: '2025-06-01', endDate: '2026-05-01', status: 'exited' },
 ];
 
 export const tontineOccurrences: TontineOccurrence[] = [
-  { id: 'OCC-001', tenantId: 'T-002', tontineCycleId: 'CYC-002', occurrenceNumber: 1, plannedDate: '2026-06-20', actualDate: '2026-06-20', status: 'CLOSED' },
-  { id: 'OCC-002', tenantId: 'T-002', tontineCycleId: 'CYC-002', occurrenceNumber: 2, plannedDate: '2026-07-20', actualDate: null, status: 'OPEN' },
-  { id: 'OCC-003', tenantId: 'T-005', tontineCycleId: 'CYC-003', occurrenceNumber: 1, plannedDate: '2026-08-15', actualDate: null, status: 'OPEN' },
+  { id: 'OCC-001', tenantId: 'T-002', periodId: 'PER-001', occurrenceNumber: 1, plannedDate: '2026-06-20', actualDate: '2026-06-20', status: 'CLOSED' },
+  { id: 'OCC-002', tenantId: 'T-002', periodId: 'PER-001', occurrenceNumber: 2, plannedDate: '2026-07-20', actualDate: null, status: 'OPEN' },
+  { id: 'OCC-003', tenantId: 'T-005', periodId: 'PER-002', occurrenceNumber: 1, plannedDate: '2026-08-15', actualDate: null, status: 'OPEN' },
 ];
 
 export const tontineTurns: TontineTurn[] = [
@@ -189,19 +215,19 @@ export const tontineTurnBeneficiaries: TontineTurnBeneficiary[] = [
 
 export const tontineContributions: TontineContribution[] = [
   {
-    id: 'CTB-001', tenantId: 'T-002', adhesionId: 'ADH-001', tontineOccurrenceId: 'OCC-001', valueType: 'MONEY', expectedAmount: 350_000, paidAmount: 350_000, paidQuantity: 0, paidAt: '2026-06-15', status: 'PAID',
+    id: 'CTB-001', tenantId: 'T-002', adhesionId: 'ADH-001', tontineOccurrenceId: 'OCC-001', valueType: 'MONEY', expectedAmount: 350_000, currency: 'XOF', paidAmount: 350_000, paidQuantity: 0, paidAt: '2026-06-15', status: 'PAID',
     payments: [{ id: 'PAY-001', amount: 350_000, date: '2026-06-15', actorId: 'U-001', actorName: 'Amadou Mbaye' }],
   },
   {
-    id: 'CTB-002', tenantId: 'T-002', adhesionId: 'ADH-002', tontineOccurrenceId: 'OCC-002', valueType: 'MONEY', expectedAmount: 350_000, paidAmount: 200_000, paidQuantity: 0, paidAt: '2026-07-15', status: 'PARTIAL',
+    id: 'CTB-002', tenantId: 'T-002', adhesionId: 'ADH-002', tontineOccurrenceId: 'OCC-002', valueType: 'MONEY', expectedAmount: 350_000, currency: 'XOF', paidAmount: 200_000, paidQuantity: 0, paidAt: '2026-07-15', status: 'PARTIAL',
     payments: [
       { id: 'PAY-002', amount: 150_000, date: '2026-07-05', actorId: 'U-001', actorName: 'Amadou Mbaye' },
       { id: 'PAY-003', amount: 50_000, date: '2026-07-15', actorId: 'U-001', actorName: 'Amadou Mbaye' },
     ],
   },
-  { id: 'CTB-003', tenantId: 'T-002', adhesionId: 'ADH-003', tontineOccurrenceId: 'OCC-002', valueType: 'MONEY', expectedAmount: 350_000, paidAmount: 0, paidQuantity: 0, paidAt: null, status: 'WAIVED', payments: [] },
+  { id: 'CTB-003', tenantId: 'T-002', adhesionId: 'ADH-003', tontineOccurrenceId: 'OCC-002', valueType: 'MONEY', expectedAmount: 350_000, currency: 'XOF', paidAmount: 0, paidQuantity: 0, paidAt: null, status: 'WAIVED', payments: [] },
   {
-    id: 'CTB-004', tenantId: 'T-005', adhesionId: 'ADH-005', tontineOccurrenceId: 'OCC-003', valueType: 'GOODS', expectedQuantity: 2, item: 'Bidon d’huile 5L', paidAmount: 0, paidQuantity: 2, paidAt: '2026-08-10', status: 'PAID',
+    id: 'CTB-004', tenantId: 'T-005', adhesionId: 'ADH-005', tontineOccurrenceId: 'OCC-003', valueType: 'GOODS', expectedQuantity: 2, item: 'Bidon d’huile 5L', unit: 'BIDON', paidAmount: 0, paidQuantity: 2, paidAt: '2026-08-10', status: 'PAID',
     payments: [{ id: 'PAY-004', quantity: 2, date: '2026-08-10', actorId: 'U-009', actorName: 'Awa Cissé' }],
   },
 ];

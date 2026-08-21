@@ -5,7 +5,7 @@
  * jamais directement un Member ni un Turn). Aucun accès direct aux mocks
  * depuis les composants — tout passe par `tontineTurnsService`.
  */
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Plus, ScrollText } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -23,6 +23,8 @@ import { notify } from '@/lib/notify';
 import type { ValueType, ContributionStatus } from '@/mocks/tontines/tontine-occurrences';
 import type { TableColumn } from '@/types/ui';
 import { formatValue } from './value-format';
+import { currencies, DEFAULT_CURRENCY_CODE } from '@/constants/currencies';
+import { units } from '@/constants/units';
 
 type T = (section: 'tontines' | 'nav', key: string, values?: Record<string, string>) => string;
 
@@ -41,8 +43,8 @@ export function ContributionTable({ t, rows }: { t: T; rows: Awaited<ReturnType<
     { key: 'id', header: 'ID', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/contributions/${row.id}`)} className="font-mono text-xs text-primary hover:underline">{row.id}</button> },
     { key: 'adhesionId', header: t('tontines', 'adhesion'), render: (row) => <span className="font-mono text-xs">{row.adhesionId}</span> },
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => t('tontines', row.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods') },
-    { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item) },
-    { key: 'paid', header: t('tontines', 'contributionAmount'), render: (row) => formatValue(row.valueType, row.paidAmount, row.paidQuantity, row.item) },
+    { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
+    { key: 'paid', header: t('tontines', 'contributionAmount'), render: (row) => formatValue(row.valueType, row.paidAmount, row.paidQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
     { key: 'paidAt', header: t('tontines', 'contributionDate'), render: (row) => row.paidAt ? new Date(row.paidAt).toLocaleDateString('fr-FR') : '—' },
     { key: 'status', header: t('tontines', 'contributionStatus'), render: (row) => <StatusBadge label={t('tontines', CONTRIBUTION_LABEL_KEY[row.status])} tone={CONTRIBUTION_TONE[row.status]} /> },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/contributions/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
@@ -79,8 +81,8 @@ export function ContributionList({ t }: { t: T }) {
     { key: 'member', header: t('tontines', 'adhesionMember'), render: (row) => memberNameOf(row.adhesionId) },
     { key: 'occurrence', header: t('tontines', 'occurrenceNumber'), render: (row) => <span className="font-mono text-xs">{row.tontineOccurrenceId}</span> },
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => t('tontines', row.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods') },
-    { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item) },
-    { key: 'paid', header: t('tontines', 'contributionAmount'), render: (row) => formatValue(row.valueType, row.paidAmount, row.paidQuantity, row.item) },
+    { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
+    { key: 'paid', header: t('tontines', 'contributionAmount'), render: (row) => formatValue(row.valueType, row.paidAmount, row.paidQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
     { key: 'paidAt', header: t('tontines', 'contributionDate'), render: (row) => row.paidAt ? new Date(row.paidAt).toLocaleDateString('fr-FR') : '—' },
     { key: 'status', header: t('tontines', 'contributionStatus'), render: (row) => <StatusBadge label={t('tontines', CONTRIBUTION_LABEL_KEY[row.status])} tone={CONTRIBUTION_TONE[row.status]} /> },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/contributions/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
@@ -108,7 +110,22 @@ export function ContributionCreate({ t }: { t: T }) {
   const [valueType, setValueType] = useState<ValueType>('MONEY');
   const [value, setValue] = useState('');
   const [item, setItem] = useState('');
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY_CODE);
+  const [unit, setUnit] = useState('');
   const [error, setError] = useState<string | undefined>();
+
+  /** Préremplissage depuis la Tontine parente (§8/§10 du mandat devise/unité) : valueType, devise (MONEY) ou nature/quantité/unité de référence (GOODS). Ce sont des valeurs de départ, pas un verrouillage — aucune règle sourcée n'impose que la Contribution reste identique à la Tontine, donc tous les champs restent modifiables ensuite. */
+  useEffect(() => {
+    if (!tontine) return;
+    setValueType(tontine.valueType);
+    if (tontine.valueType === 'GOODS') {
+      setItem(tontine.item ?? '');
+      setValue(tontine.quantity ? String(tontine.quantity) : '');
+      setUnit(tontine.unit ?? '');
+    } else {
+      setCurrency(tontine.currency ?? DEFAULT_CURRENCY_CODE);
+    }
+  }, [tontine]);
 
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createContribution>>, ContributionInput>({
     mutationFn: (input) => tontineTurnsService.createContribution(currentTenant.id, input),
@@ -130,8 +147,10 @@ export function ContributionCreate({ t }: { t: T }) {
     mutation.mutate({
       adhesionId, tontineOccurrenceId: occurrenceId, valueType,
       expectedAmount: valueType === 'MONEY' ? Number(value) || 0 : undefined,
+      currency: valueType === 'MONEY' ? currency : undefined,
       expectedQuantity: valueType === 'GOODS' ? Number(value) || 0 : undefined,
       item: valueType === 'GOODS' && item.trim() ? item.trim() : undefined,
+      unit: valueType === 'GOODS' && unit ? (unit as ContributionInput['unit']) : undefined,
     });
   };
 
@@ -139,11 +158,11 @@ export function ContributionCreate({ t }: { t: T }) {
     <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'general')}</CardTitle></CardHeader><CardContent className="grid gap-4 p-5 sm:grid-cols-2">
       <div className="space-y-2">
         <Label htmlFor="contribution-adhesion">{t('tontines', 'selectAdhesion')}</Label>
-        <select id="contribution-adhesion" value={adhesionId} onChange={(event) => setAdhesionId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectAdhesion')}</option>{adhesions.map((adhesion) => <option key={adhesion.id} value={adhesion.id}>{adhesion.memberName} · {adhesion.id}</option>)}</select>
+        <select id="contribution-adhesion" value={adhesionId} onChange={(event) => setAdhesionId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectAdhesion')}</option>{adhesions.map((adhesion) => <option key={adhesion.id} value={adhesion.id}>{adhesion.memberName} · {adhesion.id} · {adhesion.periodId}</option>)}</select>
       </div>
       <div className="space-y-2">
         <Label htmlFor="contribution-occurrence">{t('tontines', 'selectOccurrence')}</Label>
-        <select id="contribution-occurrence" value={occurrenceId} onChange={(event) => setOccurrenceId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectOccurrence')}</option>{occurrences.map((occurrence) => <option key={occurrence.id} value={occurrence.id}>#{occurrence.occurrenceNumber} · {occurrence.plannedDate}</option>)}</select>
+        <select id="contribution-occurrence" value={occurrenceId} onChange={(event) => setOccurrenceId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectOccurrence')}</option>{occurrences.map((occurrence) => <option key={occurrence.id} value={occurrence.id}>#{occurrence.occurrenceNumber} · {occurrence.plannedDate} · {occurrence.periodId}</option>)}</select>
       </div>
       <div className="space-y-2">
         <Label htmlFor="contribution-value-type">{t('tontines', 'valueType')}</Label>
@@ -153,10 +172,20 @@ export function ContributionCreate({ t }: { t: T }) {
         <Label htmlFor="contribution-value">{valueType === 'MONEY' ? t('tontines', 'expectedAmount') : t('tontines', 'expectedQuantity')}</Label>
         <Input id="contribution-value" type="number" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} aria-invalid={Boolean(error)} />
       </div>
-      {valueType === 'GOODS' && <div className="space-y-2 sm:col-span-2">
-        <Label htmlFor="contribution-item">{t('tontines', 'item')}</Label>
-        <Input id="contribution-item" value={item} onChange={(event) => setItem(event.target.value)} />
+      {valueType === 'MONEY' && <div className="space-y-2">
+        <Label htmlFor="contribution-currency">{t('tontines', 'currency')}</Label>
+        <select id="contribution-currency" value={currency} onChange={(event) => setCurrency(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{currencies.map((option) => <option key={option.code} value={option.code}>{option.code} — {option.labelFr}</option>)}</select>
       </div>}
+      {valueType === 'GOODS' && <>
+        <div className="space-y-2">
+          <Label htmlFor="contribution-item">{t('tontines', 'item')}</Label>
+          <Input id="contribution-item" value={item} onChange={(event) => setItem(event.target.value)} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="contribution-unit">{t('tontines', 'unit')}</Label>
+          <select id="contribution-unit" value={unit} onChange={(event) => setUnit(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select>
+        </div>
+      </>}
       <FieldError message={error} />
     </CardContent></Card>
     <div className="flex justify-end gap-2">
@@ -209,14 +238,15 @@ export function ContributionDetail({ t }: { t: T }) {
     <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-4">
       <Info label={t('tontines', 'adhesionMember')} value={adhesion?.memberName ?? contribution.adhesionId} />
       <Info label={t('tontines', 'valueType')} value={t('tontines', contribution.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods')} />
-      <Info label={t('tontines', 'expectedValue')} value={formatValue(contribution.valueType, contribution.expectedAmount, contribution.expectedQuantity, contribution.item)} />
+      {contribution.valueType === 'GOODS' && <Info label={t('tontines', 'goodsItem')} value={contribution.item || '—'} />}
+      <Info label={t('tontines', 'expectedValue')} value={formatValue(contribution.valueType, contribution.expectedAmount, contribution.expectedQuantity, contribution.item, contribution.valueType === 'MONEY' ? contribution.currency : contribution.unit)} />
       <div><p className="text-[11px] text-muted-foreground">{t('tontines', 'contributionStatus')}</p><StatusBadge label={t('tontines', CONTRIBUTION_LABEL_KEY[contribution.status])} tone={CONTRIBUTION_TONE[contribution.status]} /></div>
-      <Info label={t('tontines', 'contributionAmount')} value={formatValue(contribution.valueType, contribution.paidAmount, contribution.paidQuantity, contribution.item)} />
-      <Info label={t('tontines', 'remaining')} value={formatValue(contribution.valueType, remaining, remaining, contribution.item)} />
+      <Info label={t('tontines', 'contributionAmount')} value={formatValue(contribution.valueType, contribution.paidAmount, contribution.paidQuantity, contribution.item, contribution.valueType === 'MONEY' ? contribution.currency : contribution.unit)} />
+      <Info label={t('tontines', 'remaining')} value={formatValue(contribution.valueType, remaining, remaining, contribution.item, contribution.valueType === 'MONEY' ? contribution.currency : contribution.unit)} />
     </CardContent></Card>
     <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'paymentHistory')}</CardTitle></CardHeader><CardContent>
       {contribution.payments.length === 0 ? <p className="text-xs text-muted-foreground">{t('tontines', 'noOperations')}</p> : (
-        <Timeline items={contribution.payments.map((payment) => ({ id: payment.id, title: formatValue(contribution.valueType, payment.amount, payment.quantity, contribution.item), description: `${t('tontines', 'operationActor')} : ${payment.actorName}`, date: new Date(payment.date).toLocaleDateString('fr-FR'), tone: 'success' }))} />
+        <Timeline items={contribution.payments.map((payment) => ({ id: payment.id, title: formatValue(contribution.valueType, payment.amount, payment.quantity, contribution.item, contribution.valueType === 'MONEY' ? contribution.currency : contribution.unit), description: `${t('tontines', 'operationActor')} : ${payment.actorName}`, date: new Date(payment.date).toLocaleDateString('fr-FR'), tone: 'success' }))} />
       )}
     </CardContent></Card>
   </Page>;
