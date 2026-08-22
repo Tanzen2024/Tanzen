@@ -1,11 +1,12 @@
 /**
  * Planification des bénéficiaires (mandat planification/permutation) — écran additif,
- * jamais un remplacement de `TurnDetail`/`AddBeneficiaryDialog` : réutilise les mêmes
+ * jamais un remplacement de `TurnDetail`/`TurnBeneficiariesManage` : réutilise les mêmes
  * lectures (`listAllTurns`/`listAllBeneficiaries`, déjà existantes pour la Vue
  * d'ensemble) pour donner une vue groupée « quel tour a déjà son bénéficiaire ? » sur une
  * Période entière, avant même que la 1ʳᵉ occurrence ait eu lieu. Aucun tirage : ce n'est
- * qu'un tableau de bord + un point d'entrée vers l'ajout déjà construit sur `TurnDetail`,
- * plus la demande de permutation (workflow générique, jamais d'application directe).
+ * qu'un tableau de bord + un point d'entrée vers l'ajout déjà construit sur
+ * `TurnBeneficiariesManage`, plus la demande de permutation (workflow générique, jamais
+ * d'application directe).
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';

@@ -3,9 +3,10 @@ import { getTenantScoped } from './tenant-scope';
 import { tontines, type Tontine } from '@/mocks/tontines/tontines';
 import { tontineCycles, type TontineCycleStatus, type TontineCycle, type CycleMember, type CycleDraw } from '@/mocks/tontines/tontine-cycles';
 
-export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'currency' | 'purchaseMode' | 'item' | 'quantity' | 'unit'
+export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'currency' | 'purchaseMode' | 'contributionAmount' | 'item' | 'quantity' | 'unit'
   | 'frequency' | 'weekday' | 'monthlyRule' | 'monthlyDayOfMonth' | 'monthlyOrdinal' | 'monthlyWeekday'
   | 'quarterlyRule' | 'quarterlyMonth' | 'quarterlyDayOfMonth' | 'quarterlyOrdinal' | 'quarterlyWeekday'>;
+export type TontineUpdateInput = Partial<Omit<TontineInput, 'tenantId'>>;
 export type CycleInput = { tontineId: string; cycleNumber: number; startDate: string; endDate: string; expectedTotal: number };
 export type CycleMemberInput = { memberId: string; memberName: string; position: number; expectedAmount: number };
 export type DrawInput = { cycleId: string; drawNumber: number; date: string; contributionPool: number };
@@ -19,13 +20,36 @@ const VALID_CYCLE_TRANSITIONS: Record<TontineCycleStatus, TontineCycleStatus[]> 
   statusClosed: [],
 };
 
+/**
+ * MONEY exige un montant de cotisation strictement positif (mandat « montant de cotisation »,
+ * §1/§5) ; GOODS n'en a pas besoin, quelle que soit la valeur passée (jamais utilisée pour une
+ * tontine non financière, même si une ancienne valeur traîne après un changement de valueType).
+ */
+function isValidContributionAmount(valueType: Tontine['valueType'], contributionAmount: number | undefined): boolean {
+  if (valueType !== 'MONEY') return true;
+  return typeof contributionAmount === 'number' && Number.isFinite(contributionAmount) && contributionAmount > 0;
+}
+
 export const tontinesService = {
   listTontines: (tenantId: string) => mockRequest(() => tontines.filter((tontine) => tontine.tenantId === tenantId)),
   getTontine: (tenantId: string, tontineId: string) => mockRequest(() => getTenantScoped(tontines, (tontine) => tontine.id === tontineId, tenantId)),
   createTontine: (input: TontineInput) =>
     mockRequest(() => {
+      if (!isValidContributionAmount(input.valueType, input.contributionAmount)) return undefined;
       const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', memberCount: 0, activeCycles: 0, totalContributions: 0, createdAt: new Date().toISOString().slice(0, 10), ...input };
       tontines.push(tontine);
+      return tontine;
+    }),
+
+  /** Aucun champ technique (id/tenantId/status/memberCount/activeCycles/totalContributions/createdAt) n'est jamais accepté en entrée — seule la configuration métier peut être modifiée. */
+  updateTontine: (tenantId: string, tontineId: string, patch: TontineUpdateInput) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      const nextValueType = patch.valueType ?? tontine.valueType;
+      const nextContributionAmount = patch.contributionAmount !== undefined ? patch.contributionAmount : tontine.contributionAmount;
+      if (!isValidContributionAmount(nextValueType, nextContributionAmount)) return undefined;
+      Object.assign(tontine, patch);
       return tontine;
     }),
 

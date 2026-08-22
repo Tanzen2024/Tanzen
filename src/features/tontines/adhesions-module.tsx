@@ -9,7 +9,7 @@
  * Période. Aucune notion de Participant/PeriodParticipant n'est introduite
  * (mandat §20) : le terme officiel est ADHÉSION partout dans l'UI.
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, TicketCheck, UsersRound } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -19,7 +19,6 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
 import { tontineTurnsService, type AdhesionInput } from '@/services/tontine-turns.service';
@@ -44,101 +43,23 @@ function Back({ label, onClick }: { label: string; onClick: () => void }) { retu
 function Info({ label, value }: { label: string; value: string }) { return <div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div>; }
 
 /**
- * Fenêtre « Ajouter plusieurs adhésions » (mandat ajout multiple) —
- * complète l'ajout unitaire (`PeriodAdhesionCreate`) sans le remplacer :
- * même service sous-jacent (`buildAdhesion`, réutilisé par
- * `createAdhesionsForPeriod`), pas de seconde architecture d'adhésion
- * (§18). Les membres déjà adhérents à cette Période sont affichés
- * désactivés avec un badge plutôt que masqués (§8, préférence UX explicite
- * du mandat) — la sélection reste donc toujours cohérente avec ce que
- * l'utilisateur voit.
- */
-function BulkAdhesionDialog({ t, periodId, periodStartDate, tontineName, periodSummary, existingAdhesions, open, onOpenChange }: {
-  t: T; periodId: string; periodStartDate: string; tontineName: string; periodSummary: string;
-  existingAdhesions: { memberId: string }[]; open: boolean; onOpenChange: (open: boolean) => void;
-}) {
-  const { currentTenant } = useTenant();
-  const { data: members = [] } = useQuery({ queryKey: ['members', 'list', currentTenant.id], queryFn: () => organizationService.listMembers(currentTenant.id), enabled: open });
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  /**
-   * Cause racine du bug « 0 bénéficiaire ajouté » / « Non éligible pour cette occurrence »
-   * généralisé : cette date par défaut valait `new Date()` (jour de saisie), jamais la date
-   * de la Période planifiée. Le seul tenant/tontine accessible en navigateur n'ayant aucune
-   * donnée préexistante, toute planification réelle crée d'abord une Occurrence dans le
-   * futur PUIS des adhésions — si `joinedAt` valait « aujourd'hui » et l'occurrence une date
-   * antérieure, `isAdhesionActiveAt` rejetait légitimement l'adhésion (règle intacte,
-   * inchangée). `period.startDate` est le point de départ sémantiquement correct d'une
-   * adhésion à CETTE période — reste entièrement modifiable par le gestionnaire.
-   */
-  const [joinedAt, setJoinedAt] = useState(periodStartDate);
-
-  const alreadyMemberIds = useMemo(() => new Set(existingAdhesions.map((item) => item.memberId)), [existingAdhesions]);
-  const activeMembers = useMemo(() => members.filter((member) => member.status === 'active'), [members]);
-  const query = search.trim().toLowerCase();
-  const rows = useMemo(
-    () => query ? activeMembers.filter((member) => `${member.firstName} ${member.lastName} ${member.matricule}`.toLowerCase().includes(query)) : activeMembers,
-    [activeMembers, query],
-  );
-  const availableIds = useMemo(() => rows.filter((member) => !alreadyMemberIds.has(member.id)).map((member) => member.id), [rows, alreadyMemberIds]);
-
-  const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createAdhesionsForPeriod>>, { memberIds: string[]; joinedAt: string }>({
-    mutationFn: (vars) => tontineTurnsService.createAdhesionsForPeriod(currentTenant.id, periodId, vars.memberIds, vars.joinedAt),
-    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
-    onSuccess: (result) => {
-      if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
-      if (result.skippedMemberIds.length > 0) {
-        notify.success(t('tontines', 'adhesionsAddedWithSkipped', { created: String(result.created.length), skipped: String(result.skippedMemberIds.length) }));
-      } else {
-        notify.success(t('tontines', result.created.length === 1 ? 'adhesionsAddedOne' : 'adhesionsAddedMany', { count: String(result.created.length) }));
-      }
-      setSelected(new Set());
-      setSearch('');
-      onOpenChange(false);
-    },
-  });
-
-  const toggleOne = (id: string) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  const toggleAll = () => setSelected(selected.size === availableIds.length && availableIds.length > 0 ? new Set() : new Set(availableIds));
-
-  const columns: TableColumn<Member>[] = [
-    { key: 'select', header: '', className: 'w-10', render: (row) => alreadyMemberIds.has(row.id) ? <Checkbox checked disabled aria-label={row.firstName} /> : <Checkbox checked={selected.has(row.id)} onCheckedChange={() => toggleOne(row.id)} aria-label={row.firstName} /> },
-    { key: 'memberName', header: t('tontines', 'adhesionMember'), render: (row) => <span className="flex items-center gap-2 font-medium"><MemberAvatar member={row} />{row.firstName} {row.lastName}</span> },
-    { key: 'matricule', header: t('tontines', 'adhesionId'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{row.matricule}</span> },
-    { key: 'status', header: t('tontines', 'adhesionStatus'), render: (row) => alreadyMemberIds.has(row.id) ? <span className="text-xs text-muted-foreground">{t('tontines', 'alreadyAdherent')}</span> : <StatusBadge label={t('tontines', 'statusActive')} tone="success" /> },
-  ];
-
-  return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
-      <DialogHeader><DialogTitle>{t('tontines', 'addMultipleAdhesions')}</DialogTitle><DialogDescription>{t('tontines', 'selectMembersSubtitle')}</DialogDescription></DialogHeader>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Info label={t('tontines', 'tontine')} value={tontineName} />
-        <Info label={t('tontines', 'periodSummary')} value={periodSummary} />
-      </div>
-      <div className="max-w-[200px] space-y-1"><Label htmlFor="bulk-joined-at">{t('tontines', 'joinedAt')}</Label><Input id="bulk-joined-at" type="date" value={joinedAt} onChange={(event) => setJoinedAt(event.target.value)} /></div>
-      <FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'searchMemberPlaceholder')} />
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button variant="outline" size="sm" disabled={availableIds.length === 0} onClick={toggleAll}>{selected.size === availableIds.length && availableIds.length > 0 ? t('tontines', 'deselectAll') : t('tontines', 'selectAll')}</Button>
-        {selected.size > 0 && <span className="text-xs text-muted-foreground">{t('tontines', selected.size === 1 ? 'selectedMembersCountOne' : 'selectedMembersCountMany', { count: String(selected.size) })}</span>}
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border"><DataTable columns={columns} rows={rows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noAvailableMembers')} />} /></div>
-      <DialogFooter>
-        <Button variant="outline" onClick={() => onOpenChange(false)}>{t('tontines', 'cancel')}</Button>
-        <Button disabled={selected.size === 0 || mutation.isPending} onClick={() => mutation.mutate({ memberIds: [...selected], joinedAt })}>
-          {mutation.isPending ? t('tontines', 'saving') : t('tontines', selected.size === 1 ? 'addAdhesionsOne' : 'addAdhesionsMany', { count: String(selected.size) })}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>;
-}
-
-/**
- * Écran « Adhésions de la période » (mandat §11/§12/§32) — étape 3 du
- * parcours guidé ET destination du lien « Adhésions » depuis PeriodDetail
- * (mandat §24, Période → Adhésions, pas Tontine → Participants). L'ajout se
- * fait via une page dédiée (`/adhesions/new`, §13, ajout unitaire), ou via
- * `BulkAdhesionDialog` (ajout multiple, mandat dédié) — les deux parcours
- * partagent la même mutation de service (`buildAdhesion`).
+ * Écran « Adhésions de la période » (mandat §11/§12/§32, harmonisé avec le
+ * pattern Accounts → « Gérer les adhérents », mandat harmonisation Accounts)
+ * — étape 3 du parcours guidé ET destination du lien « Adhésions » depuis
+ * PeriodDetail (mandat §24, Période → Adhésions, pas Tontine →
+ * Participants). Deux panneaux : disponibles (membres actifs non encore
+ * adhérents à cette Période) à gauche, affectés (adhésions existantes) à
+ * droite — remplace l'ancien couple Card unique + `BulkAdhesionDialog`
+ * modale par la même structure que `AccountMembersManage`. L'ajout unitaire
+ * dédié (`/adhesions/new`, §13, avec sa propre date d'adhésion) reste
+ * disponible séparément et partage la même mutation de service
+ * (`buildAdhesion`/`createAdhesionsForPeriod`) — pas de seconde
+ * architecture d'adhésion (§18). Panneau droit volontairement sans retrait
+ * en masse : `closeAdhesion` exige une date de sortie par adhésion (RB
+ * intact) et n'est donc pas un simple retrait instantané comme
+ * `Account.memberIds` — clôturer reste une action individuelle via la fiche
+ * adhésion (`PeriodAdhesionDetail`), jamais un bouton « Retirer tous »
+ * inventé pour ce mandat.
  */
 export function PeriodAdhesionList({ t }: { t: T }) {
   const { tontineId = '', periodId = '' } = useParams();
@@ -150,17 +71,50 @@ export function PeriodAdhesionList({ t }: { t: T }) {
   const { data: allMembers = [] } = useQuery({ queryKey: ['members', 'list', currentTenant.id], queryFn: () => organizationService.listMembers(currentTenant.id), enabled: Boolean(period) });
   const memberById = new Map(allMembers.map((item) => [item.id, item]));
   const [confirmEmpty, setConfirmEmpty] = useState(false);
-  const [bulkOpen, setBulkOpen] = useState(false);
+  const [availableSearch, setAvailableSearch] = useState('');
+  const [assignedSearch, setAssignedSearch] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [joinedAt, setJoinedAt] = useState('');
+  const [joinedAtTouched, setJoinedAtTouched] = useState(false);
+  /** Même cause racine documentée historiquement pour ce champ : `period.startDate`, jamais « aujourd'hui », reste entièrement modifiable par le gestionnaire. */
+  useEffect(() => { if (period && !joinedAtTouched) setJoinedAt(period.startDate); }, [period, joinedAtTouched]);
+
+  const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createAdhesionsForPeriod>>, string[]>({
+    mutationFn: (memberIds) => tontineTurnsService.createAdhesionsForPeriod(currentTenant.id, periodId, memberIds, joinedAt),
+    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
+      if (result.skippedMemberIds.length > 0) {
+        notify.success(t('tontines', 'adhesionsAddedWithSkipped', { created: String(result.created.length), skipped: String(result.skippedMemberIds.length) }));
+      } else {
+        notify.success(t('tontines', result.created.length === 1 ? 'adhesionsAddedOne' : 'adhesionsAddedMany', { count: String(result.created.length) }));
+      }
+      setSelected(new Set());
+    },
+  });
 
   if (isLoading) return <Page title={t('tontines', 'assignAdhesionsTitle')}><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('tontines', 'assignAdhesionsTitle')}><ErrorState onRetry={refetch} /></Page>;
   if (!period || !tontine) return <NotFoundPage />;
 
-  const columns: TableColumn<(typeof adhesions)[number]>[] = [
+  const alreadyMemberIds = new Set(adhesions.map((item) => item.memberId));
+  const available = allMembers.filter((member) => member.status === 'active' && !alreadyMemberIds.has(member.id));
+  const availableRows = availableSearch ? available.filter((member) => `${member.firstName} ${member.lastName} ${member.matricule}`.toLowerCase().includes(availableSearch.toLowerCase())) : available;
+  const assignedRows = assignedSearch ? adhesions.filter((row) => row.memberName.toLowerCase().includes(assignedSearch.toLowerCase())) : adhesions;
+
+  const toggle = (memberId: string) => setSelected((prev) => { const next = new Set(prev); if (next.has(memberId)) next.delete(memberId); else next.add(memberId); return next; });
+
+  const availableColumns: TableColumn<Member>[] = [
+    { key: 'select', header: '', className: 'w-10', render: (row) => <Checkbox checked={selected.has(row.id)} onCheckedChange={() => toggle(row.id)} aria-label={row.firstName} /> },
+    { key: 'memberName', header: t('tontines', 'adhesionMember'), render: (row) => <span className="flex items-center gap-2 font-medium"><MemberAvatar member={row} />{row.firstName} {row.lastName}</span> },
+    { key: 'matricule', header: t('tontines', 'memberMatricule'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{row.matricule}</span> },
+    { key: 'status', header: t('tontines', 'adhesionStatus'), render: () => <StatusBadge label={t('tontines', 'statusActive')} tone="success" /> },
+  ];
+
+  const assignedColumns: TableColumn<(typeof adhesions)[number]>[] = [
     { key: 'memberName', header: t('tontines', 'adhesionMember'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions/${row.id}`)} className="flex items-center gap-3 text-left"><MemberAvatar member={memberById.get(row.memberId) ?? { firstName: row.memberName, lastName: '' }} /><span className="font-medium text-primary hover:underline">{row.memberName}</span></button> },
-    { key: 'id', header: t('tontines', 'adhesionId'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{row.id}</span> },
+    { key: 'matricule', header: t('tontines', 'memberMatricule'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{memberById.get(row.memberId)?.matricule || '—'}</span> },
     { key: 'joinedAt', header: t('tontines', 'joinedAt'), render: (row) => <DateDisplay value={row.joinedAt} /> },
-    { key: 'endDate', header: t('tontines', 'endDate'), render: (row) => row.endDate ? <DateDisplay value={row.endDate} /> : <span className="text-muted-foreground">—</span> },
     { key: 'status', header: t('tontines', 'adhesionStatus'), render: (row) => <StatusBadge label={t('tontines', ADHESION_STATUS_LABEL_KEY[row.status])} tone={ADHESION_STATUS_TONE[row.status]} /> },
   ];
 
@@ -172,23 +126,30 @@ export function PeriodAdhesionList({ t }: { t: T }) {
   return <Page title={t('tontines', 'assignAdhesionsTitle')} description={t('tontines', 'assignAdhesionsSubtitle')} actions={<Back label={t('tontines', 'backToTontine')} onClick={() => navigate(`/tontines/${tontineId}`)} />}>
     <TontineWizardSteps t={t} current={3} />
     {confirmEmpty && <ConfirmDialog open title={t('tontines', 'emptyPeriodWarningTitle')} description={t('tontines', 'emptyPeriodWarning')} confirmLabel={t('tontines', 'continueAnyway')} cancelLabel={t('tontines', 'cancel')} onConfirm={() => navigate(`/tontines/${tontineId}/periods/${periodId}`)} onCancel={() => setConfirmEmpty(false)} />}
-    <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+    <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-3">
       <Info label={t('tontines', 'tontine')} value={tontine.name} />
       <Info label={t('tontines', 'periodSummary')} value={`${period.startDate} → ${period.endDate}`} />
+      <div className="max-w-[200px] space-y-1"><Label htmlFor="period-joined-at">{t('tontines', 'joinedAt')}</Label><Input id="period-joined-at" type="date" value={joinedAt} onChange={(event) => { setJoinedAtTouched(true); setJoinedAt(event.target.value); }} /></div>
     </CardContent></Card>
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
-        <CardTitle className="text-sm">{t('tontines', 'adhesionsOfPeriod')}</CardTitle>
-        <PermissionGate permission="adhesions.manage">
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => setBulkOpen(true)}><UsersRound size={15} />{t('tontines', 'addMultipleAdhesions')}</Button>
-            <Button size="sm" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions/new`)}><Plus size={15} />{t('tontines', 'addAdhesion')}</Button>
-          </div>
-        </PermissionGate>
-      </CardHeader>
-      <CardContent className="p-0"><DataTable columns={columns} rows={adhesions} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noAdhesions')} />} /></CardContent>
-    </Card>
-    <BulkAdhesionDialog t={t} periodId={periodId} periodStartDate={period.startDate} tontineName={tontine.name} periodSummary={`${period.startDate} → ${period.endDate}`} existingAdhesions={adhesions} open={bulkOpen} onOpenChange={setBulkOpen} />
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm">{t('tontines', 'availableAdherents')} ({available.length})</CardTitle>
+          <PermissionGate permission="adhesions.manage"><div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions/new`)}><Plus size={15} />{t('tontines', 'addAdhesion')}</Button>
+            <Button variant="outline" size="sm" disabled={selected.size === 0 || mutation.isPending} onClick={() => mutation.mutate([...selected])}>{t('tontines', 'addSelected')}</Button>
+            <Button size="sm" disabled={available.length === 0 || mutation.isPending} onClick={() => mutation.mutate(available.map((member) => member.id))}>{t('tontines', 'addAllMembers')}</Button>
+          </div></PermissionGate>
+        </CardHeader>
+        <CardContent className="space-y-3 p-0"><div className="px-4"><FilterBar search={availableSearch} onSearchChange={setAvailableSearch} placeholder={t('tontines', 'searchMemberPlaceholder')} /></div><DataTable columns={availableColumns} rows={availableRows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noAvailableMembers')} />} /></CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm">{t('tontines', 'assignedAdherents')} ({adhesions.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 p-0"><div className="px-4"><FilterBar search={assignedSearch} onSearchChange={setAssignedSearch} placeholder={t('tontines', 'searchMemberPlaceholder')} /></div><DataTable columns={assignedColumns} rows={assignedRows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noAdhesions')} />} /></CardContent>
+      </Card>
+    </div>
     <div className="flex justify-end gap-2">
       <Button variant="outline" onClick={() => navigate(`/tontines/${tontineId}`)}>{t('tontines', 'finishLater')}</Button>
       <Button onClick={handleContinue}>{t('tontines', 'continueToOccurrences')}</Button>

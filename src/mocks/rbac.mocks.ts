@@ -62,7 +62,7 @@ export const permissionCatalog: Permission[] = [
   'repayments.read', 'repayments.create',
   'guarantors.read', 'guarantors.create',
   'loanRules.manage',
-  'tontines.read', 'tontines.create',
+  'tontines.read', 'tontines.create', 'tontines.update',
   'cycles.read', 'cycles.create', 'cycles.manage',
   'draws.read', 'draws.manage',
   'beneficiaries.manage',

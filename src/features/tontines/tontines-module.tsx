@@ -1,6 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Banknote, CalendarDays, Check, ChevronRight, CirclePause, CirclePlay, CircleStop, ClipboardList, Clock3, Hash, Landmark, Package, Plus, RotateCcw, ShieldCheck, TicketCheck, TrendingUp, UserRound, UsersRound } from 'lucide-react';
+import { ArrowLeft, Banknote, CalendarDays, Check, ChevronRight, CirclePause, CirclePlay, CircleStop, ClipboardList, Clock3, Hash, Landmark, Package, Pencil, Plus, RotateCcw, ShieldCheck, TicketCheck, TrendingUp, UserRound, UsersRound } from 'lucide-react';
 import { Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, Timeline, StatCard, MoneyDisplay, DateDisplay, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, ConfirmDialog, FieldError } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -10,8 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
-import { NotFoundPage } from '@/routes';
-import { OccurrenceList, OccurrenceCreate, OccurrenceDetail, TurnDetail } from './occurrences-module';
+import { NotFoundPage, PermissionRoute } from '@/routes';
+import { OccurrenceList, OccurrenceCreate, OccurrenceDetail, TurnDetail, TurnBeneficiariesManage } from './occurrences-module';
 import { PeriodTable, PeriodCreate, PeriodDetail } from './periods-module';
 import { TurnPlanningList } from './planning-module';
 import { PeriodAdhesionList, PeriodAdhesionCreate, PeriodAdhesionDetail } from './adhesions-module';
@@ -77,6 +77,9 @@ function TontineCreate({ t }: { t: T }) {
   const [name, setName] = useState(''); const [valueType, setValueType] = useState<ValueType>('MONEY');
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY_CODE);
   const [purchaseMode, setPurchaseMode] = useState<'WITH_PURCHASE' | 'WITHOUT_PURCHASE'>('WITHOUT_PURCHASE');
+  /** Montant de cotisation (mandat « montant de cotisation ») — initialisé à vide, pertinent uniquement pour MONEY ; une ancienne valeur saisie avant un passage à GOODS reste en mémoire côté UI (comme `item`/`quantity`/`unit` pour le cas inverse) mais n'est jamais soumise ni utilisée pour valider une tontine non financière. */
+  const [contributionAmount, setContributionAmount] = useState('');
+  const [contributionAmountError, setContributionAmountError] = useState<string | undefined>();
   const [item, setItem] = useState(''); const [quantity, setQuantity] = useState(''); const [unit, setUnit] = useState('');
   /** Périodicité de la Tontine (mandat fréquence) — configuration permanente, jamais portée par une Occurrence ni par l'ancien Cycle ; sert de règle de génération des occurrences pour toutes les Périodes successives (cf. `generateOccurrences`). */
   const [freq, setFreq] = useState<Partial<FrequencyConfig>>({});
@@ -86,10 +89,11 @@ function TontineCreate({ t }: { t: T }) {
   const [quantityError, setQuantityError] = useState<string | undefined>();
   const [unitError, setUnitError] = useState<string | undefined>();
   const isGoods = valueType === 'GOODS';
-  const mutation = useMockMutation<Tontine, TontineInput>({
+  const mutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.createTontine>>, TontineInput>({
     mutationFn: (input) => tontinesService.createTontine(input),
     invalidateKeys: [queryKeys.tontines.list(currentTenant.id)],
     onSuccess: (tontine) => {
+      if (!tontine) { notify.error(t('tontines', 'invalidContributionAmount')); return; }
       notify.success(t('tontines', 'tontineCreated'));
       navigate(`/tontines/${tontine.id}/periods/create`);
     },
@@ -100,6 +104,11 @@ function TontineCreate({ t }: { t: T }) {
     if (isGoods && !item.trim()) { setItemError(t('tontines', 'goodsItemRequired')); hasError = true; } else setItemError(undefined);
     if (isGoods && !(Number(quantity) > 0)) { setQuantityError(t('tontines', 'goodsQuantityPositive')); hasError = true; } else setQuantityError(undefined);
     if (isGoods && !unit) { setUnitError(t('tontines', 'unitRequired')); hasError = true; } else setUnitError(undefined);
+    if (!isGoods) {
+      if (!contributionAmount) { setContributionAmountError(t('tontines', 'fieldRequired')); hasError = true; }
+      else if (Number(contributionAmount) <= 0) { setContributionAmountError(t('tontines', 'invalidContributionAmount')); hasError = true; }
+      else setContributionAmountError(undefined);
+    } else setContributionAmountError(undefined);
     const frequencyValidationError = validateFrequency(t, freq);
     if (frequencyValidationError) { setFrequencyError(frequencyValidationError); hasError = true; } else setFrequencyError(undefined);
     if (hasError) return;
@@ -107,6 +116,7 @@ function TontineCreate({ t }: { t: T }) {
       name, valueType, tenantId: currentTenant.id,
       currency: isGoods ? undefined : currency,
       purchaseMode: isGoods ? undefined : purchaseMode,
+      contributionAmount: isGoods ? undefined : Number(contributionAmount),
       item: isGoods ? item.trim() : undefined,
       quantity: isGoods ? Number(quantity) : undefined,
       ...freq,
@@ -116,11 +126,10 @@ function TontineCreate({ t }: { t: T }) {
   const isPending = mutation.isPending;
   return <Page title={t('tontines', 'createTontine')} description={t('tontines', 'tontinesDescription')} actions={<Back label={t('tontines', 'backToTontines')} />}><div className="grid gap-5 lg:grid-cols-2">
     <div className="lg:col-span-2"><TontineWizardSteps t={t} current={1} /></div>
-    <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="tontine-name">{t('tontines', 'tontineName')}</Label><Input id="tontine-name" value={name} onChange={(event) => setName(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="tontine-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-value-type" value={valueType} onChange={(event) => setValueType(event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-currency">{t('tontines', 'currency')}</Label><select id="tontine-currency" value={currency} onChange={(event) => setCurrency(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{currencies.map((option) => <option key={option.code} value={option.code}>{option.code} — {option.labelFr}</option>)}</select></div>}{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-purchase-mode">{t('tontines', 'purchaseMode')}</Label><select id="tontine-purchase-mode" value={purchaseMode} onChange={(event) => setPurchaseMode(event.target.value as 'WITH_PURCHASE' | 'WITHOUT_PURCHASE')} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="WITHOUT_PURCHASE">{t('tontines', 'withoutPurchase')}</option><option value="WITH_PURCHASE">{t('tontines', 'withPurchase')}</option></select></div>}</div></FormSection>
-    {isGoods && <FormSection title={t('tontines', 'goodsConfiguration')} description={t('tontines', 'goodsConfigurationDescription')}><div className="grid gap-4 sm:grid-cols-3"><div className="space-y-2"><Label htmlFor="tontine-goods-item">{t('tontines', 'goodsItem')}</Label><Input id="tontine-goods-item" value={item} onChange={(event) => setItem(event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div><div className="space-y-2"><Label htmlFor="tontine-goods-quantity">{t('tontines', 'referenceQuantity')}</Label><Input id="tontine-goods-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div><div className="space-y-2"><Label htmlFor="tontine-goods-unit">{t('tontines', 'unit')}</Label><select id="tontine-goods-unit" value={unit} onChange={(event) => setUnit(event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div></div></FormSection>}
+    <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="tontine-name">{t('tontines', 'tontineName')}</Label><Input id="tontine-name" value={name} onChange={(event) => setName(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="tontine-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-value-type" value={valueType} onChange={(event) => setValueType(event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><Input id="tontine-contribution-amount" type="number" inputMode="decimal" min={0} value={contributionAmount} onChange={(event) => setContributionAmount(event.target.value)} aria-invalid={Boolean(contributionAmountError)} /><FieldError message={contributionAmountError} /></div>}{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-currency">{t('tontines', 'currency')}</Label><select id="tontine-currency" value={currency} onChange={(event) => setCurrency(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{currencies.map((option) => <option key={option.code} value={option.code}>{option.code} — {option.labelFr}</option>)}</select></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-item">{t('tontines', 'goodsItem')}</Label><Input id="tontine-goods-item" value={item} onChange={(event) => setItem(event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-quantity">{t('tontines', 'referenceQuantity')}</Label><Input id="tontine-goods-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div>}{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-purchase-mode">{t('tontines', 'purchaseMode')}</Label><select id="tontine-purchase-mode" value={purchaseMode} onChange={(event) => setPurchaseMode(event.target.value as 'WITH_PURCHASE' | 'WITHOUT_PURCHASE')} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="WITHOUT_PURCHASE">{t('tontines', 'withoutPurchase')}</option><option value="WITH_PURCHASE">{t('tontines', 'withPurchase')}</option></select></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-unit">{t('tontines', 'unit')}</Label><select id="tontine-goods-unit" value={unit} onChange={(event) => setUnit(event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div>}{!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}</div></FormSection>
     <FormSection title={t('tontines', 'frequencySection')} description={t('tontines', 'frequencySectionDescription')}><FrequencyFields t={t} value={freq} onChange={setFreq} error={frequencyError} /></FormSection>
     <FormSection title={t('tontines', 'adhesionsInfoSection')} description={t('tontines', 'adhesionsInfoDescription')}><></></FormSection>
-    <FormSection title={t('tontines', 'summarySection')}><div className="grid gap-2 text-sm sm:grid-cols-2"><Info label={t('tontines', 'summaryName')} value={name || '—'} icon={Landmark} /><Info label={t('tontines', 'valueType')} value={valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />{!isGoods && <><Info label={t('tontines', 'currency')} value={`${currency} — ${getCurrencyLabel(currency)}`} icon={Banknote} /><Info label={t('tontines', 'purchaseMode')} value={t('tontines', purchaseMode === 'WITH_PURCHASE' ? 'withPurchase' : 'withoutPurchase')} icon={ClipboardList} /></>}{isGoods && <><Info label={t('tontines', 'goodsItem')} value={item.trim() || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={quantity ? `${quantity} ${formatUnit(Number(quantity), unit)}`.trim() : '—'} icon={Hash} /><Info label={t('tontines', 'unit')} value={unit ? formatUnit(2, unit) : '—'} icon={Hash} /></>}{freq.frequency && <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[freq.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(freq as FrequencyConfig, 'fr')} icon={CalendarDays} /></>}<Info label={t('tontines', 'summaryTenant')} value={`${currentTenant.name} (${currentTenant.id})`} icon={UsersRound} /></div></FormSection>
+    <FormSection title={t('tontines', 'summarySection')}><div className="grid gap-2 text-sm sm:grid-cols-2"><Info label={t('tontines', 'summaryName')} value={name || '—'} icon={Landmark} /><Info label={t('tontines', 'valueType')} value={valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />{!isGoods && <><Info label={t('tontines', 'currency')} value={`${currency} — ${getCurrencyLabel(currency)}`} icon={Banknote} /><Info label={t('tontines', 'tontineContributionAmount')} value={contributionAmount ? `${formatNumber(Number(contributionAmount))} ${currency}` : '—'} icon={Banknote} /><Info label={t('tontines', 'purchaseMode')} value={t('tontines', purchaseMode === 'WITH_PURCHASE' ? 'withPurchase' : 'withoutPurchase')} icon={ClipboardList} /></>}{isGoods && <><Info label={t('tontines', 'goodsItem')} value={item.trim() || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={quantity ? `${quantity} ${formatUnit(Number(quantity), unit)}`.trim() : '—'} icon={Hash} /><Info label={t('tontines', 'unit')} value={unit ? formatUnit(2, unit) : '—'} icon={Hash} /></>}{freq.frequency && <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[freq.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(freq as FrequencyConfig, 'fr')} icon={CalendarDays} /></>}<Info label={t('tontines', 'summaryTenant')} value={`${currentTenant.name} (${currentTenant.id})`} icon={UsersRound} /></div></FormSection>
     <div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isPending} onClick={() => navigate('/tontines')}>{t('tontines', 'cancel')}</Button><Button disabled={isPending} onClick={handleSave}>{isPending ? t('tontines', 'saving') : t('tontines', 'save')}</Button></div>
   </div></Page>;
 }
@@ -141,7 +150,7 @@ function TontineDetail({ t }: { t: T }) {
     { key: 'totalCollected', header: t('tontines', 'totalCollected'), render: (row) => <MoneyDisplay amount={row.totalCollected} /> },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontine.id}/cycles/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
   ];
-  return <Page title={tontine.name} description={`${tontine.id} · ${tontine.tenantId}`} actions={<><Back label={t('tontines', 'backToTontines')} /><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/contributions`)}><ClipboardList size={16} />{t('tontines', 'contributions')}</Button></>}>
+  return <Page title={tontine.name} description={`${tontine.id} · ${tontine.tenantId}`} actions={<><Back label={t('tontines', 'backToTontines')} /><PermissionGate permission="tontines.update"><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/edit`)}><Pencil size={16} />{t('tontines', 'edit')}</Button></PermissionGate><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/contributions`)}><ClipboardList size={16} />{t('tontines', 'contributions')}</Button></>}>
     <Tabs defaultValue="overview" className="min-w-0">
       <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-muted p-1">{[['overview', 'cycleOverview'], ['configuration', 'configuration'], ['periods', 'periods']].map(([value, label]) => <TabsTrigger key={value} value={value}>{t('tontines', label)}</TabsTrigger>)}</TabsList>
       <TabsContent value="overview">
@@ -150,7 +159,7 @@ function TontineDetail({ t }: { t: T }) {
         <Card className="mt-4"><CardHeader className="flex-row items-center justify-between"><CardTitle className="text-sm">{t('tontines', 'cycles')}</CardTitle><Button variant="outline" size="sm" onClick={() => navigate(`/tontines/${tontine.id}/cycles`)}>{t('tontines', 'viewDetail')}<ChevronRight size={14} /></Button></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={cycles} empty={<EmptyState icon={CalendarDays} title={t('tontines', 'noCycles')} />} /></CardContent></Card>
       </TabsContent>
       <TabsContent value="configuration">
-        {tontine.valueType === 'MONEY' && <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-2"><Info label={t('tontines', 'currency')} value={tontine.currency ? `${tontine.currency} — ${getCurrencyLabel(tontine.currency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'purchaseMode')} value={t('tontines', tontine.purchaseMode === 'WITH_PURCHASE' ? 'withPurchase' : 'withoutPurchase')} icon={ClipboardList} /></CardContent></Card>}
+        {tontine.valueType === 'MONEY' && <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-3"><Info label={t('tontines', 'currency')} value={tontine.currency ? `${tontine.currency} — ${getCurrencyLabel(tontine.currency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'tontineContributionAmount')} value={tontine.contributionAmount ? `${formatNumber(tontine.contributionAmount)} ${tontine.currency ?? ''}`.trim() : '—'} icon={Banknote} /><Info label={t('tontines', 'purchaseMode')} value={t('tontines', tontine.purchaseMode === 'WITH_PURCHASE' ? 'withPurchase' : 'withoutPurchase')} icon={ClipboardList} /></CardContent></Card>}
         {tontine.valueType === 'GOODS' && <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-3"><Info label={t('tontines', 'goodsItem')} value={tontine.item || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={tontine.quantity ? `${formatNumber(tontine.quantity)} ${formatUnit(tontine.quantity, tontine.unit)}`.trim() : '—'} icon={Hash} /><Info label={t('tontines', 'unit')} value={tontine.unit ? formatUnit(2, tontine.unit) : '—'} icon={Hash} /></CardContent></Card>}
         <Card className="mt-4"><CardContent className="grid gap-4 p-5 sm:grid-cols-2">{tontine.frequency ? <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[tontine.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(tontine as FrequencyConfig, 'fr')} icon={CalendarDays} /></> : <Info label={t('tontines', 'frequency')} value="—" icon={CalendarDays} />}</CardContent></Card>
       </TabsContent>
@@ -159,6 +168,77 @@ function TontineDetail({ t }: { t: T }) {
         <PeriodTable t={t} tontineId={tontine.id} periods={periods} />
       </TabsContent>
     </Tabs>
+  </Page>;
+}
+
+/**
+ * Écran « Modifier une tontine » (mandat « montant de cotisation » §6) —
+ * applique exactement la même règle que la création : montant de cotisation
+ * obligatoire et strictement positif pour MONEY, non applicable pour GOODS.
+ * Volontairement restreint aux champs de la section Général (nom/type de
+ * valeur/devise/mode d'achat/montant/référence de bien) : la fréquence et le
+ * chaînage « première période » sont des préoccupations propres à la
+ * création, hors périmètre de ce mandat.
+ */
+function TontineEdit({ t }: { t: T }) {
+  const { tontineId = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { data: tontine, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.tontines.detail(tontineId), currentTenant.id], queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId) });
+  const [form, setForm] = useState<{ name: string; valueType: ValueType; currency: string; purchaseMode: 'WITH_PURCHASE' | 'WITHOUT_PURCHASE'; contributionAmount: string; item: string; quantity: string; unit: string } | null>(null);
+  const [error, setError] = useState<string | undefined>();
+  const [contributionAmountError, setContributionAmountError] = useState<string | undefined>();
+  const [itemError, setItemError] = useState<string | undefined>();
+  const [quantityError, setQuantityError] = useState<string | undefined>();
+  const [unitError, setUnitError] = useState<string | undefined>();
+  const mutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.updateTontine>>, Parameters<typeof tontinesService.updateTontine>[2]>({
+    mutationFn: (patch) => tontinesService.updateTontine(currentTenant.id, tontineId, patch),
+    invalidateKeys: [queryKeys.tontines.detail(tontineId), queryKeys.tontines.list(currentTenant.id)],
+    onSuccess: (updated) => {
+      if (!updated) { notify.error(t('tontines', 'invalidContributionAmount')); return; }
+      notify.success(t('tontines', 'tontineUpdated'));
+      navigate(`/tontines/${tontineId}`);
+    },
+  });
+  if (isLoading) return <Page title={t('tontines', 'editTontine')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('tontines', 'editTontine')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!tontine) return <NotFoundPage />;
+  const current = form ?? { name: tontine.name, valueType: tontine.valueType, currency: tontine.currency ?? DEFAULT_CURRENCY_CODE, purchaseMode: tontine.purchaseMode ?? 'WITHOUT_PURCHASE', contributionAmount: tontine.contributionAmount !== undefined ? String(tontine.contributionAmount) : '', item: tontine.item ?? '', quantity: tontine.quantity !== undefined ? String(tontine.quantity) : '', unit: tontine.unit ?? '' };
+  const setField = <K extends keyof typeof current>(key: K, value: (typeof current)[K]) => setForm({ ...current, [key]: value });
+  const isGoods = current.valueType === 'GOODS';
+  const handleSave = () => {
+    let hasError = false;
+    if (!current.name.trim()) { setError(t('tontines', 'fieldRequired')); hasError = true; } else setError(undefined);
+    if (isGoods && !current.item.trim()) { setItemError(t('tontines', 'goodsItemRequired')); hasError = true; } else setItemError(undefined);
+    if (isGoods && !(Number(current.quantity) > 0)) { setQuantityError(t('tontines', 'goodsQuantityPositive')); hasError = true; } else setQuantityError(undefined);
+    if (isGoods && !current.unit) { setUnitError(t('tontines', 'unitRequired')); hasError = true; } else setUnitError(undefined);
+    if (!isGoods) {
+      if (!current.contributionAmount) { setContributionAmountError(t('tontines', 'fieldRequired')); hasError = true; }
+      else if (Number(current.contributionAmount) <= 0) { setContributionAmountError(t('tontines', 'invalidContributionAmount')); hasError = true; }
+      else setContributionAmountError(undefined);
+    } else setContributionAmountError(undefined);
+    if (hasError) return;
+    mutation.mutate({
+      name: current.name, valueType: current.valueType,
+      currency: isGoods ? undefined : current.currency,
+      purchaseMode: isGoods ? undefined : current.purchaseMode,
+      contributionAmount: isGoods ? undefined : Number(current.contributionAmount),
+      item: isGoods ? current.item.trim() : undefined,
+      quantity: isGoods ? Number(current.quantity) : undefined,
+      unit: isGoods ? (current.unit as TontineInput['unit']) : undefined,
+    });
+  };
+  return <Page title={t('tontines', 'editTontine')} description={tontine.name} actions={<Back label={t('tontines', 'backToTontines')} />}>
+    <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-2"><Label htmlFor="tontine-edit-name">{t('tontines', 'tontineName')}</Label><Input id="tontine-edit-name" value={current.name} onChange={(event) => setField('name', event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div>
+      <div className="space-y-2"><Label htmlFor="tontine-edit-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-edit-value-type" value={current.valueType} onChange={(event) => setField('valueType', event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>
+      {!isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-currency">{t('tontines', 'currency')}</Label><select id="tontine-edit-currency" value={current.currency} onChange={(event) => setField('currency', event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{currencies.map((option) => <option key={option.code} value={option.code}>{option.code} — {option.labelFr}</option>)}</select></div>}
+      {!isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><Input id="tontine-edit-contribution-amount" type="number" inputMode="decimal" min={0} value={current.contributionAmount} onChange={(event) => setField('contributionAmount', event.target.value)} aria-invalid={Boolean(contributionAmountError)} /><FieldError message={contributionAmountError} /></div>}
+      {!isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-purchase-mode">{t('tontines', 'purchaseMode')}</Label><select id="tontine-edit-purchase-mode" value={current.purchaseMode} onChange={(event) => setField('purchaseMode', event.target.value as 'WITH_PURCHASE' | 'WITHOUT_PURCHASE')} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="WITHOUT_PURCHASE">{t('tontines', 'withoutPurchase')}</option><option value="WITH_PURCHASE">{t('tontines', 'withPurchase')}</option></select></div>}
+      {!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}
+      {isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-goods-item">{t('tontines', 'goodsItem')}</Label><Input id="tontine-edit-goods-item" value={current.item} onChange={(event) => setField('item', event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}
+      {isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-goods-quantity">{t('tontines', 'referenceQuantity')}</Label><Input id="tontine-edit-goods-quantity" type="number" min={1} value={current.quantity} onChange={(event) => setField('quantity', event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div>}
+      {isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-goods-unit">{t('tontines', 'unit')}</Label><select id="tontine-edit-goods-unit" value={current.unit} onChange={(event) => setField('unit', event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div>}
+    </div></FormSection>
+    <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/tontines/${tontineId}`)}>{t('tontines', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('tontines', 'saving') : t('tontines', 'save')}</Button></div>
   </Page>;
 }
 
@@ -356,6 +436,7 @@ export function TontinesModule() {
       <Route index element={<TontinesOverview t={t} />} />
       <Route path="create" element={<TontineCreate t={t} />} />
       <Route path=":tontineId" element={<TontineDetail t={t} />} />
+      <Route path=":tontineId/edit" element={<PermissionRoute permission="tontines.update"><TontineEdit t={t} /></PermissionRoute>} />
       <Route path=":tontineId/contributions" element={<ContributionList t={t} />} />
       <Route path=":tontineId/contributions/new" element={<ContributionCreate t={t} />} />
       <Route path=":tontineId/contributions/:contributionId" element={<ContributionDetail t={t} />} />
@@ -369,6 +450,7 @@ export function TontinesModule() {
       <Route path=":tontineId/periods/:periodId/occurrences/create" element={<OccurrenceCreate t={t} />} />
       <Route path=":tontineId/periods/:periodId/occurrences/:occurrenceId" element={<OccurrenceDetail t={t} />} />
       <Route path=":tontineId/periods/:periodId/occurrences/:occurrenceId/turn" element={<TurnDetail t={t} />} />
+      <Route path=":tontineId/periods/:periodId/occurrences/:occurrenceId/turn/beneficiaries" element={<TurnBeneficiariesManage t={t} />} />
       <Route path=":tontineId/cycles" element={<CycleList t={t} />} />
       <Route path=":tontineId/cycles/create" element={<CycleCreate t={t} />} />
       <Route path=":tontineId/cycles/:cycleId" element={<CycleDetail t={t} />} />

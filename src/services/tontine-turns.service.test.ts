@@ -355,7 +355,7 @@ describe('tontineTurnsService — Period (nouveau niveau temporel, mandat refont
   });
 
   it('chaining createTontine then createPeriod (the current TontineCreate "first period" flow, replacing the old Cycle chaining) attaches the period to the new tontine', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Avec première période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Avec première période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2027-01-01', endDate: '2027-12-31' });
     expect(period?.tontineId).toBe(tontine.id);
     const periods = await tontineTurnsService.listPeriodsByTontine('T-002', tontine.id);
@@ -391,7 +391,7 @@ describe('tontineTurnsService — parcours complet Tontine → Période → Occu
    * (tenantId + id, jamais un autre paramètre).
    */
   it('a freshly created Tontine → Period → Occurrence → Turn chain is reachable end-to-end via getTontine/getPeriod/getOccurrence/getTurnByOccurrence', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Parcours bout en bout', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'WEDNESDAY' });
+    const tontine = (await tontinesService.createTontine({ name: 'Parcours bout en bout', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'WEDNESDAY', contributionAmount: 10_000 }))!;
     expect(tontine.id).toMatch(/^TON-\d{3}$/);
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-01-31' });
     expect(period).not.toBeNull();
@@ -423,7 +423,7 @@ describe('tontineTurnsService — parcours complet Tontine → Période → Occu
   });
 
   it('the same chain is inaccessible from another tenant at every step (isolation preserved end-to-end)', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Parcours isolation', valueType: 'MONEY', tenantId: 'T-005', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'FRIDAY' });
+    const tontine = (await tontinesService.createTontine({ name: 'Parcours isolation', valueType: 'MONEY', tenantId: 'T-005', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'FRIDAY', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-005', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-01-31' });
     const created = await tontineTurnsService.generateOccurrences('T-005', period!.id);
 
@@ -539,7 +539,7 @@ describe('tontineTurnsService — adhésions au niveau de la période (mandat «
   });
 
   it('the same member can hold an adhesion in two different periods of the same Tontine (AC-08 : deux Périodes peuvent avoir des adhésions différentes)', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Épargne — adhésions par période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Épargne — adhésions par période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period2026 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-12-31' });
     const period2027 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2027-01-01', endDate: '2027-12-31' });
     await tontineTurnsService.createAdhesion('T-002', { periodId: period2026!.id, memberId: 'M-001', memberName: 'Jean', joinedAt: '2026-01-01' });
@@ -552,7 +552,7 @@ describe('tontineTurnsService — adhésions au niveau de la période (mandat «
   });
 
   it('a new period never inherits the adhesions of a previous period of the same Tontine (AC-13 : pas de copie automatique)', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Pas de copie automatique', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Pas de copie automatique', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period1 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-12-31' });
     await tontineTurnsService.createAdhesion('T-002', { periodId: period1!.id, memberId: 'M-001', memberName: 'Jean', joinedAt: '2026-01-01' });
     const period2 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2027-01-01', endDate: '2027-12-31' });
@@ -561,7 +561,7 @@ describe('tontineTurnsService — adhésions au niveau de la période (mandat «
   });
 
   it('a Tontine can be created with zero adhesions (AC-01)', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Tontine sans adhésion', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Tontine sans adhésion', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-12-31' });
     const adhesions = await tontineTurnsService.listAdhesionsByPeriod('T-002', period!.id);
     expect(adhesions).toEqual([]); // AC-07 : zéro adhésion est un état valide
@@ -571,7 +571,7 @@ describe('tontineTurnsService — adhésions au niveau de la période (mandat «
 describe('tontineTurnsService — createAdhesionsForPeriod (mandat ajout multiple d’adhésions)', () => {
   /** Fixture isolée (Tontine + Période fraîches, T-002) pour ne dépendre d'aucun ordre d'exécution ni de l'état déjà mutable des seeds partagées entre tests. */
   async function createFreshPeriod() {
-    const tontine = await tontinesService.createTontine({ name: 'Fixture ajout multiple', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Fixture ajout multiple', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-12-31' });
     return period!;
   }
@@ -678,7 +678,7 @@ describe('tontineTurnsService — createContribution : l’adhésion doit appart
   });
 
   it('DENY: contribution refusée si l’adhésion appartient à une AUTRE période que l’occurrence', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Cross-période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'MONDAY' });
+    const tontine = (await tontinesService.createTontine({ name: 'Cross-période', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'WEEKLY', weekday: 'MONDAY', contributionAmount: 10_000 }))!;
     const periodA = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-01-31' });
     const periodB = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2027-01-01', endDate: '2027-01-31' });
     const adhesionOfB = await tontineTurnsService.createAdhesion('T-002', { periodId: periodB!.id, memberId: 'M-001', memberName: 'Jean', joinedAt: '2027-01-01' });
@@ -690,7 +690,7 @@ describe('tontineTurnsService — createContribution : l’adhésion doit appart
 
 describe('tontineTurnsService — indépendance vis-à-vis de l’exercice fiscal (mandat finalisation UX)', () => {
   it('une Période peut chevaucher deux exercices fiscaux : la génération ne dépend que de period.startDate/endDate/tontine.frequency, jamais d’un identifiant d’exercice fiscal', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Chevauchement exercice fiscal', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 15 });
+    const tontine = (await tontinesService.createTontine({ name: 'Chevauchement exercice fiscal', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 15, contributionAmount: 10_000 }))!;
     // Chevauche deux exercices calendaires (nov 2026 → fév 2027) : ni createPeriod ni generateOccurrences n'acceptent ou ne dérivent quoi que ce soit d'un exercice fiscal.
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-11-01', endDate: '2027-02-28' });
     expect(period).not.toBeNull();
@@ -701,7 +701,7 @@ describe('tontineTurnsService — indépendance vis-à-vis de l’exercice fisca
 
 describe('tontineTurnsService — périodes successives sur la même Tontine (mandat finalisation UX)', () => {
   it('trois périodes successives cohabitent sous la même Tontine, sans jamais la recréer, avec un historique intact', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Épargne mensuelle successive', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE' });
+    const tontine = (await tontinesService.createTontine({ name: 'Épargne mensuelle successive', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000 }))!;
     const period1 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-12-31' });
     const period2 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2027-01-01', endDate: '2027-12-31' });
     const period3 = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2028-01-01', endDate: '2028-12-31' });
@@ -724,7 +724,7 @@ describe('tontineTurnsService — périodes successives sur la même Tontine (ma
 describe('tontineTurnsService — generateOccurrences (mandat fréquence)', () => {
   /** Fixture isolée (Tontine + Période fraîches) pour ne dépendre d'aucun ordre d'exécution ni de l'état déjà mutable des seeds partagées entre tests. */
   async function createWeeklyFixture() {
-    const tontine = await tontinesService.createTontine({ name: 'Fixture hebdo', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', frequency: 'WEEKLY', weekday: 'WEDNESDAY' });
+    const tontine = (await tontinesService.createTontine({ name: 'Fixture hebdo', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', frequency: 'WEEKLY', weekday: 'WEDNESDAY', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-01-01', endDate: '2026-01-31' });
     return { tontine, period: period! };
   }
@@ -794,7 +794,7 @@ describe('tontineTurnsService — generateOccurrences (mandat fréquence)', () =
  */
 describe('AUDIT — RBAC appliqué uniquement côté UI, jamais côté service', () => {
   it('createOccurrence réussit sans aucune vérification de permission, même pour une action normalement gardée par PermissionGate("cycles.manage") côté UI', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Audit RBAC', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF' });
+    const tontine = (await tontinesService.createTontine({ name: 'Audit RBAC', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-02-01', endDate: '2026-02-28' });
     // Aucun `currentUser`/`can()` n'est passé ni consulté ici — le service ne peut structurellement pas refuser pour une raison de permission.
     const occurrence = await tontineTurnsService.createOccurrence('T-002', { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-02-05' });
@@ -816,7 +816,7 @@ describe('AUDIT — RBAC appliqué uniquement côté UI, jamais côté service',
  */
 describe('AUDIT — Bénéficiaires : createOccurrence ne crée toujours aucun TurnBeneficiary par défaut', () => {
   it('createOccurrence crée un Turn sans aucun TurnBeneficiary (0 bénéficiaire, jamais un état "en attente d\'attribution")', async () => {
-    const tontine = await tontinesService.createTontine({ name: 'Audit Bénéficiaires', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF' });
+    const tontine = (await tontinesService.createTontine({ name: 'Audit Bénéficiaires', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-03-01', endDate: '2026-03-31' });
     const occurrence = await tontineTurnsService.createOccurrence('T-002', { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-03-05' });
     const turn = await tontineTurnsService.getTurnByOccurrence('T-002', occurrence!.id);
@@ -834,7 +834,7 @@ describe('AUDIT — Bénéficiaires : createOccurrence ne crée toujours aucun T
 
 describe('addBeneficiaries — enregistrement du résultat d\'un tirage manuel (RB-01 à RB-10)', () => {
   async function setupOpenTurn(tenantId: string, memberSuffix = 'A') {
-    const tontine = await tontinesService.createTontine({ name: `Tirage manuel ${memberSuffix}`, valueType: 'MONEY', tenantId, currency: 'XAF' });
+    const tontine = (await tontinesService.createTontine({ name: `Tirage manuel ${memberSuffix}`, valueType: 'MONEY', tenantId, currency: 'XAF', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod(tenantId, { tontineId: tontine.id, startDate: '2026-04-01', endDate: '2026-04-30' });
     const adhesion1 = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${memberSuffix}-1`, memberName: `Membre ${memberSuffix}1`, joinedAt: '2026-04-01' });
     const adhesion2 = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${memberSuffix}-2`, memberName: `Membre ${memberSuffix}2`, joinedAt: '2026-04-01' });
@@ -990,7 +990,7 @@ describe('AUDIT — Isolation tenant stricte des vues agrégées (T-002 vs T-005
  */
 describe('requestTurnPermutation / applyTurnPermutationDecision — permutation de tours planifiés', () => {
   async function setupTwoPlannedTurns(tenantId: string, suffix: string) {
-    const tontine = await tontinesService.createTontine({ name: `Planification ${suffix}`, valueType: 'MONEY', tenantId, currency: 'XAF' });
+    const tontine = (await tontinesService.createTontine({ name: `Planification ${suffix}`, valueType: 'MONEY', tenantId, currency: 'XAF', contributionAmount: 10_000 }))!;
     const period = await tontineTurnsService.createPeriod(tenantId, { tontineId: tontine.id, startDate: '2026-10-01', endDate: '2027-09-30' });
     const adhesionA = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${suffix}-A`, memberName: `Membre ${suffix}A`, joinedAt: '2026-10-01' });
     const adhesionB = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${suffix}-B`, memberName: `Membre ${suffix}B`, joinedAt: '2026-10-01' });
