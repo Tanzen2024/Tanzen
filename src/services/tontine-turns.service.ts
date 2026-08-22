@@ -6,10 +6,13 @@ import { tontines } from '@/mocks/tontines/tontines';
 import { members } from '@/mocks/organization/members';
 import { generateOccurrenceDates } from '@/mocks/tontines/tontine-frequency';
 import {
-  tontineAdhesions, tontineOccurrences, tontineTurns, tontineTurnBeneficiaries, tontineContributions,
+  tontineAdhesions, tontineOccurrences, tontineTurns, tontineTurnBeneficiaries, tontineContributions, tontineTurnPermutations,
   computeReceivedTotal, computeBeneficiaryStatus, isAdhesionActiveAt,
-  type TontineAdhesion, type TontineOccurrence, type TontineTurn, type TontineTurnBeneficiary, type TontineContribution, type ReceptionOperation, type PaymentOperation, type ValueType,
+  type TontineAdhesion, type TontineOccurrence, type TontineTurn, type TontineTurnBeneficiary, type TontineContribution, type TontineTurnPermutation, type ReceptionOperation, type PaymentOperation, type ValueType,
 } from '@/mocks/tontines/tontine-occurrences';
+import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
+import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
+import { workflowService } from './workflow.service';
 import type { UnitCode } from '@/constants/units';
 
 export type ReceptionInput = { amount?: number; quantity?: number };
@@ -21,6 +24,23 @@ export type AdhesionInput = { periodId: string; memberId: string; memberName: st
 export type ContributionInput = { adhesionId: string; tontineOccurrenceId: string; valueType: ValueType; expectedAmount?: number; currency?: string; expectedQuantity?: number; item?: string; unit?: UnitCode };
 /** Champs volontairement minimaux (montant/quantité) — mode de paiement, référence et commentaire ne sont spécifiés par aucune source pour Contribution, non inventés ici. */
 export type ContributionPaymentInput = { amount?: number; quantity?: number };
+/**
+ * Enregistrement du résultat d'un tirage MANUEL réalisé en amont, hors TANZEN (mandat
+ * bénéficiaires) — jamais un tirage. Champs strictement limités à ceux déjà portés par
+ * `TontineTurnBeneficiary` (pas de `currency`/`unit` : ce type ne les porte pas,
+ * contrairement à `TontineContribution` — asymétrie déjà présente dans le modèle, non
+ * ajoutée ici). `adhesionIds` accepte 0..N entrées (RB-04/RB-05, aucune limite inventée).
+ */
+export type BeneficiaryInput = { adhesionIds: string[]; valueType: ValueType; expectedAmount?: number; expectedQuantity?: number; item?: string };
+/**
+ * Demande de permutation entre deux `TontineTurnBeneficiary` déjà existants (jamais un
+ * simple couple tour/adhésion : un tour peut porter plusieurs bénéficiaires, D-TON-04-19,
+ * donc seul l'identifiant du `TontineTurnBeneficiary` désigne sans ambiguïté QUI échange
+ * avec QUI). `requestedByUserId` suit exactement le même rôle que sur `WorkflowRequest`
+ * (D-FY-08) — ici renseigné mais jamais comparé à l'acteur lors de la décision : décision
+ * explicite du mandat de ne PAS généraliser le blocage d'auto-approbation à ce domaine.
+ */
+export type TurnPermutationInput = { turnBeneficiaryAId: string; turnBeneficiaryBId: string; requestedBy: string; requestedByUserId?: string; justification?: string };
 /** Champs strictement limités à ceux déjà portés par `TontineOccurrence` — aucune notion de fréquence/périodicité n'existe dans le modèle (confirmé absent, D-TON-04-11), donc non demandée ici : chaque occurrence est créée manuellement, une par une. */
 export type OccurrenceInput = { periodId: string; occurrenceNumber: number; plannedDate: string; actualDate?: string | null };
 /** Champs strictement limités à ceux du dictionnaire canonique Period (mandat refonte §4) — pas de « numéro de période » ni de champ supplémentaire non demandé. */
@@ -132,6 +152,22 @@ export const tontineTurnsService = {
   /** Périodes d'une Tontine (nouveau niveau temporel, remplace Cycle comme parent d'Occurrence — mandat refonte). `TontineCycle` reste une structure légataire séparée, non traversée ici. */
   listPeriodsByTontine: (tenantId: string, tontineId: string) =>
     mockRequest(() => tontinePeriods.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId).sort((a, b) => a.startDate.localeCompare(b.startDate))),
+  /**
+   * Vues agrégées transverses (mandat vue d'ensemble « Membres »/« Cotisations »/« Opérations » —
+   * toutes tontines confondues) : simples filtres par `tenantId`, déjà porté directement par
+   * chaque entité (Adhesion/Contribution/Occurrence/Turn/Period) — aucune jointure Tontine→Période
+   * n'est nécessaire pour filtrer, seulement pour l'affichage (nom de la tontine), résolu côté UI
+   * via `listAllPeriods`. N'introduit aucune nouvelle entité ni règle métier, uniquement des
+   * lectures agrégées de ce qui existe déjà.
+   */
+  listAllPeriods: (tenantId: string) => mockRequest(() => tontinePeriods.filter((item) => item.tenantId === tenantId)),
+  listAllAdhesions: (tenantId: string) => mockRequest(() => tontineAdhesions.filter((item) => item.tenantId === tenantId)),
+  listAllContributions: (tenantId: string) => mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId)),
+  listAllOccurrences: (tenantId: string) => mockRequest(() => tontineOccurrences.filter((item) => item.tenantId === tenantId).sort((a, b) => a.plannedDate.localeCompare(b.plannedDate))),
+  listAllTurns: (tenantId: string) => mockRequest(() => tontineTurns.filter((item) => item.tenantId === tenantId)),
+  listAllBeneficiaries: (tenantId: string) => mockRequest(() => tontineTurnBeneficiaries.filter((item) => item.tenantId === tenantId)),
+  /** Lecture pure du lien technique demande↔bénéficiaires (cf. `TontineTurnPermutation`) — utilisée par l'écran de planification pour signaler une permutation déjà en cours sur un tour, sans dupliquer l'état déjà porté par `WorkflowRequest.status`. */
+  listTurnPermutations: (tenantId: string) => mockRequest(() => tontineTurnPermutations.filter((item) => item.tenantId === tenantId)),
   getPeriod: (tenantId: string, periodId: string) =>
     mockRequest(() => getTenantScoped(tontinePeriods, (item) => item.id === periodId, tenantId)),
   /**
@@ -242,6 +278,189 @@ export const tontineTurnsService = {
       const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
       if (!beneficiary) return undefined;
       return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
+    }),
+  /**
+   * Enregistre le résultat d'un tirage MANUEL déjà réalisé hors TANZEN (RB-06/RB-07) —
+   * ne choisit, ne calcule ni ne propose jamais lui-même un bénéficiaire.
+   *
+   * RB-01/RB-02/RB-03 : une adhésion n'est acceptée que si elle appartient à LA MÊME
+   * Période que l'Occurrence de ce Turn (donc à la même Tontine, par construction de la
+   * chaîne Adhesion→Période→Tontine) — même contrainte déjà appliquée par
+   * `createContribution` ci-dessus, réutilisée telle quelle (pas une règle nouvelle).
+   * Réutilise également `isAdhesionActiveAt` (même fonction que pour les Contributions,
+   * RB-10 : aucune nouvelle règle d'éligibilité inventée).
+   *
+   * RB-08/RB-09 : aucune vérification "déjà bénéficiaire d'une autre tontine" ni "déjà
+   * bénéficiaire par le passé dans cette tontine" — ce ne sont pas des règles sourcées,
+   * volontairement non ajoutées. Seul un doublon strict est empêché : la même adhésion
+   * deux fois dans le même appel, ou une adhésion déjà bénéficiaire de CE turn précis.
+   *
+   * Refuse (retourne undefined) si le Turn est CLOSED — même immuabilité que
+   * `recordReception`/`correctReception`/`regularizeReception`/`cancelReception`.
+   * Une adhésion invalide/hors tontine/déjà présente est silencieusement ignorée plutôt
+   * que de faire échouer tout le lot (même convention que `createAdhesionsForPeriod`) ;
+   * `skippedAdhesionIds` permet à l'UI d'en informer précisément l'utilisateur.
+   */
+  addBeneficiaries: (tenantId: string, turnId: string, input: BeneficiaryInput) =>
+    mockRequest(() => {
+      const turn = getTenantScoped(tontineTurns, (item) => item.id === turnId, tenantId);
+      if (!turn) return undefined;
+      if (turn.status === 'CLOSED') return undefined;
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === turn.tontineOccurrenceId, tenantId);
+      if (!occurrence) return undefined;
+      const referenceDate = occurrence.actualDate ?? occurrence.plannedDate;
+      const alreadyAdhesionIds = new Set(tontineTurnBeneficiaries.filter((item) => item.tontineTurnId === turnId).map((item) => item.adhesionId));
+      const created: TontineTurnBeneficiary[] = [];
+      const skippedAdhesionIds: string[] = [];
+      const seenThisCall = new Set<string>();
+      for (const adhesionId of input.adhesionIds) {
+        if (seenThisCall.has(adhesionId) || alreadyAdhesionIds.has(adhesionId)) { skippedAdhesionIds.push(adhesionId); continue; }
+        const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
+        if (!adhesion || adhesion.periodId !== occurrence.periodId || !isAdhesionActiveAt(adhesion, referenceDate)) { skippedAdhesionIds.push(adhesionId); continue; }
+        seenThisCall.add(adhesionId);
+        const beneficiary: TontineTurnBeneficiary = { id: uniqueId('TB'), tenantId, tontineTurnId: turnId, adhesionId, valueType: input.valueType, expectedAmount: input.expectedAmount, expectedQuantity: input.expectedQuantity, item: input.item, operations: [] };
+        tontineTurnBeneficiaries.push(beneficiary);
+        alreadyAdhesionIds.add(adhesionId);
+        created.push(beneficiary);
+      }
+      return { created, skippedAdhesionIds };
+    }),
+
+  /**
+   * Historique des permutations d'un bénéficiaire (mandat §16/§Q1 : « distinguer/
+   * historiser » les différents tours qu'une adhésion a occupés). Dérivé, jamais stocké
+   * séparément — chaque `AuditEvent` `tontines.turnPermutationApplied` écrit par
+   * `applyTurnPermutationDecision` porte déjà avant/après ; ce lecteur les retrouve pour
+   * une adhésion donnée (des deux côtés d'un échange, `context.otherAdhesionId`).
+   */
+  listPermutationHistoryForAdhesion: (tenantId: string, adhesionId: string) =>
+    mockRequest(() =>
+      auditEvents
+        .filter((event) => event.tenantId === tenantId && event.module === 'tontines' && event.action === 'tontines.turnPermutationApplied' && (event.context?.adhesionId === adhesionId || event.context?.otherAdhesionId === adhesionId))
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
+    ),
+
+  /**
+   * Crée une `WorkflowRequest` (domaine `tontines`, `WD-006`) via le moteur générique —
+   * ne modifie RIEN dans `tontineTurnBeneficiaries` avant approbation effective (mandat
+   * §9-10 : la permutation ne devient effective qu'après validation). `turnBeneficiaryAId`/
+   * `turnBeneficiaryBId` désignent directement les deux `TontineTurnBeneficiary` à
+   * échanger — jamais un couple tour/adhésion : un tour peut porter plusieurs
+   * bénéficiaires (D-TON-04-19), seul l'id du bénéficiaire lève l'ambiguïté.
+   *
+   * Refuse (retourne `undefined`) si : même bénéficiaire des deux côtés, bénéficiaire
+   * introuvable/autre tenant, les deux bénéficiaires appartiennent déjà au même tour,
+   * l'un des deux tours est CLOSED (même immuabilité que `recordReception`/
+   * `addBeneficiaries`), les deux tours n'appartiennent pas à la MÊME tontine (aucune
+   * permutation inter-tontine — jamais demandée par le mandat, mélanger deux tontines
+   * serait un mélange de fonds distincts), ou une permutation déjà `pending`/`inProgress`
+   * référence déjà l'un des deux bénéficiaires (§17, TEST 14 : deux demandes concurrentes
+   * incompatibles).
+   */
+  requestTurnPermutation: async (tenantId: string, input: TurnPermutationInput): Promise<WorkflowRequest | undefined> => {
+    if (input.turnBeneficiaryAId === input.turnBeneficiaryBId) return undefined;
+    const beneficiaryA = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === input.turnBeneficiaryAId, tenantId);
+    const beneficiaryB = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === input.turnBeneficiaryBId, tenantId);
+    if (!beneficiaryA || !beneficiaryB || beneficiaryA.tontineTurnId === beneficiaryB.tontineTurnId) return undefined;
+    const turnA = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryA.tontineTurnId, tenantId);
+    const turnB = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryB.tontineTurnId, tenantId);
+    if (!turnA || !turnB || turnA.status === 'CLOSED' || turnB.status === 'CLOSED') return undefined;
+    const occurrenceA = getTenantScoped(tontineOccurrences, (item) => item.id === turnA.tontineOccurrenceId, tenantId);
+    const occurrenceB = getTenantScoped(tontineOccurrences, (item) => item.id === turnB.tontineOccurrenceId, tenantId);
+    if (!occurrenceA || !occurrenceB) return undefined;
+    const periodA = getTenantScoped(tontinePeriods, (item) => item.id === occurrenceA.periodId, tenantId);
+    const periodB = getTenantScoped(tontinePeriods, (item) => item.id === occurrenceB.periodId, tenantId);
+    if (!periodA || !periodB || periodA.tontineId !== periodB.tontineId) return undefined;
+    const conflicting = tontineTurnPermutations.some((permutation) => {
+      if (permutation.tenantId !== tenantId) return false;
+      if (permutation.turnBeneficiaryAId !== input.turnBeneficiaryAId && permutation.turnBeneficiaryAId !== input.turnBeneficiaryBId && permutation.turnBeneficiaryBId !== input.turnBeneficiaryAId && permutation.turnBeneficiaryBId !== input.turnBeneficiaryBId) return false;
+      const existingRequest = workflowRequests.find((item) => item.id === permutation.workflowRequestId);
+      return Boolean(existingRequest && (existingRequest.status === 'pending' || existingRequest.status === 'inProgress'));
+    });
+    if (conflicting) return undefined;
+
+    const adhesionA = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiaryA.adhesionId, tenantId);
+    const adhesionB = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiaryB.adhesionId, tenantId);
+    const entityLabel = `Tour ${turnA.turnNumber} · ${adhesionA?.memberName ?? beneficiaryA.adhesionId} ↔ Tour ${turnB.turnNumber} · ${adhesionB?.memberName ?? beneficiaryB.adhesionId}`;
+    const permutationId = uniqueId('TPM');
+    const request = await workflowService.createRequest(tenantId, 'WD-006', { entityId: permutationId, entityLabel, requestedBy: input.requestedBy, requestedByUserId: input.requestedByUserId, justification: input.justification });
+    if (!request) return undefined;
+    const permutation: TontineTurnPermutation = { id: permutationId, tenantId, workflowRequestId: request.id, turnBeneficiaryAId: input.turnBeneficiaryAId, turnBeneficiaryBId: input.turnBeneficiaryBId, appliedAt: null };
+    tontineTurnPermutations.push(permutation);
+    return request;
+  },
+
+  /**
+   * Effet de bord propre au domaine Tontines, appelé APRÈS `workflowService.submitAction`
+   * — même point d'intégration générique que `settingsService.applyFiscalYearReopenDecision`
+   * (`operations-module.tsx`, `WorkflowDetail`) : no-op pour tout autre domaine/entityType,
+   * le moteur workflow reste agnostique. Auto-approbation VOLONTAIREMENT autorisée (décision
+   * explicite du mandat : ne pas généraliser D-FY-08 à ce domaine) — aucune comparaison
+   * `requestedByUserId`/acteur ici, contrairement à `decideFiscalYearReopen`.
+   *
+   * Échange atomique (mandat §13) : les deux `TontineTurnBeneficiary.adhesionId` sont permutés
+   * dans le même appel synchrone — aucun état intermédiaire n'est jamais observable (le
+   * moteur mock est mono-thread, comme `applyFiscalYearReopenDecision`). N'applique rien
+   * (silencieusement, même tolérance que `applyFiscalYearReopenDecision` pour une FiscalYear
+   * déjà rouverte entretemps) si l'un des deux Turns est devenu CLOSED, ou si l'un des deux
+   * bénéficiaires a déjà une réception enregistrée depuis la demande — permuter après coup
+   * réattribuerait un historique financier déjà réel à la mauvaise personne (règle non
+   * demandée explicitement par le mandat mais directement dictée par l'intégrité des
+   * données, cf. immuabilité déjà appliquée à `recordReception` etc.).
+   */
+  applyTurnPermutationDecision: (tenantId: string, request: WorkflowRequest) => {
+    if (request.domain !== 'tontines' || request.entityType !== 'turnPermutation' || request.status !== 'approved') return;
+    const permutation = tontineTurnPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === request.id);
+    if (!permutation || permutation.appliedAt) return;
+    const beneficiaryA = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === permutation.turnBeneficiaryAId, tenantId);
+    const beneficiaryB = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === permutation.turnBeneficiaryBId, tenantId);
+    if (!beneficiaryA || !beneficiaryB || beneficiaryA.operations.length > 0 || beneficiaryB.operations.length > 0) return;
+    const turnA = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryA.tontineTurnId, tenantId);
+    const turnB = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryB.tontineTurnId, tenantId);
+    if (!turnA || !turnB || turnA.status === 'CLOSED' || turnB.status === 'CLOSED') return;
+    const adhesionIdA = beneficiaryA.adhesionId;
+    const adhesionIdB = beneficiaryB.adhesionId;
+    if (adhesionIdA === adhesionIdB) return;
+    beneficiaryA.adhesionId = adhesionIdB;
+    beneficiaryB.adhesionId = adhesionIdA;
+    permutation.appliedAt = new Date().toISOString();
+    const memberNameA = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionIdA, tenantId)?.memberName ?? adhesionIdA;
+    const memberNameB = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionIdB, tenantId)?.memberName ?? adhesionIdB;
+    const event: AuditEvent = {
+      id: uniqueId('AUD-TON'), tenantId, timestamp: new Date().toISOString(), actorId: currentUser.id, actorName: currentUser.name,
+      module: 'tontines', action: 'tontines.turnPermutationApplied', eventType: 'sensitiveAction',
+      resourceType: 'turnBeneficiary', resourceId: permutation.id, resourceLabel: request.entityLabel, status: 'success', sensitive: true, correlationId: permutation.id,
+      before: { [`turn${turnA.turnNumber}`]: memberNameA, [`turn${turnB.turnNumber}`]: memberNameB },
+      after: { [`turn${turnA.turnNumber}`]: memberNameB, [`turn${turnB.turnNumber}`]: memberNameA },
+      context: { adhesionId: adhesionIdA, otherAdhesionId: adhesionIdB, turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id },
+    };
+    auditEvents.push(event);
+  },
+
+  /**
+   * Lecture de composition pure (aucune mutation) — reconstruit les deux côtés d'une
+   * permutation (tour, adhérent, photo) à partir du seul `workflowRequestId`, pour que
+   * l'écran générique `WorkflowDetail` (`operations-module.tsx`, cross-domaine
+   * Credit/Governance/Finance/Settings/Tontines) puisse afficher les photos des deux
+   * bénéficiaires (mandat §9 « validation de permutation ») sans dupliquer la traversée
+   * Turn→TurnBeneficiary→Adhesion→Member déjà utilisée partout ailleurs dans ce fichier.
+   */
+  getTurnPermutationPreview: (tenantId: string, workflowRequestId: string) =>
+    mockRequest(() => {
+      const permutation = tontineTurnPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === workflowRequestId);
+      if (!permutation) return undefined;
+      const side = (beneficiaryId: string) => {
+        const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+        if (!beneficiary) return undefined;
+        const turn = getTenantScoped(tontineTurns, (item) => item.id === beneficiary.tontineTurnId, tenantId);
+        const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
+        const member = adhesion ? getTenantScoped(members, (item) => item.id === adhesion.memberId, tenantId) : undefined;
+        return { turnId: beneficiary.tontineTurnId, turnNumber: turn?.turnNumber, memberName: adhesion?.memberName ?? beneficiary.adhesionId, photoUrl: member?.photoUrl };
+      };
+      const a = side(permutation.turnBeneficiaryAId);
+      const b = side(permutation.turnBeneficiaryBId);
+      if (!a || !b) return undefined;
+      return { a, b };
     }),
 
   listContributionsByOccurrence: (tenantId: string, occurrenceId: string) =>

@@ -68,6 +68,13 @@ export const queryKeys = {
     cycles: (tontineId: string) => ['tontines', 'cycles', tontineId] as const,
     cycle: (id: string) => ['tontines', 'cycles', 'detail', id] as const,
     cyclesByMember: (memberId: string) => ['tontines', 'cycles', 'member', memberId] as const,
+    allPeriods: (tenantId: string) => ['tontines', 'all-periods', tenantId] as const,
+    allAdhesions: (tenantId: string) => ['tontines', 'all-adhesions', tenantId] as const,
+    allContributions: (tenantId: string) => ['tontines', 'all-contributions', tenantId] as const,
+    allOccurrences: (tenantId: string) => ['tontines', 'all-occurrences', tenantId] as const,
+    allTurns: (tenantId: string) => ['tontines', 'all-turns', tenantId] as const,
+    allBeneficiaries: (tenantId: string) => ['tontines', 'all-beneficiaries', tenantId] as const,
+    turnPermutations: (tenantId: string) => ['tontines', 'turn-permutations', tenantId] as const,
   },
   operations: {
     workflowDefinitions: (tenantId: string) => ['operations', 'workflow-definitions', tenantId] as const,

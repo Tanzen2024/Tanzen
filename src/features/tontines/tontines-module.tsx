@@ -13,8 +13,10 @@ import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
 import { OccurrenceList, OccurrenceCreate, OccurrenceDetail, TurnDetail } from './occurrences-module';
 import { PeriodTable, PeriodCreate, PeriodDetail } from './periods-module';
+import { TurnPlanningList } from './planning-module';
 import { PeriodAdhesionList, PeriodAdhesionCreate, PeriodAdhesionDetail } from './adhesions-module';
 import { ContributionList, ContributionCreate, ContributionDetail } from './contributions-module';
+import { TontinesOverview } from './overview-module';
 import { tontinesService, type TontineInput, type CycleInput, type CycleMemberInput, type DrawInput, type WinnerInput } from '@/services/tontines.service';
 import { tontineTurnsService } from '@/services/tontine-turns.service';
 import { organizationService } from '@/services/organization.service';
@@ -34,7 +36,7 @@ import { formatFCFA, formatNumber } from '@/lib/utils';
 
 type T = (section: 'tontines' | 'nav', key: string, values?: Record<string, string>) => string;
 
-const STATUS_TONE: Record<TontineCycleStatus | 'statusActive' | 'statusInactive' | 'statusCompleted' | 'statusPending' | 'statusScheduled' | 'settlementPending' | 'settlementProcessing' | 'settlementCompleted' | 'settlementFailed', 'default' | 'success' | 'warning' | 'error' | 'info'> = {
+export const STATUS_TONE: Record<TontineCycleStatus | 'statusActive' | 'statusInactive' | 'statusCompleted' | 'statusPending' | 'statusScheduled' | 'settlementPending' | 'settlementProcessing' | 'settlementCompleted' | 'settlementFailed', 'default' | 'success' | 'warning' | 'error' | 'info'> = {
   statusDraft: 'default', statusOpen: 'success', statusSuspended: 'warning', statusClosed: 'default', statusActive: 'success', statusInactive: 'default', statusCompleted: 'success', statusPending: 'warning', statusScheduled: 'info', settlementPending: 'warning', settlementProcessing: 'info', settlementCompleted: 'success', settlementFailed: 'error',
 };
 const FREQUENCY_LABEL_KEY: Record<TontineFrequency, string> = { DAILY: 'frequencyDaily', WEEKLY: 'frequencyWeekly', MONTHLY: 'frequencyMonthly', QUARTERLY: 'frequencyQuarterly' };
@@ -45,12 +47,17 @@ function Avatar({ name }: { name: string }) { const initials = name.split(' ').m
 function Metric({ label, value, icon: Icon, tone = 'info' }: { label: string; value: string; icon: typeof Landmark; tone?: 'info' | 'success' | 'warning' | 'neutral' }) { return <StatCard label={label} value={value} icon={Icon} tone={tone} />; }
 function Info({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Landmark }) { return <div className="flex gap-3"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon size={15} /></span><div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div></div>; }
 
-function TontinesList({ t }: { t: T }) {
+/**
+ * Contenu de la liste des tontines, sans son propre `Page`/`PageHeader` — extrait pour être
+ * embarqué dans l'onglet « Tontines » de `TontinesOverview` (mandat vue d'ensemble) sans
+ * dupliquer la logique de colonnes/filtre/métriques. Reste exporté et réutilisable tel quel.
+ */
+export function TontinesTableSection({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const [search, setSearch] = useState(''); const [status, setStatus] = useState('all');
   const { data: tontines = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.tontines.list(currentTenant.id), queryFn: () => tontinesService.listTontines(currentTenant.id) });
   const rows = tontines.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase()) && (status === 'all' || item.status === status));
-  if (isLoading) return <Page title={t('tontines', 'tontinesTitle')} description={t('tontines', 'tontinesDescription')}><TableSkeleton /></Page>;
-  if (isError) return <Page title={t('tontines', 'tontinesTitle')} description={t('tontines', 'tontinesDescription')}><ErrorState onRetry={refetch} /></Page>;
+  if (isLoading) return <TableSkeleton />;
+  if (isError) return <ErrorState onRetry={refetch} />;
   const columns: TableColumn<Tontine>[] = [
     { key: 'name', header: t('tontines', 'tontineName'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} className="flex items-center gap-3 text-left"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><UsersRound size={17} /></span><span><span className="block font-semibold">{row.name}</span><span className="block font-mono text-xs text-muted-foreground">{row.id}</span></span></button> },
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => <StatusBadge label={row.valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} tone={row.valueType === 'MONEY' ? 'info' : 'warning'} /> },
@@ -60,7 +67,7 @@ function TontinesList({ t }: { t: T }) {
     { key: 'status', header: t('tontines', 'tontineStatus'), render: (row) => <StatusBadge label={t('tontines', row.status)} tone={STATUS_TONE[row.status]} /> },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
   ];
-  return <Page title={t('tontines', 'tontinesTitle')} description={t('tontines', 'tontinesDescription')} actions={<PermissionGate permission="tontines.create"><Button onClick={() => navigate('/tontines/create')}><Plus size={16} />{t('tontines', 'createTontine')}</Button></PermissionGate>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('tontines', 'tontines')} value={formatNumber(tontines.length)} icon={UsersRound} /><Metric label={t('tontines', 'activeCycles')} value={formatNumber(tontines.reduce((sum, item) => sum + item.activeCycles, 0))} icon={CalendarDays} tone="success" /><Metric label={t('tontines', 'totalContributions')} value={formatFCFA(tontines.reduce((sum, item) => sum + item.totalContributions, 0), 'fr', true)} icon={Banknote} tone="warning" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'tontineName')} filters={<select value={status} onChange={(event) => setStatus(event.target.value)} aria-label={t('tontines', 'tontineStatus')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('tontines', 'tontineStatus')}</option><option value="statusActive">{t('tontines', 'statusActive')}</option><option value="statusInactive">{t('tontines', 'statusInactive')}</option></select>} /><DataTable columns={columns} rows={rows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noTontines')} />} /></Page>;
+  return <div className="space-y-6"><div className="flex justify-end"><PermissionGate permission="tontines.create"><Button onClick={() => navigate('/tontines/create')}><Plus size={16} />{t('tontines', 'createTontine')}</Button></PermissionGate></div><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('tontines', 'tontines')} value={formatNumber(tontines.length)} icon={UsersRound} /><Metric label={t('tontines', 'activeCycles')} value={formatNumber(tontines.reduce((sum, item) => sum + item.activeCycles, 0))} icon={CalendarDays} tone="success" /><Metric label={t('tontines', 'totalContributions')} value={formatFCFA(tontines.reduce((sum, item) => sum + item.totalContributions, 0), 'fr', true)} icon={Banknote} tone="warning" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'tontineName')} filters={<select value={status} onChange={(event) => setStatus(event.target.value)} aria-label={t('tontines', 'tontineStatus')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('tontines', 'tontineStatus')}</option><option value="statusActive">{t('tontines', 'statusActive')}</option><option value="statusInactive">{t('tontines', 'statusInactive')}</option></select>} /><DataTable columns={columns} rows={rows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noTontines')} />} /></div>;
 }
 
 function TontineCreate({ t }: { t: T }) {
@@ -255,7 +262,7 @@ function DrawCreate({ t }: { t: T }) {
   if (isLoading) return <Page title={t('tontines', 'upcomingDraw')}><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('tontines', 'upcomingDraw')}><ErrorState onRetry={refetch} /></Page>;
   if (!cycle) return <NotFoundPage />;
-  return <Page title={t('tontines', 'upcomingDraw')} description={`${cycle.id} · ${t('tontines', 'drawsDescription')}`} actions={<Back label={t('tontines', 'backToDraws')} />}><div className="grid gap-5 lg:grid-cols-2"><FormSection title={t('tontines', 'drawConfiguration')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="draw-number">{t('tontines', 'drawNumber')}</Label><Input id="draw-number" type="number" value={drawNumber} onChange={(event) => setDrawNumber(Number(event.target.value))} /></div><div className="space-y-2"><Label htmlFor="draw-date">{t('tontines', 'drawDate')}</Label><Input id="draw-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} aria-invalid={Boolean(error)} /></div><div className="space-y-2"><Label htmlFor="draw-contribution-pool">{t('tontines', 'contributionPool')}</Label><Input id="draw-contribution-pool" type="number" value={contributionPool} onChange={(event) => setContributionPool(event.target.value)} /></div><div className="space-y-2"><Label htmlFor="draw-method">{t('tontines', 'drawMethod')}</Label><select id="draw-method" className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option>{t('tontines', 'randomDraw')}</option><option>{t('tontines', 'manualDraw')}</option></select></div></div><FieldError message={error} /></FormSection><FormSection title={t('tontines', 'eligibleMembers')}><p className="text-sm text-muted-foreground">{formatNumber(cycle.members.filter((member) => member.status === 'statusActive' && !member.hasWon).length)} {t('tontines', 'members').toLowerCase()}</p></FormSection><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/draws`)}>{t('tontines', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('tontines', 'saving') : t('tontines', 'configureDraw')}</Button></div></div></Page>;
+  return <Page title={t('tontines', 'upcomingDraw')} description={`${cycle.id} · ${t('tontines', 'drawsDescription')}`} actions={<Back label={t('tontines', 'backToDraws')} />}><div className="grid gap-5 lg:grid-cols-2"><FormSection title={t('tontines', 'drawConfiguration')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="draw-number">{t('tontines', 'drawNumber')}</Label><Input id="draw-number" type="number" value={drawNumber} onChange={(event) => setDrawNumber(Number(event.target.value))} /></div><div className="space-y-2"><Label htmlFor="draw-date">{t('tontines', 'drawDate')}</Label><Input id="draw-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} aria-invalid={Boolean(error)} /></div><div className="space-y-2"><Label htmlFor="draw-contribution-pool">{t('tontines', 'contributionPool')}</Label><Input id="draw-contribution-pool" type="number" value={contributionPool} onChange={(event) => setContributionPool(event.target.value)} /></div><div className="space-y-2"><Label htmlFor="draw-method">{t('tontines', 'drawMethod')}</Label><select id="draw-method" className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option>{t('tontines', 'manualDraw')}</option></select></div></div><FieldError message={error} /></FormSection><FormSection title={t('tontines', 'eligibleMembers')}><p className="text-sm text-muted-foreground">{formatNumber(cycle.members.filter((member) => member.status === 'statusActive' && !member.hasWon).length)} {t('tontines', 'members').toLowerCase()}</p></FormSection><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/tontines/${tontineId}/cycles/${cycleId}/draws`)}>{t('tontines', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('tontines', 'saving') : t('tontines', 'configureDraw')}</Button></div></div></Page>;
 }
 
 function DrawDetail({ t }: { t: T }) {
@@ -346,7 +353,7 @@ export function TontinesModule() {
   const { t } = useLocale();
   return (
     <Routes>
-      <Route index element={<TontinesList t={t} />} />
+      <Route index element={<TontinesOverview t={t} />} />
       <Route path="create" element={<TontineCreate t={t} />} />
       <Route path=":tontineId" element={<TontineDetail t={t} />} />
       <Route path=":tontineId/contributions" element={<ContributionList t={t} />} />
@@ -357,6 +364,7 @@ export function TontinesModule() {
       <Route path=":tontineId/periods/:periodId/adhesions" element={<PeriodAdhesionList t={t} />} />
       <Route path=":tontineId/periods/:periodId/adhesions/new" element={<PeriodAdhesionCreate t={t} />} />
       <Route path=":tontineId/periods/:periodId/adhesions/:adhesionId" element={<PeriodAdhesionDetail t={t} />} />
+      <Route path=":tontineId/periods/:periodId/planning" element={<TurnPlanningList t={t} />} />
       <Route path=":tontineId/periods/:periodId/occurrences" element={<OccurrenceList t={t} />} />
       <Route path=":tontineId/periods/:periodId/occurrences/create" element={<OccurrenceCreate t={t} />} />
       <Route path=":tontineId/periods/:periodId/occurrences/:occurrenceId" element={<OccurrenceDetail t={t} />} />

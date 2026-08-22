@@ -18,6 +18,7 @@ import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
 import { tontineTurnsService, type PeriodInput } from '@/services/tontine-turns.service';
 import { tontinesService } from '@/services/tontines.service';
+import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import type { PeriodStatus } from '@/mocks/tontines/tontine-periods';
@@ -58,7 +59,7 @@ export function PeriodCreate({ t }: { t: T }) {
   const [error, setError] = useState<string | undefined>();
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createPeriod>>, PeriodInput>({
     mutationFn: (input) => tontineTurnsService.createPeriod(currentTenant.id, input),
-    invalidateKeys: [['tontines', 'periods', tontineId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'periods', tontineId, currentTenant.id], queryKeys.tontines.allPeriods(currentTenant.id)],
     onSuccess: (period) => {
       if (!period) { notify.error(t('tontines', 'fieldRequired')); return; }
       notify.success(t('tontines', 'periodCreated'));
@@ -98,7 +99,7 @@ export function PeriodDetail({ t }: { t: T }) {
   const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'period-adhesions', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
   const generateMutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.generateOccurrences>>, void>({
     mutationFn: () => tontineTurnsService.generateOccurrences(currentTenant.id, periodId),
-    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id], queryKeys.tontines.allOccurrences(currentTenant.id), queryKeys.tontines.allTurns(currentTenant.id)],
     onSuccess: (created) => {
       if (!created) { notify.error(t('tontines', 'generationUnavailable')); return; }
       notify.success(created.length > 0 ? t('tontines', 'occurrencesGenerated', { count: String(created.length) }) : t('tontines', 'occurrencesGeneratedNone'));
@@ -148,6 +149,7 @@ export function PeriodDetail({ t }: { t: T }) {
       ? <p className="text-xs text-muted-foreground">{t('tontines', 'frequencyPreviewLabel')} : {formatFrequencyDescription(tontine as FrequencyConfig, 'fr')}</p>
       : <p className="text-xs text-muted-foreground">{t('tontines', 'autoGenerationUnavailable')}</p>}
     <Card><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5"><div><p className="text-sm font-semibold">{t('tontines', 'adhesionsOfPeriod')}</p><p className="text-xs text-muted-foreground">{t('tontines', 'periodAdhesionsCount', { count: String(adhesions.length) })}</p></div><Button variant="outline" size="sm" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions`)}><UsersRound size={15} />{t('tontines', 'manageAdhesions')}</Button></CardContent></Card>
+    {occurrences.length > 0 && <Card><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5"><div><p className="text-sm font-semibold">{t('tontines', 'planningTitle')}</p><p className="text-xs text-muted-foreground">{t('tontines', 'planningEntrySubtitle')}</p></div><Button variant="outline" size="sm" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/planning`)}><CalendarRange size={15} />{t('tontines', 'openPlanning')}</Button></CardContent></Card>}
     <OccurrenceCalendarTable t={t} tontineId={tontineId} periodId={periodId} occurrences={occurrences} />
   </Page>;
 }

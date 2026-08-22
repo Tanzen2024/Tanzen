@@ -1,10 +1,9 @@
 import type { ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Edit3, Eye, MoreVertical, Printer, Trash2, Users } from 'lucide-react';
-import { StatusBadge, DateDisplay, EmptyState, PermissionGate } from '@/components';
+import { StatusBadge, DateDisplay, EmptyState, PermissionGate, MemberAvatar } from '@/components';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import type { Member } from '@/mocks/organization/members';
 import { statusTone } from '../organization-module';
-import { MemberAvatar } from './member-avatar';
 import { memberRole, type MemberSortKey, type SortDirection } from '../hooks/use-member-directory';
 
 type T = (section: 'organization' | 'nav', key: string, values?: Record<string, string>) => string;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Building2, CalendarDays, Camera, CheckCircle2, ChevronRight, ClipboardCheck, Edit3, FileText, Landmark, Mail, MoreHorizontal, Network, Play, Plus, Printer, ShieldCheck, Trash2, UserCog, UserRound, Users, UsersRound, WalletCards, X, XCircle } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { PageHeader, DataTable, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
+import { PageHeader, DataTable, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, PermissionGate, TableSkeleton, DetailSkeleton, CardSkeleton, ErrorState, FieldError, ConfirmDialog, MemberAvatar, getInitials } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -40,7 +40,6 @@ import { useMemberDirectory } from './hooks/use-member-directory';
 import { MemberToolbar } from './components/member-toolbar';
 import { MemberTable } from './components/member-table';
 import { MemberPagination } from './components/member-pagination';
-import { MemberAvatar, getInitials } from './components/member-avatar';
 
 type T = (section: 'organization' | 'nav', key: string, values?: Record<string, string>) => string;
 

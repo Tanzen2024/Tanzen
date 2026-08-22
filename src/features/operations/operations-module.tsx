@@ -1,8 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Ban, BellRing, Check, CheckCircle2, ClipboardList, CreditCard, Download, Eye, FileText, Filter, Image, Inbox, Landmark, Megaphone, Paperclip, Plus, RotateCcw, Scale, Settings as SettingsIcon, Sparkles, Trash2, Upload, UserCog, Users2, Workflow, X, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, BellRing, Check, CheckCircle2, ClipboardList, CreditCard, Download, Eye, FileText, Filter, Image, Inbox, Landmark, Megaphone, Paperclip, Plus, Repeat, RotateCcw, Scale, Settings as SettingsIcon, Sparkles, Trash2, Upload, UserCog, Users2, Workflow, X, XCircle } from 'lucide-react';
 import { Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, MoneyDisplay, DateDisplay, PermissionGate, DetailPanel, ConfirmDialog, TableSkeleton, DetailSkeleton, ErrorState } from '@/components';
+import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, MoneyDisplay, DateDisplay, PermissionGate, DetailPanel, ConfirmDialog, TableSkeleton, DetailSkeleton, ErrorState, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -19,6 +19,7 @@ import { documentService, type DocumentInput } from '@/services/document.service
 import { organizationService } from '@/services/organization.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
+import { tontineTurnsService } from '@/services/tontine-turns.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
@@ -37,7 +38,7 @@ const REQUEST_STATUS_TONE: Record<WorkflowStatus, StatusTone> = { pending: 'warn
 const REQUEST_STATUS_KEY: Record<WorkflowStatus, string> = { pending: 'statusPending', inProgress: 'statusInProgress', approved: 'statusApproved', rejected: 'statusRejected', returned: 'statusReturned', cancelled: 'statusCancelled' };
 const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings' };
 const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon };
-const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', cycle: 'entityCycle', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear' };
+const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', cycle: 'entityCycle', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', turnPermutation: 'entityTurnPermutation' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
@@ -146,6 +147,9 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const [comment, setComment] = useState('');
 
   const isFiscalYearReopen = Boolean(request && request.domain === 'settings' && request.entityType === 'fiscalYear');
+  /** Mandat §9 « photos partout où l'identité du bénéficiaire est affichée, y compris en validation de permutation » — écran générique, donc lecture activée seulement pour ce domaine/entityType précis (même garde que `isFiscalYearReopen` ci-dessus). */
+  const isTurnPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'turnPermutation');
+  const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineTurnsService.getTurnPermutationPreview(currentTenant.id, requestId), enabled: isTurnPermutation });
 
   const mutation = useMutation({
     mutationFn: async (action: 'approve' | 'reject' | 'return' | 'cancel') => {
@@ -172,6 +176,14 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
        * ne fait pas passer le statut à `approved`.
        */
       if (result) await settingsService.applyFiscalYearReopenDecision(currentTenant.id, result);
+      /**
+       * Même point d'intégration générique, second domaine (mandat planification/
+       * permutation) — `applyTurnPermutationDecision` est également un no-op pour tout
+       * autre domaine/entityType et pour toute action qui ne fait pas passer le statut
+       * à `approved`. Auto-approbation volontairement non bloquée ici (décision du
+       * mandat), contrairement à la branche Fiscal Year ci-dessus.
+       */
+      if (result) tontineTurnsService.applyTurnPermutationDecision(currentTenant.id, result);
       return result;
     },
     onSuccess: (result, action) => {
@@ -183,6 +195,22 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.operations.workflowRequest(requestId) });
       queryClient.invalidateQueries({ queryKey: ['operations'] });
       if (result?.domain === 'settings' && result.entityType === 'fiscalYear') queryClient.invalidateQueries({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id) });
+      /**
+       * Bug réel trouvé à l'audit (relecture fraîche) : `allBeneficiaries` (agrégat) était
+       * bien invalidé, mais jamais les clés `['tontines','turn-beneficiaries', turnId,
+       * tenantId]` que `TurnDetail`/`BeneficiaryCard` lisent réellement — avec
+       * `staleTime: 30_000` (`app/providers.tsx`), un gestionnaire ayant déjà consulté l'un
+       * des deux Turn juste avant d'approuver pouvait y revoir l'ancien bénéficiaire jusqu'à
+       * 30s après validation. `permutationPreview` est déjà chargé (photos) et porte
+       * désormais `turnId` des deux côtés — réutilisé ici, aucune requête supplémentaire.
+       */
+      if (result?.domain === 'tontines' && result.entityType === 'turnPermutation') {
+        queryClient.invalidateQueries({ queryKey: queryKeys.tontines.allBeneficiaries(currentTenant.id) });
+        if (permutationPreview) {
+          queryClient.invalidateQueries({ queryKey: ['tontines', 'turn-beneficiaries', permutationPreview.a.turnId, currentTenant.id] });
+          queryClient.invalidateQueries({ queryKey: ['tontines', 'turn-beneficiaries', permutationPreview.b.turnId, currentTenant.id] });
+        }
+      }
       setPendingAction(null); setComment('');
     },
   });
@@ -207,6 +235,13 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
       <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'approvalTimeline')}</CardTitle></CardHeader><CardContent className="p-5"><ApprovalTimeline request={request} t={t} locale={locale} /></CardContent></Card>
       <div className="space-y-5">
+        {isTurnPermutation && permutationPreview && (
+          <Card><CardContent className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 p-5">
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.a.memberName, lastName: '', photoUrl: permutationPreview.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.a.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityTurnPermutation')} · #{permutationPreview.a.turnNumber}</p></div>
+            <Repeat className="text-muted-foreground" size={18} />
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityTurnPermutation')} · #{permutationPreview.b.turnNumber}</p></div>
+          </CardContent></Card>
+        )}
         <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'requestDetail')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
           <Info label={t('operations', 'entity')} value={`${request.entityLabel} (${t('operations', ENTITY_KEY[request.entityType])})`} icon={DomainIcon} />
           <Info label={t('operations', 'requestedBy')} value={request.requestedBy} icon={Users2} />

@@ -88,6 +88,40 @@ export type TontineTurnBeneficiary = {
 };
 
 /**
+ * Contexte technique d'une demande de permutation de tours (mandat
+ * planification/permutation) — le moteur de workflow générique
+ * (`workflowService`/`WorkflowRequest`) porte un seul `entityId`/string ;
+ * une permutation référence DEUX `TontineTurnBeneficiary` (mandat §9-13).
+ * Ce petit enregistrement de liaison est donc la seule addition de modèle
+ * réellement nécessaire — il ne duplique ni Member, ni TontineAdhesion, ni
+ * TontineTurnBeneficiary lui-même : il se contente de faire le pont entre
+ * une `WorkflowRequest.entityId` et les deux bénéficiaires concernés,
+ * exactement comme `FiscalYear.id` sert déjà d'`entityId` pour WD-005 (sauf
+ * qu'ici un seul entityId ne suffit pas à référencer les deux côtés d'un
+ * échange). Jamais modifié après création (immuable, comme une demande) —
+ * seul `TontineTurnBeneficiary.adhesionId` change, au moment de
+ * l'application (`applyTurnPermutationDecision`).
+ */
+export type TontineTurnPermutation = {
+  id: string;
+  tenantId: string;
+  workflowRequestId: string;
+  turnBeneficiaryAId: string;
+  turnBeneficiaryBId: string;
+  /**
+   * Renseignée UNE SEULE fois, au moment où l'échange est réellement appliqué —
+   * garde d'idempotence. `workflowService.submitAction` tolère un second appel
+   * `approve` sur une demande déjà `approved` (no-op, retourne la requête inchangée,
+   * cf. son propre commentaire) ; sans cette marque, un second appel à
+   * `applyTurnPermutationDecision` réappliquerait l'échange une seconde fois et
+   * annulerait silencieusement la permutation (bug réel trouvé par TEST15, corrigé
+   * ici plutôt que d'exiger que chaque appelant se souvienne de ne jamais rappeler
+   * la fonction).
+   */
+  appliedAt: string | null;
+};
+
+/**
  * Paiement de contribution — modèle délibérément plus simple que
  * `ReceptionOperation` (§7/§9 du mandat de cette étape : ne pas copier
  * aveuglément le modèle Réception). Seul « les paiements successifs
@@ -212,6 +246,9 @@ export const tontineTurnBeneficiaries: TontineTurnBeneficiary[] = [
     ],
   },
 ];
+
+/** Aucune demande de permutation en seed (fonctionnalité nouvelle, non rétro-historisée) — peuplé uniquement à l'exécution par `tontineTurnsService.requestTurnPermutation`. */
+export const tontineTurnPermutations: TontineTurnPermutation[] = [];
 
 export const tontineContributions: TontineContribution[] = [
   {

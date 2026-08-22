@@ -1,19 +1,20 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Ban, Banknote, BarChart3, BarChart3 as ChartIcon, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, WalletCards } from 'lucide-react';
+import { ArrowLeft, Ban, Banknote, BarChart3, BarChart3 as ChartIcon, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Pencil, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, UsersRound, WalletCards } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, ConfirmDialog } from '@/components';
+import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, Timeline, MoneyDisplay, DateDisplay, EmptyState, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, ConfirmDialog, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage, PermissionRoute } from '@/routes';
-import { financeService, type AccountInput, type DistributionInput } from '@/services/finance.service';
+import { financeService, type AccountCreateInput, type AccountUpdateInput, type DistributionInput } from '@/services/finance.service';
 import { creditService, type ApplicationInput, type LoanInput, type RepaymentInput, type GuarantorInput } from '@/services/credit.service';
 import { loanRuleService, type LoanRuleInput, type LoanRuleUpdateInput } from '@/services/loan-rule.service';
 import { organizationService } from '@/services/organization.service';
@@ -22,7 +23,8 @@ import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import type { ApplicationStage } from '@/mocks/finance/applications';
-import type { Account } from '@/mocks/finance/accounts';
+import type { Account, AccountType } from '@/mocks/finance/accounts';
+import type { Member } from '@/mocks/organization/members';
 import type { Transaction } from '@/mocks/finance/transactions';
 import type { Application } from '@/mocks/finance/applications';
 import type { Loan } from '@/mocks/finance/loans';
@@ -41,49 +43,129 @@ function Avatar({ name }: { name: string }) { const initials = name.split(' ').m
 function Info({ label, value, icon: Icon }: { label: string; value: ReactNode; icon: typeof Landmark }) { return <div className="flex gap-3"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon size={15} /></span><div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div></div>; }
 function Metric({ label, value, icon: Icon, tone = 'info' }: { label: string; value: string; icon: typeof Landmark; tone?: 'info' | 'success' | 'warning' | 'neutral' }) { return <StatCard label={label} value={value} icon={Icon} tone={tone} />; }
 
+const ACCOUNT_TYPE_LABEL_KEY: Record<AccountType, string> = { LIBRE: 'accountTypeLibre', TAUX_FIXE: 'accountTypeTauxFixe' };
+const MEMBER_STATUS_LABEL_KEY: Record<Member['status'], string> = { active: 'active', inactive: 'inactive', suspended: 'memberStatusSuspended', exited: 'memberStatusExited' };
+const MEMBER_STATUS_TONE: Record<Member['status'], 'success' | 'default' | 'warning' | 'error'> = { active: 'success', inactive: 'default', suspended: 'warning', exited: 'error' };
+
 function AccountsList({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const [search, setSearch] = useState('');
   const { data: accounts = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
-  const filtered = accounts.filter((a) => `${a.accountNumber} ${a.tenantName}`.toLowerCase().includes(search.toLowerCase()));
+  const [toDelete, setToDelete] = useState<Account | null>(null);
+  const deleteMutation = useMockMutation<Awaited<ReturnType<typeof financeService.deleteAccount>>, string>({
+    mutationFn: (accountId) => financeService.deleteAccount(currentTenant.id, accountId),
+    invalidateKeys: [queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('finance', 'duplicateTitle')); return; }
+      notify.success(t('finance', result.deactivated ? 'accountDeactivatedInstead' : 'accountDeleted'));
+      setToDelete(null);
+    },
+  });
+  const filtered = accounts.filter((a) => a.title.toLowerCase().includes(search.toLowerCase()));
   if (isLoading) return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')}><TableSkeleton /></Page>;
   if (isError) return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')}><ErrorState onRetry={refetch} /></Page>;
   const totalBalance = accounts.reduce((sum, a) => sum + a.balance, 0);
   const activeCount = accounts.filter((a) => a.status === 'active').length;
   const columns: TableColumn<Account>[] = [
-    { key: 'accountNumber', header: t('finance', 'accountNumber'), render: (row) => <button type="button" onClick={() => navigate(`/finance/accounts/${row.id}`)} className="flex items-center gap-3 text-left"><Avatar name={row.tenantName} /><span><span className="block font-mono text-sm font-semibold">{row.accountNumber}</span><span className="block text-xs text-muted-foreground">{row.tenantName}</span></span></button> },
-    { key: 'type', header: t('finance', 'accountType'), render: (row) => t('finance', row.type) },
+    { key: 'title', header: t('finance', 'accountTitle'), render: (row) => <button type="button" onClick={() => navigate(`/finance/accounts/${row.id}`)} className="text-left font-medium text-primary hover:underline">{row.title}</button> },
+    { key: 'type', header: t('finance', 'accountType'), render: (row) => <StatusBadge label={t('finance', ACCOUNT_TYPE_LABEL_KEY[row.type])} tone={row.type === 'TAUX_FIXE' ? 'info' : 'default'} /> },
+    { key: 'amount', header: t('finance', 'amount'), render: (row) => row.amount !== null ? <MoneyDisplay amount={row.amount} /> : <span className="text-muted-foreground">—</span> },
     { key: 'balance', header: t('finance', 'balance'), render: (row) => <span className="font-semibold"><MoneyDisplay amount={row.balance} /></span> },
-    { key: 'lastMovement', header: t('finance', 'lastMovement'), render: (row) => <DateDisplay value={row.lastMovement} /> },
     { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },
-    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/finance/accounts/${row.id}`)} aria-label={t('finance', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
+    { key: 'actions', header: '', className: 'w-32', render: (row) => <div className="flex justify-end gap-1">
+      <PermissionGate permission="accounts.manage"><button type="button" onClick={() => navigate(`/finance/accounts/${row.id}/members`)} aria-label={t('finance', 'manageMembers')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><UsersRound size={16} /></button></PermissionGate>
+      <PermissionGate permission="accounts.update"><button type="button" onClick={() => navigate(`/finance/accounts/${row.id}/edit`)} aria-label={t('finance', 'edit')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Pencil size={16} /></button></PermissionGate>
+      <PermissionGate permission="accounts.delete"><button type="button" onClick={() => setToDelete(row)} aria-label={t('finance', 'deleteAccount')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Trash2 size={16} /></button></PermissionGate>
+    </div> },
   ];
-  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'createAccount')}</Button></PermissionGate>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatFCFA(totalBalance, 'fr', true)} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchTransaction')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} /></Page>;
+  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatFCFA(totalBalance, 'fr', true)} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
+    {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(toDelete.id)} onCancel={() => setToDelete(null)} />}
+  </Page>;
+}
+
+function AccountFormFields({ t, title, setTitle, type, setType, amount, setAmount, description, setDescription, errors }: {
+  t: T; title: string; setTitle: (value: string) => void; type: AccountType; setType: (value: AccountType) => void; amount: string; setAmount: (value: string) => void; description: string; setDescription: (value: string) => void; errors: { title?: string; amount?: string };
+}) {
+  return <FormSection title={t('finance', 'general')}>
+    <div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-2 sm:col-span-2"><Label htmlFor="account-title">{t('finance', 'accountTitle')} *</Label><Input id="account-title" value={title} onChange={(event) => setTitle(event.target.value)} aria-invalid={Boolean(errors.title)} /><FieldError message={errors.title} /></div>
+      <div className="space-y-2"><Label htmlFor="account-type">{t('finance', 'accountType')} *</Label><select id="account-type" value={type} onChange={(event) => setType(event.target.value as AccountType)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="TAUX_FIXE">{t('finance', 'accountTypeTauxFixe')}</option><option value="LIBRE">{t('finance', 'accountTypeLibre')}</option></select></div>
+      {type === 'TAUX_FIXE' && <div className="space-y-2"><Label htmlFor="account-amount">{t('finance', 'amount')}</Label><Input id="account-amount" type="number" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} aria-invalid={Boolean(errors.amount)} /><FieldError message={errors.amount} /></div>}
+      <div className="space-y-2 sm:col-span-2"><Label htmlFor="account-description">{t('finance', 'cotisationDescription')}</Label><Textarea id="account-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div>
+    </div>
+  </FormSection>;
 }
 
 function AccountCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
-  /** Application Tenant : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1). */
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
-  const [accountNumber, setAccountNumber] = useState(''); const [type, setType] = useState<AccountInput['type']>('savings'); const [tenantId, setTenantId] = useState(currentTenant.id); const [balance, setBalance] = useState('0'); const [status, setStatus] = useState<AccountInput['status']>('active');
-  const [error, setError] = useState<string | undefined>();
-  const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.createAccount>>, AccountInput>({
-    mutationFn: (input) => financeService.createAccount(input),
+  const [title, setTitle] = useState(''); const [type, setType] = useState<AccountType>('TAUX_FIXE'); const [amount, setAmount] = useState(''); const [description, setDescription] = useState('');
+  const [errors, setErrors] = useState<{ title?: string; amount?: string }>({});
+  const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.createAccount>>, AccountCreateInput>({
+    mutationFn: (input) => financeService.createAccount(currentTenant.id, currentTenant.name, input),
     invalidateKeys: [queryKeys.finance.accounts(currentTenant.id)],
-    onSuccess: (account) => { notify.success(t('finance', 'accountCreated')); navigate(`/finance/accounts/${account.id}`); },
+    onSuccess: (account) => { if (!account) { notify.error(t('finance', 'duplicateTitle')); return; } notify.success(t('finance', 'accountCreated')); navigate(`/finance/accounts/${account.id}`); },
   });
   const handleSave = () => {
-    if (!accountNumber.trim()) { setError(t('finance', 'fieldRequired')); return; }
-    setError(undefined);
-    const tenant = tenants.find((item) => item.id === tenantId);
-    mutation.mutate({ accountNumber, type, balance: Number(balance) || 0, status, tenantId, tenantName: tenant?.name ?? currentTenant.name });
+    const nextErrors: typeof errors = {};
+    if (!title.trim()) nextErrors.title = t('finance', 'fieldRequired');
+    if (type === 'TAUX_FIXE') { if (!amount) nextErrors.amount = t('finance', 'fieldRequired'); else if (Number(amount) <= 0) nextErrors.amount = t('finance', 'invalidAmount'); }
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+    mutation.mutate({ title, type, amount: type === 'TAUX_FIXE' ? Number(amount) : null, description });
   };
-  return <Page title={t('finance', 'createAccount')} description={t('finance', 'accountsDescription')} actions={<Back label={t('finance', 'backToAccounts')} />}><div className="grid gap-5 lg:grid-cols-2"><FormSection title={t('finance', 'general')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="account-number">{t('finance', 'accountNumber')}</Label><Input id="account-number" value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="account-type">{t('finance', 'accountType')}</Label><select id="account-type" value={type} onChange={(event) => setType(event.target.value as AccountInput['type'])} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="savings">{t('finance', 'savings')}</option><option value="current">{t('finance', 'current')}</option><option value="treasury">{t('finance', 'treasury')}</option><option value="loanAccount">{t('finance', 'loanAccount')}</option></select></div><div className="space-y-2"><Label htmlFor="account-tenant">{t('finance', 'tenant')}</Label><select id="account-tenant" value={tenantId} onChange={(event) => setTenantId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></div><div className="space-y-2"><Label htmlFor="account-balance">{t('finance', 'balance')}</Label><Input id="account-balance" type="number" inputMode="decimal" value={balance} onChange={(event) => setBalance(event.target.value)} /></div></div></FormSection><FormSection title={t('finance', 'general')}><div className="space-y-4"><div className="space-y-2"><Label htmlFor="account-status">{t('finance', 'status')}</Label><select id="account-status" value={status} onChange={(event) => setStatus(event.target.value as AccountInput['status'])} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="active">{t('finance', 'active')}</option><option value="inactive">{t('finance', 'inactive')}</option></select></div></div></FormSection><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/finance/accounts')}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div></div></Page>;
+  return <Page title={t('finance', 'createAccount')} description={t('finance', 'accountsDescription')} actions={<Back label={t('finance', 'backToAccounts')} />}>
+    <div className="max-w-2xl space-y-5">
+      <AccountFormFields t={t} title={title} setTitle={setTitle} type={type} setType={setType} amount={amount} setAmount={setAmount} description={description} setDescription={setDescription} errors={errors} />
+      <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/finance/accounts')}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+    </div>
+  </Page>;
+}
+
+function AccountEdit({ t }: { t: T }) {
+  const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const { data: account, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.finance.account(id), currentTenant.id], queryFn: () => financeService.getAccount(currentTenant.id, id) });
+  const [form, setForm] = useState<{ title: string; type: AccountType; amount: string; description: string } | null>(null);
+  const [errors, setErrors] = useState<{ title?: string; amount?: string }>({});
+  const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.updateAccount>>, AccountUpdateInput>({
+    mutationFn: (patch) => financeService.updateAccount(currentTenant.id, id, patch),
+    invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (updated) => { if (!updated) { notify.error(t('finance', 'duplicateTitle')); return; } notify.success(t('finance', 'accountUpdated')); navigate(`/finance/accounts/${id}`); },
+  });
+  if (isLoading) return <Page title={t('finance', 'editAccount')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'editAccount')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!account) return <NotFoundPage />;
+  const current = form ?? { title: account.title, type: account.type, amount: account.amount === null ? '' : String(account.amount), description: account.description };
+  const setField = <K extends keyof typeof current>(key: K, value: (typeof current)[K]) => setForm({ ...current, [key]: value });
+  const handleSave = () => {
+    const nextErrors: typeof errors = {};
+    if (!current.title.trim()) nextErrors.title = t('finance', 'fieldRequired');
+    if (current.type === 'TAUX_FIXE') { if (!current.amount) nextErrors.amount = t('finance', 'fieldRequired'); else if (Number(current.amount) <= 0) nextErrors.amount = t('finance', 'invalidAmount'); }
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+    mutation.mutate({ title: current.title, type: current.type, amount: current.type === 'TAUX_FIXE' ? Number(current.amount) : null, description: current.description });
+  };
+  return <Page title={t('finance', 'editAccount')} description={account.title} actions={<Back label={t('finance', 'backToAccounts')} />}>
+    <div className="max-w-2xl space-y-5">
+      <AccountFormFields t={t} title={current.title} setTitle={(value) => setField('title', value)} type={current.type} setType={(value) => setField('type', value)} amount={current.amount} setAmount={(value) => setField('amount', value)} description={current.description} setDescription={(value) => setField('description', value)} errors={errors} />
+      <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/finance/accounts/${id}`)}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+    </div>
+  </Page>;
 }
 
 function AccountDetail({ t }: { t: T }) {
-  const { id = '' } = useParams(); const { currentTenant } = useTenant();
+  const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
   const { data: account, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.finance.account(id), currentTenant.id], queryFn: () => financeService.getAccount(currentTenant.id, id) });
   const { data: transactions = [] } = useQuery({ queryKey: queryKeys.finance.transactions(currentTenant.id), queryFn: () => financeService.listTransactions(currentTenant.id) });
+  const [toDelete, setToDelete] = useState(false);
+  const deleteMutation = useMockMutation<Awaited<ReturnType<typeof financeService.deleteAccount>>, string>({
+    mutationFn: (accountId) => financeService.deleteAccount(currentTenant.id, accountId),
+    invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('finance', 'duplicateTitle')); return; }
+      setToDelete(false);
+      if (result.deleted) { notify.success(t('finance', 'accountDeleted')); navigate('/finance/accounts'); return; }
+      notify.success(t('finance', 'accountDeactivatedInstead'));
+    },
+  });
   if (isLoading) return <Page title={t('finance', 'accountDetail')} description=""><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('finance', 'accountDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
   if (!account) return <NotFoundPage />;
@@ -95,7 +177,92 @@ function AccountDetail({ t }: { t: T }) {
     { key: 'type', header: t('finance', 'type'), render: (row) => <span className={row.type === 'credit' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>{row.type === 'credit' ? '+' : '-'}<MoneyDisplay amount={row.amount} /></span> },
     { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },
   ];
-  return <Page title={account.accountNumber} description={account.tenantName} actions={<><Back label={t('finance', 'backToAccounts')} /><Button variant="outline"><CreditCard size={15} />{t('finance', 'createTransaction')}</Button></>}><div className="grid gap-5 lg:grid-cols-[1fr_2fr]"><Card><CardContent className="p-5"><p className="text-xs text-muted-foreground">{t('finance', 'balance')}</p><p className="mt-2 font-heading text-3xl font-semibold"><MoneyDisplay amount={account.balance} /></p><div className="mt-5 space-y-3 border-t border-border pt-4"><Info label={t('finance', 'accountType')} value={t('finance', account.type)} icon={Landmark} /><Info label={t('finance', 'tenant')} value={account.tenantName} icon={Landmark} /><Info label={t('finance', 'lastMovement')} value={<DateDisplay value={account.lastMovement} />} icon={Clock3} /></div><div className="mt-4"><StatusBadge label={t('finance', account.status)} tone={tone[account.status]} /></div></CardContent></Card><Card><CardHeader><CardTitle className="text-sm">{t('finance', 'transactions')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={accountTransactions} empty={<EmptyState icon={ReceiptText} title={t('finance', 'noTransactions')} />} /></CardContent></Card></div></Page>;
+  return <Page title={account.title} description={account.tenantName} actions={<>
+    <Back label={t('finance', 'backToAccounts')} />
+    <PermissionGate permission="accounts.manage"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/members`)}><UsersRound size={15} />{t('finance', 'manageMembers')}</Button></PermissionGate>
+    <PermissionGate permission="accounts.update"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/edit`)}><Pencil size={15} />{t('finance', 'edit')}</Button></PermissionGate>
+    <PermissionGate permission="accounts.delete"><Button variant="outline" className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300" onClick={() => setToDelete(true)}><Trash2 size={15} />{t('finance', 'deleteAccount')}</Button></PermissionGate>
+  </>}>
+    {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(id)} onCancel={() => setToDelete(false)} />}
+    <div className="grid gap-5 lg:grid-cols-[1fr_2fr]">
+      <Card><CardContent className="p-5">
+        <p className="text-xs text-muted-foreground">{t('finance', 'balance')}</p><p className="mt-2 font-heading text-3xl font-semibold"><MoneyDisplay amount={account.balance} /></p>
+        <div className="mt-5 space-y-3 border-t border-border pt-4">
+          <Info label={t('finance', 'accountType')} value={t('finance', ACCOUNT_TYPE_LABEL_KEY[account.type])} icon={Landmark} />
+          <Info label={t('finance', 'amount')} value={account.amount !== null ? formatFCFA(account.amount) : '—'} icon={Banknote} />
+          <Info label={t('finance', 'assignedMembers')} value={formatNumber(account.memberIds.length)} icon={UsersRound} />
+          <Info label={t('finance', 'lastMovement')} value={<DateDisplay value={account.lastMovement} />} icon={Clock3} />
+        </div>
+        {account.description && <p className="mt-4 border-t border-border pt-4 text-sm text-muted-foreground">{account.description}</p>}
+        <div className="mt-4"><StatusBadge label={t('finance', account.status)} tone={tone[account.status]} /></div>
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'transactions')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={accountTransactions} empty={<EmptyState icon={ReceiptText} title={t('finance', 'noTransactions')} />} /></CardContent></Card>
+    </div>
+  </Page>;
+}
+
+function AccountMembersManage({ t }: { t: T }) {
+  const { id = '' } = useParams(); const { currentTenant } = useTenant();
+  const { data: account, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.finance.account(id), currentTenant.id], queryFn: () => financeService.getAccount(currentTenant.id, id) });
+  const { data: allMembers = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id), enabled: Boolean(account) });
+  const [availableSearch, setAvailableSearch] = useState(''); const [assignedSearch, setAssignedSearch] = useState('');
+  const [selectedAvailable, setSelectedAvailable] = useState<Set<string>>(new Set());
+  const [selectedAssigned, setSelectedAssigned] = useState<Set<string>>(new Set());
+
+  const addMutation = useMockMutation<Awaited<ReturnType<typeof financeService.addAccountMembers>>, string[]>({
+    mutationFn: (memberIds) => financeService.addAccountMembers(currentTenant.id, id, memberIds),
+    invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (_updated, memberIds) => { notify.success(t('finance', memberIds.length === 1 ? 'membersAddedOne' : 'membersAddedMany', { count: String(memberIds.length) })); setSelectedAvailable(new Set()); },
+  });
+  const removeMutation = useMockMutation<Awaited<ReturnType<typeof financeService.removeAccountMembers>>, string[]>({
+    mutationFn: (memberIds) => financeService.removeAccountMembers(currentTenant.id, id, memberIds),
+    invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (_updated, memberIds) => { notify.success(t('finance', memberIds.length === 1 ? 'membersRemovedOne' : 'membersRemovedMany', { count: String(memberIds.length) })); setSelectedAssigned(new Set()); },
+  });
+
+  if (isLoading) return <Page title={t('finance', 'manageMembers')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'manageMembers')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!account) return <NotFoundPage />;
+
+  const assignedIds = new Set(account.memberIds);
+  const assigned = allMembers.filter((member) => assignedIds.has(member.id));
+  const available = allMembers.filter((member) => !assignedIds.has(member.id) && member.status === 'active');
+  const availableRows = availableSearch ? available.filter((member) => `${member.firstName} ${member.lastName} ${member.matricule}`.toLowerCase().includes(availableSearch.toLowerCase())) : available;
+  const assignedRows = assignedSearch ? assigned.filter((member) => `${member.firstName} ${member.lastName} ${member.matricule}`.toLowerCase().includes(assignedSearch.toLowerCase())) : assigned;
+
+  const toggle = (set: Set<string>, setSet: (next: Set<string>) => void, memberId: string) => { const next = new Set(set); if (next.has(memberId)) next.delete(memberId); else next.add(memberId); setSet(next); };
+
+  const makeColumns = (selected: Set<string>, setSelected: (next: Set<string>) => void): TableColumn<Member>[] => [
+    { key: 'select', header: '', className: 'w-10', render: (row) => <Checkbox checked={selected.has(row.id)} onCheckedChange={() => toggle(selected, setSelected, row.id)} aria-label={`${row.firstName} ${row.lastName}`} /> },
+    { key: 'name', header: t('finance', 'member'), render: (row) => <span className="flex items-center gap-2 font-medium"><MemberAvatar member={row} />{row.firstName} {row.lastName}</span> },
+    { key: 'matricule', header: t('finance', 'memberMatricule'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{row.matricule}</span> },
+    { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', MEMBER_STATUS_LABEL_KEY[row.status])} tone={MEMBER_STATUS_TONE[row.status]} /> },
+  ];
+
+  return <Page title={t('finance', 'manageMembers')} description={`${account.title} — ${t('finance', 'accountMembersSubtitle')}`} actions={<Back label={t('finance', 'backToAccounts')} />}>
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm">{t('finance', 'availableMembers')} ({available.length})</CardTitle>
+          <PermissionGate permission="accounts.manage"><div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" disabled={selectedAvailable.size === 0 || addMutation.isPending} onClick={() => addMutation.mutate([...selectedAvailable])}>{t('finance', 'addSelected')}</Button>
+            <Button size="sm" disabled={available.length === 0 || addMutation.isPending} onClick={() => addMutation.mutate(available.map((member) => member.id))}>{t('finance', 'addAllMembers')}</Button>
+          </div></PermissionGate>
+        </CardHeader>
+        <CardContent className="space-y-3 p-0"><div className="px-4"><FilterBar search={availableSearch} onSearchChange={setAvailableSearch} placeholder={t('finance', 'searchMemberPlaceholder')} /></div><DataTable columns={makeColumns(selectedAvailable, setSelectedAvailable)} rows={availableRows} empty={<EmptyState icon={UsersRound} title={t('finance', 'noAvailableMembers')} />} /></CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-sm">{t('finance', 'assignedMembers')} ({assigned.length})</CardTitle>
+          <PermissionGate permission="accounts.manage"><div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" disabled={selectedAssigned.size === 0 || removeMutation.isPending} onClick={() => removeMutation.mutate([...selectedAssigned])}>{t('finance', 'removeSelected')}</Button>
+            <Button variant="outline" size="sm" disabled={assigned.length === 0 || removeMutation.isPending} onClick={() => removeMutation.mutate(assigned.map((member) => member.id))}>{t('finance', 'removeAllMembers')}</Button>
+          </div></PermissionGate>
+        </CardHeader>
+        <CardContent className="space-y-3 p-0"><div className="px-4"><FilterBar search={assignedSearch} onSearchChange={setAssignedSearch} placeholder={t('finance', 'searchMemberPlaceholder')} /></div><DataTable columns={makeColumns(selectedAssigned, setSelectedAssigned)} rows={assignedRows} empty={<EmptyState icon={UsersRound} title={t('finance', 'noAssignedMembers')} />} /></CardContent>
+      </Card>
+    </div>
+  </Page>;
 }
 
 function TransactionsList({ t }: { t: T }) {
@@ -604,6 +771,8 @@ export function FinanceModule() {
       <Route path="accounts" element={<AccountsList t={t} />} />
       <Route path="accounts/create" element={<AccountCreate t={t} />} />
       <Route path="accounts/:id" element={<AccountDetail t={t} />} />
+      <Route path="accounts/:id/edit" element={<AccountEdit t={t} />} />
+      <Route path="accounts/:id/members" element={<AccountMembersManage t={t} />} />
       <Route path="transactions" element={<TransactionsList t={t} />} />
       <Route path="contributions" element={<ContributionsView t={t} />} />
       <Route path="distributions" element={<DistributionsList t={t} />} />

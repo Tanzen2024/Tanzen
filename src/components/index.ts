@@ -16,3 +16,4 @@ export * from './skeleton';
 export * from './loading-state';
 export * from './error-state';
 export * from './field-error';
+export * from './member-avatar';

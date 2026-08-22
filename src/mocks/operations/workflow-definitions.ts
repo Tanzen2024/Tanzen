@@ -14,7 +14,7 @@ export type WorkflowDefinition = {
   name: string;
   domain: WorkflowDomain;
   description: string;
-  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear';
+  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear' | 'turnPermutation';
   steps: WorkflowStepDefinition[];
   active: boolean;
 };
@@ -38,4 +38,17 @@ export const workflowDefinitions: WorkflowDefinition[] = [
    * actorId`), pas par une permission ou un rôle supplémentaire.
    */
   { id: 'WD-005', tenantId: 'T-001', name: 'Réouverture d’exercice fiscal', domain: 'settings', description: 'Demande de réouverture exceptionnelle d’un exercice fiscal clôturé, avec justification obligatoire.', entityType: 'fiscalYear', steps: [{ order: 1, name: 'Autorisation de réouverture', approverPermission: 'fiscalYears.approve' }], active: true },
+  /**
+   * Mandat planification/permutation des bénéficiaires — étape unique,
+   * `beneficiaries.manage` (déjà la permission de gestion des bénéficiaires,
+   * réutilisée telle quelle : aucune permission `*.approve` dédiée n'existe
+   * pour le domaine Tontines). Précédent direct pour réutiliser la MÊME
+   * permission d'un bout à l'autre du workflow : `WD-002` ci-dessus fait
+   * déjà exactement ça avec `cycles.manage` sur ses deux étapes.
+   * Auto-approbation autorisée (décision explicite du mandat : ne PAS
+   * généraliser le blocage D-FY-08, spécifique à Fiscal Year) — voir
+   * `tontineTurnsService.applyTurnPermutationDecision`, appelé sans aucun
+   * contrôle `requestedByUserId`, contrairement à `decideFiscalYearReopen`.
+   */
+  { id: 'WD-006', tenantId: 'T-001', name: 'Permutation de tours', domain: 'tontines', description: 'Échange de deux tours déjà planifiés entre deux adhésions, soumis à validation avant application.', entityType: 'turnPermutation', steps: [{ order: 1, name: 'Validation de la permutation', approverPermission: 'beneficiaries.manage' }], active: true },
 ];

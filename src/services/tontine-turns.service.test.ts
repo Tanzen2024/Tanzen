@@ -2,6 +2,69 @@ import { describe, it, expect } from 'vitest';
 import { tontineTurnsService } from './tontine-turns.service';
 import { tontinesService } from './tontines.service';
 import { organizationService } from './organization.service';
+import { workflowService } from './workflow.service';
+
+/**
+ * Vues agrégées transverses (mandat vue d'ensemble Tontines — Membres/Contributions/Opérations
+ * toutes tontines confondues). Bug réel trouvé et corrigé pendant l'implémentation : les
+ * mutations existantes (createAdhesion, createContribution, createOccurrence, etc.) n'invalidaient
+ * que leurs clés React Query tontine/période-scopées, jamais ces nouvelles clés agrégées — la
+ * vue d'ensemble restait donc silencieusement obsolète après toute création, jusqu'au prochain
+ * rechargement complet. Corrigé en ajoutant ces clés aux `invalidateKeys` concernés dans
+ * periods-module.tsx/adhesions-module.tsx/occurrences-module.tsx/contributions-module.tsx.
+ * Ces tests couvrent la correction au niveau service (isolation tenant) ; la non-régression du
+ * rafraîchissement UI est vérifiée en navigateur (Playwright), hors de portée d'un test service pur.
+ */
+describe('tontineTurnsService — vues agrégées (listAllX), isolation tenant', () => {
+  it('listAllPeriods ne retourne que les périodes du tenant demandé', async () => {
+    const periods = await tontineTurnsService.listAllPeriods('T-002');
+    expect(periods.length).toBeGreaterThan(0);
+    expect(periods.every((item) => item.tenantId === 'T-002')).toBe(true);
+  });
+
+  it('listAllAdhesions ne retourne que les adhésions du tenant demandé', async () => {
+    const adhesions = await tontineTurnsService.listAllAdhesions('T-002');
+    expect(adhesions.length).toBeGreaterThan(0);
+    expect(adhesions.every((item) => item.tenantId === 'T-002')).toBe(true);
+    const otherTenant = await tontineTurnsService.listAllAdhesions('T-999');
+    expect(otherTenant).toEqual([]);
+  });
+
+  it('listAllContributions ne retourne que les contributions du tenant demandé', async () => {
+    const contributions = await tontineTurnsService.listAllContributions('T-002');
+    expect(contributions.length).toBeGreaterThan(0);
+    expect(contributions.every((item) => item.tenantId === 'T-002')).toBe(true);
+  });
+
+  it('listAllOccurrences ne retourne que les occurrences du tenant demandé, triées par date planifiée', async () => {
+    const occurrences = await tontineTurnsService.listAllOccurrences('T-002');
+    expect(occurrences.length).toBeGreaterThan(0);
+    expect(occurrences.every((item) => item.tenantId === 'T-002')).toBe(true);
+    const dates = occurrences.map((item) => item.plannedDate);
+    expect(dates).toEqual([...dates].sort());
+  });
+
+  it('listAllTurns et listAllBeneficiaries ne retournent que les entrées du tenant demandé', async () => {
+    const turns = await tontineTurnsService.listAllTurns('T-002');
+    const beneficiaries = await tontineTurnsService.listAllBeneficiaries('T-002');
+    expect(turns.length).toBeGreaterThan(0);
+    expect(turns.every((item) => item.tenantId === 'T-002')).toBe(true);
+    expect(beneficiaries.length).toBeGreaterThan(0);
+    expect(beneficiaries.every((item) => item.tenantId === 'T-002')).toBe(true);
+  });
+
+  it('un tenant sans aucune donnée reçoit des listes vides, jamais une erreur', async () => {
+    const [periods, adhesions, contributions, occurrences, turns, beneficiaries] = await Promise.all([
+      tontineTurnsService.listAllPeriods('T-999'),
+      tontineTurnsService.listAllAdhesions('T-999'),
+      tontineTurnsService.listAllContributions('T-999'),
+      tontineTurnsService.listAllOccurrences('T-999'),
+      tontineTurnsService.listAllTurns('T-999'),
+      tontineTurnsService.listAllBeneficiaries('T-999'),
+    ]);
+    expect([periods, adhesions, contributions, occurrences, turns, beneficiaries].every((list) => Array.isArray(list) && list.length === 0)).toBe(true);
+  });
+});
 
 describe('tontineTurnsService — tenant isolation', () => {
   it('DENY: an occurrence of another tenant is never returned', async () => {
@@ -716,5 +779,377 @@ describe('tontineTurnsService — generateOccurrences (mandat fréquence)', () =
     const otherTenant = await tontineTurnsService.getOccurrence('T-005', created![0].id);
     expect(ownTenant?.id).toBe(created![0].id);
     expect(otherTenant).toBeNull();
+  });
+});
+
+/**
+ * AUDIT ENTERPRISE — RBAC : preuve que l'application des permissions est
+ * exclusivement côté UI (`PermissionGate`), jamais côté service. Aucune méthode de
+ * `tontineTurnsService`/`tontinesService` ne reçoit ni ne consulte `currentUser`/`can()` —
+ * masquer un bouton dans l'interface ne constitue donc PAS une garantie de sécurité :
+ * un appel direct au service (ex. depuis la console du navigateur) contourne
+ * intégralement le RBAC. Caractéristique de toute l'architecture mock du projet
+ * (aucun backend réel n'existe encore, cf. `auth.service.ts` — "BACKEND PENDING"),
+ * pas une régression propre à Tontines ; documentée ici avec preuve reproductible.
+ */
+describe('AUDIT — RBAC appliqué uniquement côté UI, jamais côté service', () => {
+  it('createOccurrence réussit sans aucune vérification de permission, même pour une action normalement gardée par PermissionGate("cycles.manage") côté UI', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Audit RBAC', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF' });
+    const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-02-01', endDate: '2026-02-28' });
+    // Aucun `currentUser`/`can()` n'est passé ni consulté ici — le service ne peut structurellement pas refuser pour une raison de permission.
+    const occurrence = await tontineTurnsService.createOccurrence('T-002', { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-02-05' });
+    expect(occurrence).toBeDefined();
+  });
+
+  it('recordReception (normalement gardé par PermissionGate("beneficiaries.manage") côté UI) réussit sans aucun contrôle de permission côté service', async () => {
+    const result = await tontineTurnsService.recordReception('T-002', 'TB-003', { amount: 100 });
+    expect(result).toBeDefined();
+    expect(result?.receivedTotal).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * `addBeneficiaries` — enregistre le résultat d'un tirage MANUEL déjà réalisé hors
+ * TANZEN (RB-06/RB-07 du mandat) ; ne choisit, ne calcule ni ne propose jamais
+ * lui-même un bénéficiaire. Remplace l'ancien audit "aucune voie de création
+ * n'existe" (devenu obsolète depuis l'implémentation de cette méthode).
+ */
+describe('AUDIT — Bénéficiaires : createOccurrence ne crée toujours aucun TurnBeneficiary par défaut', () => {
+  it('createOccurrence crée un Turn sans aucun TurnBeneficiary (0 bénéficiaire, jamais un état "en attente d\'attribution")', async () => {
+    const tontine = await tontinesService.createTontine({ name: 'Audit Bénéficiaires', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF' });
+    const period = await tontineTurnsService.createPeriod('T-002', { tontineId: tontine.id, startDate: '2026-03-01', endDate: '2026-03-31' });
+    const occurrence = await tontineTurnsService.createOccurrence('T-002', { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-03-05' });
+    const turn = await tontineTurnsService.getTurnByOccurrence('T-002', occurrence!.id);
+    const beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn!.id);
+    expect(beneficiaries).toEqual([]);
+  });
+
+  it('un TurnBeneficiary reste structurellement rattaché à une seule Tontine (via adhesionId → Adhesion.periodId → Period.tontineId) — aucune fuite possible vers une autre tontine par construction', async () => {
+    const beneficiary = await tontineTurnsService.getBeneficiary('T-002', 'TB-002');
+    const adhesion = await tontineTurnsService.getAdhesion('T-002', beneficiary!.adhesionId);
+    const period = await tontineTurnsService.getPeriod('T-002', adhesion!.periodId);
+    expect(period?.tontineId).toBe('TON-001'); // Tontine Horizon, seule tontine à laquelle ADH-002/TB-002 est structurellement rattachable.
+  });
+});
+
+describe('addBeneficiaries — enregistrement du résultat d\'un tirage manuel (RB-01 à RB-10)', () => {
+  async function setupOpenTurn(tenantId: string, memberSuffix = 'A') {
+    const tontine = await tontinesService.createTontine({ name: `Tirage manuel ${memberSuffix}`, valueType: 'MONEY', tenantId, currency: 'XAF' });
+    const period = await tontineTurnsService.createPeriod(tenantId, { tontineId: tontine.id, startDate: '2026-04-01', endDate: '2026-04-30' });
+    const adhesion1 = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${memberSuffix}-1`, memberName: `Membre ${memberSuffix}1`, joinedAt: '2026-04-01' });
+    const adhesion2 = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${memberSuffix}-2`, memberName: `Membre ${memberSuffix}2`, joinedAt: '2026-04-01' });
+    const occurrence = await tontineTurnsService.createOccurrence(tenantId, { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-04-05' });
+    const turn = await tontineTurnsService.getTurnByOccurrence(tenantId, occurrence!.id);
+    return { tontine, period: period!, adhesion1: adhesion1!, adhesion2: adhesion2!, occurrence: occurrence!, turn: turn! };
+  }
+
+  /**
+   * Régression — cause racine du bug « 0 bénéficiaire ajouté / tous non éligibles » observé
+   * en usage réel : ce n'était pas un défaut de `isAdhesionActiveAt` (inchangée ici), mais une
+   * valeur par défaut incorrecte dans les formulaires d'adhésion (`joinedAt` = date du jour au
+   * lieu de `period.startDate`). Ce test documente explicitement le chemin nominal que la
+   * correction UI restaure par défaut : une adhésion dont `joinedAt` correspond au début de la
+   * Période reste éligible pour n'importe quelle Occurrence future de cette même Période.
+   */
+  it('une adhésion jointe dès le début de la Période reste éligible pour une Occurrence future de cette Période (chemin nominal restauré)', async () => {
+    const { period, turn } = await setupOpenTurn('T-002', 'NOMINAL');
+    const adhesionFromPeriodStart = await tontineTurnsService.createAdhesion('T-002', { periodId: period.id, memberId: 'MBR-NOMINAL-START', memberName: 'Membre Nominal', joinedAt: period.startDate });
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesionFromPeriodStart!.id], valueType: 'MONEY' });
+    expect(result?.created.length).toBe(1);
+    expect(result?.skippedAdhesionIds).toEqual([]);
+  });
+
+  it('T2/T3 — enregistre un ou plusieurs bénéficiaires à partir d\'adhésions explicitement sélectionnées', async () => {
+    const { adhesion1, adhesion2, turn } = await setupOpenTurn('T-002', 'B');
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion1.id, adhesion2.id], valueType: 'MONEY', expectedAmount: 100_000 });
+    expect(result?.created.length).toBe(2);
+    expect(result?.skippedAdhesionIds).toEqual([]);
+    const beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn.id);
+    expect(beneficiaries.map((item) => item.adhesionId).sort()).toEqual([adhesion1.id, adhesion2.id].sort());
+  });
+
+  it('T6 — refuse un doublon : la même adhésion deux fois dans le même appel, ou déjà bénéficiaire de ce Turn', async () => {
+    const { adhesion1, turn } = await setupOpenTurn('T-002', 'C');
+    const first = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion1.id, adhesion1.id], valueType: 'MONEY' });
+    expect(first?.created.length).toBe(1);
+    expect(first?.skippedAdhesionIds).toEqual([adhesion1.id]);
+    const second = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion1.id], valueType: 'MONEY' });
+    expect(second?.created.length).toBe(0);
+    expect(second?.skippedAdhesionIds).toEqual([adhesion1.id]);
+  });
+
+  it('T4 — refuse une adhésion qui n\'appartient pas à la Période de l\'Occurrence de ce Turn (RB-01/02/03)', async () => {
+    const setupA = await setupOpenTurn('T-002', 'D1');
+    const setupB = await setupOpenTurn('T-002', 'D2');
+    const result = await tontineTurnsService.addBeneficiaries('T-002', setupA.turn.id, { adhesionIds: [setupB.adhesion1.id], valueType: 'MONEY' });
+    expect(result?.created).toEqual([]);
+    expect(result?.skippedAdhesionIds).toEqual([setupB.adhesion1.id]);
+  });
+
+  /**
+   * Régression — cause exacte du bug rapporté « 0 bénéficiaire ajouté » : une adhésion de
+   * la BONNE période, jamais un cas croisé, mais dont `joinedAt` est postérieur à la date
+   * de référence de l'Occurrence (`actualDate ?? plannedDate`) — donc pas encore active à
+   * cette date (`isAdhesionActiveAt`). C'était déjà la règle voulue côté service (§10 mandat
+   * refonte, réutilisée telle quelle par `addBeneficiaries`) ; le bug réel était l'absence de
+   * ce même calcul côté UI (`AddBeneficiaryDialog`), corrigé sans toucher au service.
+   */
+  it('refuse une adhésion de la bonne période mais pas encore active à la date de l\'occurrence (joinedAt postérieur)', async () => {
+    const { period, occurrence, turn } = await setupOpenTurn('T-002', 'D3');
+    const lateAdhesion = await tontineTurnsService.createAdhesion('T-002', { periodId: period.id, memberId: 'MBR-LATE', memberName: 'Membre Tardif', joinedAt: '2026-04-06' });
+    expect(lateAdhesion!.joinedAt > occurrence.plannedDate).toBe(true);
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [lateAdhesion!.id], valueType: 'MONEY' });
+    expect(result?.created).toEqual([]);
+    expect(result?.skippedAdhesionIds).toEqual([lateAdhesion!.id]);
+  });
+
+  it('T4bis — refuse une adhésion inexistante (identifiant arbitraire)', async () => {
+    const { turn } = await setupOpenTurn('T-002', 'E');
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: ['ADH-DOES-NOT-EXIST'], valueType: 'MONEY' });
+    expect(result?.created).toEqual([]);
+    expect(result?.skippedAdhesionIds).toEqual(['ADH-DOES-NOT-EXIST']);
+  });
+
+  it('T5/T13 — un Turn du tenant T-002 refuse l\'ajout d\'une adhésion appartenant au tenant T-005 (isolation tenant/tontine stricte)', async () => {
+    const { turn } = await setupOpenTurn('T-002', 'F');
+    const otherTenantSetup = await setupOpenTurn('T-005', 'G');
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [otherTenantSetup.adhesion1.id], valueType: 'MONEY' });
+    expect(result?.created).toEqual([]);
+    expect(result?.skippedAdhesionIds).toEqual([otherTenantSetup.adhesion1.id]);
+  });
+
+  it('refuse l\'ajout sur un Turn CLOSED, sans échouer sur un Turn OPEN (même immuabilité que recordReception/correctReception)', async () => {
+    const { adhesion1, adhesion2, turn } = await setupOpenTurn('T-002', 'H');
+    await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion1.id], valueType: 'MONEY' });
+    await tontineTurnsService.recordReception('T-002', (await tontineTurnsService.listBeneficiariesByTurn('T-002', turn.id))[0].id, { amount: 100 });
+    const closed = await tontineTurnsService.closeTurn('T-002', turn.id);
+    expect(closed).toBeDefined();
+    const afterClose = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion2.id], valueType: 'MONEY' });
+    expect(afterClose).toBeNull();
+  });
+
+  it('T14 — le même membre peut être bénéficiaire dans deux tontines différentes indépendamment (aucun couplage entre tontines)', async () => {
+    const setupA = await setupOpenTurn('T-002', 'I1');
+    const setupB = await setupOpenTurn('T-002', 'I2');
+    const adhesionA = await tontineTurnsService.createAdhesion('T-002', { periodId: setupA.period.id, memberId: 'MBR-SHARED', memberName: 'Membre Partagé', joinedAt: '2026-04-01' });
+    const adhesionB = await tontineTurnsService.createAdhesion('T-002', { periodId: setupB.period.id, memberId: 'MBR-SHARED', memberName: 'Membre Partagé', joinedAt: '2026-04-01' });
+    const resultA = await tontineTurnsService.addBeneficiaries('T-002', setupA.turn.id, { adhesionIds: [adhesionA!.id], valueType: 'MONEY' });
+    const resultB = await tontineTurnsService.addBeneficiaries('T-002', setupB.turn.id, { adhesionIds: [adhesionB!.id], valueType: 'MONEY' });
+    expect(resultA?.created.length).toBe(1);
+    expect(resultB?.created.length).toBe(1);
+    expect(resultA?.created[0].id).not.toBe(resultB?.created[0].id);
+  });
+
+  it('T15 — preuve structurelle qu\'aucun tirage automatique n\'est jamais déclenché : un appel avec une liste vide ne crée rien, et rien n\'est créé sans appel explicite de addBeneficiaries', async () => {
+    const { turn } = await setupOpenTurn('T-002', 'J');
+    const beforeAnyCall = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn.id);
+    expect(beforeAnyCall).toEqual([]);
+    const emptyCallResult = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [], valueType: 'MONEY' });
+    expect(emptyCallResult?.created).toEqual([]);
+    const afterEmptyCall = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn.id);
+    expect(afterEmptyCall).toEqual([]);
+  });
+
+  it('T10 — comme le reste du service, addBeneficiaries ne reçoit ni ne consulte currentUser/can() (RBAC uniquement côté UI)', async () => {
+    const { adhesion1, turn } = await setupOpenTurn('T-002', 'K');
+    const result = await tontineTurnsService.addBeneficiaries('T-002', turn.id, { adhesionIds: [adhesion1.id], valueType: 'MONEY' });
+    expect(result?.created.length).toBe(1);
+  });
+});
+
+/**
+ * AUDIT ENTERPRISE — Isolation tenant : les lectures "listAllX" ajoutées pour la Vue
+ * d'ensemble ne doivent jamais mélanger deux tenants, même quand les deux ont des
+ * données réelles simultanément (pas seulement "l'autre tenant renvoie []").
+ */
+describe('AUDIT — Isolation tenant stricte des vues agrégées (T-002 vs T-005, tous deux non vides)', () => {
+  it('listAllAdhesions : les jeux de résultats de deux tenants avec données ne se chevauchent jamais', async () => {
+    const t002 = await tontineTurnsService.listAllAdhesions('T-002');
+    const t005 = await tontineTurnsService.listAllAdhesions('T-005');
+    expect(t002.length).toBeGreaterThan(0);
+    expect(t005.length).toBeGreaterThan(0);
+    const overlap = t002.filter((a) => t005.some((b) => b.id === a.id));
+    expect(overlap).toEqual([]);
+  });
+
+  it('listAllOccurrences : les jeux de résultats de deux tenants avec données ne se chevauchent jamais', async () => {
+    const t002 = await tontineTurnsService.listAllOccurrences('T-002');
+    const t005 = await tontineTurnsService.listAllOccurrences('T-005');
+    expect(t002.length).toBeGreaterThan(0);
+    expect(t005.length).toBeGreaterThan(0);
+    const overlap = t002.filter((a) => t005.some((b) => b.id === a.id));
+    expect(overlap).toEqual([]);
+  });
+});
+
+/**
+ * Planification + permutation (mandat planification/permutation, WD-006) — le tirage reste
+ * manuel et externe (RB-06/RB-07, jamais remis en cause) ; ces tests couvrent uniquement
+ * l'échange de deux `TontineTurnBeneficiary` déjà planifiés, via le moteur de workflow
+ * générique déjà existant (`workflowService`), jamais un second moteur.
+ */
+describe('requestTurnPermutation / applyTurnPermutationDecision — permutation de tours planifiés', () => {
+  async function setupTwoPlannedTurns(tenantId: string, suffix: string) {
+    const tontine = await tontinesService.createTontine({ name: `Planification ${suffix}`, valueType: 'MONEY', tenantId, currency: 'XAF' });
+    const period = await tontineTurnsService.createPeriod(tenantId, { tontineId: tontine.id, startDate: '2026-10-01', endDate: '2027-09-30' });
+    const adhesionA = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${suffix}-A`, memberName: `Membre ${suffix}A`, joinedAt: '2026-10-01' });
+    const adhesionB = await tontineTurnsService.createAdhesion(tenantId, { periodId: period!.id, memberId: `MBR-${suffix}-B`, memberName: `Membre ${suffix}B`, joinedAt: '2026-10-01' });
+    const occurrence1 = await tontineTurnsService.createOccurrence(tenantId, { periodId: period!.id, occurrenceNumber: 1, plannedDate: '2026-10-05' });
+    const occurrence2 = await tontineTurnsService.createOccurrence(tenantId, { periodId: period!.id, occurrenceNumber: 2, plannedDate: '2026-11-05' });
+    const turn1 = (await tontineTurnsService.getTurnByOccurrence(tenantId, occurrence1!.id))!;
+    const turn2 = (await tontineTurnsService.getTurnByOccurrence(tenantId, occurrence2!.id))!;
+    const resultA = await tontineTurnsService.addBeneficiaries(tenantId, turn1.id, { adhesionIds: [adhesionA!.id], valueType: 'MONEY', expectedAmount: 500_000 });
+    const resultB = await tontineTurnsService.addBeneficiaries(tenantId, turn2.id, { adhesionIds: [adhesionB!.id], valueType: 'MONEY', expectedAmount: 500_000 });
+    const beneficiaryA = resultA!.created[0];
+    const beneficiaryB = resultB!.created[0];
+    return { tontine, period: period!, adhesionA: adhesionA!, adhesionB: adhesionB!, turn1, turn2, beneficiaryA, beneficiaryB };
+  }
+
+  it('TEST5/6 — le bénéficiaire planifié est retrouvé automatiquement par tour/occurrence, sans aucun tirage', async () => {
+    const { turn1, beneficiaryA, adhesionA } = await setupTwoPlannedTurns('T-002', 'A');
+    const beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    expect(beneficiaries.length).toBe(1);
+    expect(beneficiaries[0].id).toBe(beneficiaryA.id);
+    expect(beneficiaries[0].adhesionId).toBe(adhesionA.id);
+  });
+
+  it('TEST7 — une demande de permutation ne modifie rien tant qu\'elle n\'est pas approuvée', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'B');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    expect(request).toBeDefined();
+    expect(request!.status).toBe('pending');
+    const turn1Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    const turn2Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn2.id);
+    expect(turn1Beneficiaries[0].adhesionId).toBe(beneficiaryA.adhesionId);
+    expect(turn2Beneficiaries[0].adhesionId).toBe(beneficiaryB.adhesionId);
+  });
+
+  it('TEST8 — un rejet laisse la planification inchangée', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'C');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    const decided = await workflowService.submitAction('T-002', request!.id, 'reject', 'Approbateur');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided!);
+    const turn1Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    const turn2Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn2.id);
+    expect(turn1Beneficiaries[0].adhesionId).toBe(beneficiaryA.adhesionId);
+    expect(turn2Beneficiaries[0].adhesionId).toBe(beneficiaryB.adhesionId);
+  });
+
+  it('TEST9/10 — une approbation échange atomiquement les deux adhésions (avant/après cohérent, aucun état intermédiaire possible)', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB, adhesionA, adhesionB } = await setupTwoPlannedTurns('T-002', 'D');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    const decided = await workflowService.submitAction('T-002', request!.id, 'approve', 'Approbateur');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided!);
+    const turn1Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    const turn2Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn2.id);
+    // Échange complet : jamais les deux du même côté (ni les deux inchangés, ni les deux permutés vers le même adhésionId).
+    expect(turn1Beneficiaries[0].adhesionId).toBe(adhesionB.id);
+    expect(turn2Beneficiaries[0].adhesionId).toBe(adhesionA.id);
+  });
+
+  it('TEST11 — refuse la permutation si l\'un des deux tours est déjà clôturé', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'E');
+    await tontineTurnsService.recordReception('T-002', beneficiaryA.id, { amount: 500_000 });
+    await tontineTurnsService.closeTurn('T-002', turn1.id);
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    expect(request).toBeUndefined();
+    void turn2;
+  });
+
+  it('TEST12 — refuse une permutation entre deux tours de tontines différentes', async () => {
+    const setupA = await setupTwoPlannedTurns('T-002', 'F1');
+    const setupB = await setupTwoPlannedTurns('T-002', 'F2');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: setupA.beneficiaryA.id, turnBeneficiaryBId: setupB.beneficiaryA.id, requestedBy: 'Testeur' });
+    expect(request).toBeUndefined();
+  });
+
+  it('TEST3 — refuse une permutation référençant un bénéficiaire d\'un autre tenant', async () => {
+    const setupT002 = await setupTwoPlannedTurns('T-002', 'G');
+    const setupT005 = await setupTwoPlannedTurns('T-005', 'H');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: setupT002.beneficiaryA.id, turnBeneficiaryBId: setupT005.beneficiaryA.id, requestedBy: 'Testeur' });
+    expect(request).toBeUndefined();
+  });
+
+  it('TEST13 — refuse un « doublon » : les deux côtés désignent le même bénéficiaire', async () => {
+    const { beneficiaryA } = await setupTwoPlannedTurns('T-002', 'I');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryA.id, requestedBy: 'Testeur' });
+    expect(request).toBeUndefined();
+  });
+
+  it('TEST14 — deux demandes concurrentes référençant le même bénéficiaire : la seconde est refusée tant que la première est en attente', async () => {
+    const { beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'J');
+    const other = await setupTwoPlannedTurns('T-002', 'J2');
+    const first = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur 1' });
+    expect(first).toBeDefined();
+    const second = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: other.beneficiaryA.id, requestedBy: 'Testeur 2' });
+    expect(second).toBeUndefined();
+  });
+
+  it('TEST15 — deux approbations successives sur la même demande n\'échangent pas deux fois (idempotence, pas de double-échange)', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB, adhesionA, adhesionB } = await setupTwoPlannedTurns('T-002', 'K');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    const decided1 = await workflowService.submitAction('T-002', request!.id, 'approve', 'Approbateur 1');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided1!);
+    const decided2 = await workflowService.submitAction('T-002', request!.id, 'approve', 'Approbateur 2');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided2!);
+    const turn1Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    const turn2Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn2.id);
+    expect(turn1Beneficiaries[0].adhesionId).toBe(adhesionB.id);
+    expect(turn2Beneficiaries[0].adhesionId).toBe(adhesionA.id);
+  });
+
+  it('TEST16 — comme le reste du service, requestTurnPermutation/applyTurnPermutationDecision ne reçoivent ni ne consultent currentUser/can() (RBAC uniquement côté UI)', async () => {
+    const { beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'L');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    expect(request).toBeDefined();
+  });
+
+  it('TEST18 — l\'historique de permutation est retrouvable pour les deux adhésions concernées, avec avant/après cohérent', async () => {
+    const { beneficiaryA, beneficiaryB, adhesionA, adhesionB } = await setupTwoPlannedTurns('T-002', 'M');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    const decided = await workflowService.submitAction('T-002', request!.id, 'approve', 'Approbateur');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided!);
+    const historyA = await tontineTurnsService.listPermutationHistoryForAdhesion('T-002', adhesionA.id);
+    const historyB = await tontineTurnsService.listPermutationHistoryForAdhesion('T-002', adhesionB.id);
+    expect(historyA.length).toBe(1);
+    expect(historyB.length).toBe(1);
+    expect(historyA[0].id).toBe(historyB[0].id);
+    expect(historyA[0].context?.adhesionId).toBe(adhesionA.id);
+    expect(historyA[0].context?.otherAdhesionId).toBe(adhesionB.id);
+  });
+
+  it('n\'échange rien si l\'une des deux réceptions a déjà été enregistrée avant l\'approbation (intégrité de l\'historique financier)', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB, adhesionA, adhesionB } = await setupTwoPlannedTurns('T-002', 'N');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    await tontineTurnsService.recordReception('T-002', beneficiaryA.id, { amount: 100_000 });
+    const decided = await workflowService.submitAction('T-002', request!.id, 'approve', 'Approbateur');
+    tontineTurnsService.applyTurnPermutationDecision('T-002', decided!);
+    const turn1Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn1.id);
+    const turn2Beneficiaries = await tontineTurnsService.listBeneficiariesByTurn('T-002', turn2.id);
+    expect(turn1Beneficiaries[0].adhesionId).toBe(adhesionA.id);
+    expect(turn2Beneficiaries[0].adhesionId).toBe(adhesionB.id);
+  });
+
+  it('T9/T10 (photos) — getTurnPermutationPreview reconstruit les deux côtés (tour, nom, photo) pour l\'écran générique de validation', async () => {
+    const { turn1, turn2, beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'O');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    const preview = await tontineTurnsService.getTurnPermutationPreview('T-002', request!.id);
+    expect(preview?.a.turnNumber).toBe(turn1.turnNumber);
+    expect(preview?.b.turnNumber).toBe(turn2.turnNumber);
+    expect(preview?.a.memberName).toContain('Membre O');
+    expect(preview?.b.memberName).toContain('Membre O');
+    // Régression (audit) : `turnId` doit être porté par les deux côtés — c'est la clé
+    // manquante qui empêchait `WorkflowDetail` d'invalider `['tontines','turn-beneficiaries',
+    // turnId, tenantId]` après approbation, laissant `TurnDetail` afficher l'ancien
+    // bénéficiaire jusqu'à expiration du `staleTime` (30s).
+    expect(preview?.a.turnId).toBe(turn1.id);
+    expect(preview?.b.turnId).toBe(turn2.id);
+  });
+
+  it('getTurnPermutationPreview retourne undefined pour un workflowRequestId inconnu ou d\'un autre tenant (isolation)', async () => {
+    const { beneficiaryA, beneficiaryB } = await setupTwoPlannedTurns('T-002', 'P');
+    const request = await tontineTurnsService.requestTurnPermutation('T-002', { turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id, requestedBy: 'Testeur' });
+    expect(await tontineTurnsService.getTurnPermutationPreview('T-002', 'WR-DOES-NOT-EXIST')).toBeNull();
+    expect(await tontineTurnsService.getTurnPermutationPreview('T-005', request!.id)).toBeNull();
   });
 });

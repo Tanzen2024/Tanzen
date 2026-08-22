@@ -6,28 +6,35 @@
  * représentées ici (D-TON-04-05/-06/-13/-19/-20/-21, réceptions successives,
  * correction/régularisation/annulation, clôtures Turn/Occurrence distinctes).
  */
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CalendarClock, CalendarDays, CheckCircle2, ChevronRight, CircleStop, Plus, RotateCcw, ScrollText, Undo2, UsersRound } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, DataTable, StatusBadge, EmptyState, Timeline, DateDisplay, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, ConfirmDialog, FieldError } from '@/components';
+import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, Timeline, DateDisplay, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, ConfirmDialog, FieldError, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
-import { tontineTurnsService } from '@/services/tontine-turns.service';
+import { tontineTurnsService, type BeneficiaryInput } from '@/services/tontine-turns.service';
+import { tontinesService } from '@/services/tontines.service';
+import { organizationService } from '@/services/organization.service';
+import { queryKeys } from '@/services/query-keys';
 import { ContributionTable } from './contributions-module';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import type { TontineOccurrenceStatus, TontineTurnStatus, BeneficiaryReceptionStatus, ReceptionOperation } from '@/mocks/tontines/tontine-occurrences';
+import { isAdhesionActiveAt, type TontineOccurrenceStatus, type TontineTurnStatus, type BeneficiaryReceptionStatus, type ReceptionOperation } from '@/mocks/tontines/tontine-occurrences';
 import type { TableColumn } from '@/types/ui';
 import { formatNumber } from '@/lib/utils';
 import { formatValue } from './value-format';
 
 type T = (section: 'tontines' | 'nav', key: string, values?: Record<string, string>) => string;
 
+const ADHESION_STATUS_TONE: Record<'active' | 'exited', 'success' | 'default'> = { active: 'success', exited: 'default' };
+const ADHESION_STATUS_LABEL_KEY: Record<'active' | 'exited', string> = { active: 'statusActive', exited: 'statusExited' };
 const OCC_TONE: Record<TontineOccurrenceStatus | TontineTurnStatus, 'default' | 'success'> = { OPEN: 'success', CLOSED: 'default' };
 const RECEPTION_TONE: Record<BeneficiaryReceptionStatus, 'default' | 'success' | 'warning'> = { PENDING: 'default', PARTIAL: 'warning', RECEIVED: 'success' };
 const RECEPTION_LABEL_KEY: Record<BeneficiaryReceptionStatus, string> = { PENDING: 'statusReceptionPending', PARTIAL: 'statusReceptionPartial', RECEIVED: 'statusReceptionReceived' };
@@ -79,7 +86,7 @@ export function OccurrenceCreate({ t }: { t: T }) {
   const [error, setError] = useState<string | undefined>();
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createOccurrence>>, { periodId: string; occurrenceNumber: number; plannedDate: string }>({
     mutationFn: (input) => tontineTurnsService.createOccurrence(currentTenant.id, input),
-    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id], queryKeys.tontines.allOccurrences(currentTenant.id), queryKeys.tontines.allTurns(currentTenant.id)],
     onSuccess: (occurrence) => {
       if (!occurrence) { notify.error(t('tontines', 'occurrenceNumberTaken')); return; }
       notify.success(t('tontines', 'occurrenceCreated'));
@@ -114,10 +121,12 @@ export function OccurrenceDetail({ t }: { t: T }) {
   const { data: occurrence, isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getOccurrence(currentTenant.id, occurrenceId) });
   const { data: turn } = useQuery({ queryKey: ['tontines', 'turn-by-occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getTurnByOccurrence(currentTenant.id, occurrenceId), enabled: Boolean(occurrence) });
   const { data: contributions = [] } = useQuery({ queryKey: ['tontines', 'occurrence-contributions', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.listContributionsByOccurrence(currentTenant.id, occurrenceId), enabled: Boolean(occurrence) });
+  const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'adhesions', tontineId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByTontine(currentTenant.id, tontineId), enabled: Boolean(occurrence) });
+  const { data: members = [] } = useQuery({ queryKey: ['members', 'list', currentTenant.id], queryFn: () => organizationService.listMembers(currentTenant.id), enabled: Boolean(occurrence) });
   const [confirmClose, setConfirmClose] = useState(false);
   const closeMutation = useMockMutation({
     mutationFn: () => tontineTurnsService.closeOccurrence(currentTenant.id, occurrenceId),
-    invalidateKeys: [['tontines', 'occurrence', occurrenceId, currentTenant.id], ['tontines', 'occurrences', periodId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'occurrence', occurrenceId, currentTenant.id], ['tontines', 'occurrences', periodId, currentTenant.id], queryKeys.tontines.allOccurrences(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'turnClosePrecondition')); return; }
       notify.success(t('tontines', 'occurrenceClosed'));
@@ -137,7 +146,7 @@ export function OccurrenceDetail({ t }: { t: T }) {
     <Card><CardHeader className="flex-row items-center justify-between"><CardTitle className="text-sm">{t('tontines', 'turn')}</CardTitle>{turn && <StatusBadge label={t('tontines', STATUS_LABEL_KEY[turn.status])} tone={OCC_TONE[turn.status]} />}</CardHeader><CardContent>
       {turn ? <Button variant="outline" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrenceId}/turn`)}><UsersRound size={15} />{t('tontines', 'beneficiaries')}<ChevronRight size={14} /></Button> : <EmptyState icon={CalendarClock} title={t('tontines', 'noOccurrences')} />}
     </CardContent></Card>
-    <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'occurrenceContributions')}</CardTitle></CardHeader><CardContent className="p-0"><ContributionTable t={t} rows={contributions} /></CardContent></Card>
+    <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'occurrenceContributions')}</CardTitle></CardHeader><CardContent className="p-0"><ContributionTable t={t} rows={contributions} adhesions={adhesions} members={members} /></CardContent></Card>
   </Page>;
 }
 
@@ -178,7 +187,8 @@ function BeneficiaryCard({ t, beneficiary, turnClosed }: { t: T; beneficiary: Aw
   const { currentTenant } = useTenant();
   const [dialogMode, setDialogMode] = useState<OperationDialogMode | null>(null);
   const { data: adhesion } = useQuery({ queryKey: ['tontines', 'adhesion', beneficiary.adhesionId, currentTenant.id], queryFn: () => tontineTurnsService.getAdhesion(currentTenant.id, beneficiary.adhesionId) });
-  const invalidateKeys = [['tontines', 'turn-beneficiaries', beneficiary.tontineTurnId, currentTenant.id]];
+  const { data: member } = useQuery({ queryKey: ['members', 'detail', adhesion?.memberId, currentTenant.id], queryFn: () => organizationService.getMember(currentTenant.id, adhesion!.memberId), enabled: Boolean(adhesion) });
+  const invalidateKeys = [['tontines', 'turn-beneficiaries', beneficiary.tontineTurnId, currentTenant.id], queryKeys.tontines.allBeneficiaries(currentTenant.id)];
   const receptionMutation = useMockMutation({ mutationFn: (input: { amount?: number; quantity?: number }) => tontineTurnsService.recordReception(currentTenant.id, beneficiary.id, input), invalidateKeys, onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'turnClosedNoModification')); return; } notify.success(t('tontines', 'receptionRecorded')); setDialogMode(null); } });
   const correctionMutation = useMockMutation({ mutationFn: (input: { operationId: string; amount?: number; quantity?: number; reason: string }) => tontineTurnsService.correctReception(currentTenant.id, beneficiary.id, input), invalidateKeys, onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'correctionRequired')); return; } notify.success(t('tontines', 'correctionRecorded')); setDialogMode(null); } });
   const regularizationMutation = useMockMutation({ mutationFn: (input: { amount?: number; quantity?: number; reason: string }) => tontineTurnsService.regularizeReception(currentTenant.id, beneficiary.id, input), invalidateKeys, onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'regularizationRequired')); return; } notify.success(t('tontines', 'regularizationRecorded')); setDialogMode(null); } });
@@ -189,7 +199,7 @@ function BeneficiaryCard({ t, beneficiary, turnClosed }: { t: T; beneficiary: Aw
 
   return <Card>
     <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
-      <CardTitle className="text-sm">{adhesion?.memberName ?? beneficiary.adhesionId}</CardTitle>
+      <CardTitle className="flex items-center gap-2 text-sm"><MemberAvatar member={member ?? { firstName: adhesion?.memberName ?? beneficiary.adhesionId, lastName: '' }} />{adhesion?.memberName ?? beneficiary.adhesionId}</CardTitle>
       <StatusBadge label={t('tontines', RECEPTION_LABEL_KEY[beneficiary.status])} tone={RECEPTION_TONE[beneficiary.status]} />
     </CardHeader>
     <CardContent className="space-y-4 p-5">
@@ -225,30 +235,131 @@ function BeneficiaryCard({ t, beneficiary, turnClosed }: { t: T; beneficiary: Aw
   </Card>;
 }
 
+/**
+ * Fenêtre « Ajouter un bénéficiaire » — enregistre le résultat d'un tirage
+ * MANUEL déjà réalisé hors TANZEN (RB-06/RB-07) ; ne calcule, ne propose ni
+ * ne présélectionne jamais lui-même une adhésion (aucun bouton « tirer »/
+ * « générer »). Ne liste que les adhésions de LA MÊME Période que
+ * l'Occurrence de ce Turn (RB-01/02/03, `listAdhesionsByPeriod`, même
+ * source que `BulkAdhesionDialog`/`PeriodAdhesionList`) ; les adhésions déjà
+ * bénéficiaires de ce Turn sont affichées désactivées avec un badge plutôt
+ * que masquées (même convention UX que `BulkAdhesionDialog`, §8).
+ */
+function AddBeneficiaryDialog({ t, turnId, periodId, referenceDate, tontine, existingAdhesionIds, open, onOpenChange }: {
+  t: T; turnId: string; periodId: string; referenceDate?: string; tontine?: { valueType: 'MONEY' | 'GOODS'; item?: string };
+  existingAdhesionIds: Set<string>; open: boolean; onOpenChange: (open: boolean) => void;
+}) {
+  const { currentTenant } = useTenant();
+  const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'period-adhesions', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByPeriod(currentTenant.id, periodId), enabled: open });
+  const { data: members = [] } = useQuery({ queryKey: ['members', 'list', currentTenant.id], queryFn: () => organizationService.listMembers(currentTenant.id), enabled: open });
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [value, setValue] = useState('');
+
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  /** Même règle d'éligibilité que le service (`isAdhesionActiveAt`, reference = `occurrence.actualDate ?? occurrence.plannedDate`) — calculée ici uniquement pour AFFICHER pourquoi une adhésion serait ignorée, jamais pour dupliquer la validation réelle (le service reste la seule source de vérité, revalidé à chaque appel). Root cause du bug « 0 bénéficiaire ajouté » : ce calcul n'existait nulle part côté UI avant cette correction — l'utilisateur pouvait sélectionner une adhésion pas encore active à la date de l'occurrence sans le moindre signal, puis découvrir après coup un skip silencieux. */
+  const isEligible = useCallback((adhesion: (typeof adhesions)[number]) => !referenceDate || isAdhesionActiveAt(adhesion, referenceDate), [referenceDate]);
+  const query = search.trim().toLowerCase();
+  const rows = useMemo(
+    () => query ? adhesions.filter((adhesion) => `${adhesion.memberName} ${adhesion.id}`.toLowerCase().includes(query)) : adhesions,
+    [adhesions, query],
+  );
+  const availableIds = useMemo(() => rows.filter((adhesion) => !existingAdhesionIds.has(adhesion.id) && isEligible(adhesion)).map((adhesion) => adhesion.id), [rows, existingAdhesionIds, isEligible]);
+
+  const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.addBeneficiaries>>, BeneficiaryInput>({
+    mutationFn: (input) => tontineTurnsService.addBeneficiaries(currentTenant.id, turnId, input),
+    invalidateKeys: [['tontines', 'turn-beneficiaries', turnId, currentTenant.id], queryKeys.tontines.allBeneficiaries(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('tontines', 'beneficiariesAddFailed')); return; }
+      if (result.created.length === 0) { notify.error(t('tontines', 'beneficiariesAddAllSkipped')); return; }
+      if (result.skippedAdhesionIds.length > 0) {
+        notify.success(t('tontines', 'beneficiariesAddedWithSkipped', { created: String(result.created.length), skipped: String(result.skippedAdhesionIds.length) }));
+      } else {
+        notify.success(t('tontines', result.created.length === 1 ? 'beneficiariesAddedOne' : 'beneficiariesAddedMany', { count: String(result.created.length) }));
+      }
+      setSelected(new Set());
+      setSearch('');
+      setValue('');
+      onOpenChange(false);
+    },
+  });
+
+  const toggleOne = (id: string) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const toggleAll = () => setSelected(selected.size === availableIds.length && availableIds.length > 0 ? new Set() : new Set(availableIds));
+
+  const columns: TableColumn<(typeof adhesions)[number]>[] = [
+    { key: 'select', header: '', className: 'w-10', render: (row) => (existingAdhesionIds.has(row.id) || !isEligible(row)) ? <Checkbox checked={existingAdhesionIds.has(row.id)} disabled aria-label={row.memberName} /> : <Checkbox checked={selected.has(row.id)} onCheckedChange={() => toggleOne(row.id)} aria-label={row.memberName} /> },
+    { key: 'memberName', header: t('tontines', 'adhesionMember'), render: (row) => <span className="flex items-center gap-2 font-medium"><MemberAvatar member={memberById.get(row.memberId) ?? { firstName: row.memberName, lastName: '' }} />{row.memberName}</span> },
+    { key: 'reference', header: t('tontines', 'adhesionReference'), render: (row) => <span className="font-mono text-xs text-muted-foreground">{row.id}</span> },
+    { key: 'status', header: t('tontines', 'adhesionStatus'), render: (row) => existingAdhesionIds.has(row.id)
+      ? <span className="text-xs text-muted-foreground">{t('tontines', 'alreadyBeneficiary')}</span>
+      : !isEligible(row) ? <span className="text-xs text-amber-600">{t('tontines', 'notEligibleForOccurrence')}</span>
+      : <StatusBadge label={t('tontines', ADHESION_STATUS_LABEL_KEY[row.status])} tone={ADHESION_STATUS_TONE[row.status]} /> },
+  ];
+
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+      <DialogHeader><DialogTitle>{t('tontines', 'addBeneficiary')}</DialogTitle><DialogDescription>{t('tontines', 'addBeneficiarySubtitle')}</DialogDescription></DialogHeader>
+      <div className="max-w-[220px] space-y-1"><Label htmlFor="beneficiary-value">{t('tontines', 'expectedValueOptional')}</Label><Input id="beneficiary-value" type="number" inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} /></div>
+      <FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'searchAdhesionPlaceholder')} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button variant="outline" size="sm" disabled={availableIds.length === 0} onClick={toggleAll}>{selected.size === availableIds.length && availableIds.length > 0 ? t('tontines', 'deselectAll') : t('tontines', 'selectAll')}</Button>
+        {selected.size > 0 && <span className="text-xs text-muted-foreground">{t('tontines', selected.size === 1 ? 'selectedMembersCountOne' : 'selectedMembersCountMany', { count: String(selected.size) })}</span>}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border"><DataTable columns={columns} rows={rows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noEligibleAdhesions')} />} /></div>
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onOpenChange(false)}>{t('tontines', 'cancel')}</Button>
+        <Button disabled={selected.size === 0 || mutation.isPending} onClick={() => {
+          const valueType = tontine?.valueType ?? 'MONEY';
+          const parsed = value.trim() ? Number(value) : undefined;
+          mutation.mutate({
+            adhesionIds: [...selected], valueType,
+            expectedAmount: valueType === 'MONEY' ? parsed : undefined,
+            expectedQuantity: valueType === 'GOODS' ? parsed : undefined,
+            item: valueType === 'GOODS' ? tontine?.item : undefined,
+          });
+        }}>
+          {mutation.isPending ? t('tontines', 'saving') : t('tontines', selected.size === 1 ? 'addBeneficiariesOne' : 'addBeneficiariesMany', { count: String(selected.size) })}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
 export function TurnDetail({ t }: { t: T }) {
   const { tontineId = '', periodId = '', occurrenceId = '' } = useParams();
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
   const { data: turn, isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'turn-by-occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getTurnByOccurrence(currentTenant.id, occurrenceId) });
+  const { data: occurrence } = useQuery({ queryKey: ['tontines', 'occurrence', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.getOccurrence(currentTenant.id, occurrenceId) });
   const { data: beneficiaries = [] } = useQuery({ queryKey: ['tontines', 'turn-beneficiaries', turn?.id, currentTenant.id], queryFn: () => tontineTurnsService.listBeneficiariesByTurn(currentTenant.id, turn!.id), enabled: Boolean(turn) });
+  const { data: tontine } = useQuery({ queryKey: ['tontines', 'detail', tontineId, currentTenant.id], queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId) });
   const [confirmClose, setConfirmClose] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const closeMutation = useMockMutation({
     mutationFn: () => tontineTurnsService.closeTurn(currentTenant.id, turn!.id),
-    invalidateKeys: [['tontines', 'turn-by-occurrence', occurrenceId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'turn-by-occurrence', occurrenceId, currentTenant.id], queryKeys.tontines.allTurns(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'turnClosePrecondition')); return; }
       notify.success(t('tontines', 'turnClosed'));
       setConfirmClose(false);
     },
   });
+  const existingAdhesionIds = useMemo(() => new Set(beneficiaries.map((item) => item.adhesionId)), [beneficiaries]);
   if (isLoading) return <Page title={t('tontines', 'turnDetail')}><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('tontines', 'turnDetail')}><ErrorState onRetry={refetch} /></Page>;
   if (!turn) return <NotFoundPage />;
   const allReceived = beneficiaries.length > 0 && beneficiaries.every((item) => item.status === 'RECEIVED');
-  return <Page title={`${t('tontines', 'turn')} #${turn.turnNumber}`} description={turn.id} actions={<><Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrenceId}`)} />{turn.status === 'OPEN' && <PermissionGate permission="cycles.manage"><Button variant="outline" disabled={!allReceived} onClick={() => setConfirmClose(true)}><CheckCircle2 size={15} />{t('tontines', 'closeTurn')}</Button></PermissionGate>}</>}>
+  return <Page title={`${t('tontines', 'turn')} #${turn.turnNumber}`} description={turn.id} actions={<>
+    <Back label={t('tontines', 'backToOccurrences')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrenceId}`)} />
+    {turn.status === 'OPEN' && <PermissionGate permission="beneficiaries.manage"><Button variant="outline" onClick={() => setAddOpen(true)}><Plus size={15} />{t('tontines', 'addBeneficiary')}</Button></PermissionGate>}
+    {turn.status === 'OPEN' && <PermissionGate permission="cycles.manage"><Button variant="outline" disabled={!allReceived} onClick={() => setConfirmClose(true)}><CheckCircle2 size={15} />{t('tontines', 'closeTurn')}</Button></PermissionGate>}
+  </>}>
     {confirmClose && <ConfirmDialog open title={t('tontines', 'closeTurn')} description={t('tontines', 'closeTurnConfirm')} confirmLabel={t('tontines', 'confirm')} cancelLabel={t('tontines', 'cancel')} onConfirm={() => closeMutation.mutate(undefined)} onCancel={() => setConfirmClose(false)} />}
+    <AddBeneficiaryDialog t={t} turnId={turn.id} periodId={periodId} referenceDate={occurrence?.actualDate ?? occurrence?.plannedDate} tontine={tontine} existingAdhesionIds={existingAdhesionIds} open={addOpen} onOpenChange={setAddOpen} />
     <div className="flex items-center gap-3"><StatusBadge label={t('tontines', STATUS_LABEL_KEY[turn.status])} tone={OCC_TONE[turn.status]} /><span className="text-xs text-muted-foreground">{formatNumber(beneficiaries.length)} {t('tontines', 'beneficiaries').toLowerCase()}</span></div>
-    {beneficiaries.length === 0 ? <EmptyState icon={UsersRound} title={t('tontines', 'noBeneficiaries')} /> : (
+    {turn.status === 'OPEN' && !allReceived && beneficiaries.length > 0 && <p className="text-xs text-muted-foreground">{t('tontines', 'closeTurnRequiresBeneficiary')}</p>}
+    {beneficiaries.length === 0 ? <EmptyState icon={UsersRound} title={t('tontines', 'noBeneficiaries')} description={turn.status === 'OPEN' ? t('tontines', 'noBeneficiariesHint') : undefined} /> : (
       <div className="grid gap-4 lg:grid-cols-2">
         {beneficiaries.map((beneficiary) => <BeneficiaryCard key={beneficiary.id} t={t} beneficiary={beneficiary} turnClosed={turn.status === 'CLOSED'} />)}
       </div>

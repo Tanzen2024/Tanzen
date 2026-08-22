@@ -19,7 +19,7 @@ export type WorkflowRequest = {
   tenantId: string;
   workflowDefinitionId: string;
   domain: WorkflowDomain;
-  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear';
+  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear' | 'turnPermutation';
   entityId: string;
   entityLabel: string;
   amount?: number;

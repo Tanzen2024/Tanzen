@@ -9,7 +9,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Plus, ScrollText } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, Timeline, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, ConfirmDialog, FieldError } from '@/components';
+import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, Timeline, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, ConfirmDialog, FieldError, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -18,9 +18,12 @@ import { useTenant } from '@/contexts/tenant-context';
 import { NotFoundPage } from '@/routes';
 import { tontineTurnsService, type ContributionInput, type ContributionPaymentInput } from '@/services/tontine-turns.service';
 import { tontinesService } from '@/services/tontines.service';
+import { organizationService } from '@/services/organization.service';
+import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import type { ValueType, ContributionStatus } from '@/mocks/tontines/tontine-occurrences';
+import type { Member } from '@/mocks/organization/members';
+import type { TontineAdhesion, ValueType, ContributionStatus } from '@/mocks/tontines/tontine-occurrences';
 import type { TableColumn } from '@/types/ui';
 import { formatValue } from './value-format';
 import { currencies, DEFAULT_CURRENCY_CODE } from '@/constants/currencies';
@@ -35,13 +38,23 @@ function Page({ title, description, actions, children }: { title: string; descri
 function Back({ label, onClick }: { label: string; onClick: () => void }) { return <Button variant="ghost" size="sm" onClick={onClick}>{label}</Button>; }
 function Info({ label, value }: { label: string; value: string }) { return <div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div>; }
 
-/** Réutilisable par les fiches Adhésion et Occurrence pour afficher leurs contributions liées (mandat §12) sans dupliquer la logique de colonnes. Chaque ligne mène à `ContributionDetail` (accès contextuel manquant avant cette étape — les lignes n'étaient qu'un affichage sans navigation). */
-export function ContributionTable({ t, rows }: { t: T; rows: Awaited<ReturnType<typeof tontineTurnsService.listContributionsByTontine>> }) {
+/**
+ * Réutilisable par les fiches Adhésion et Occurrence pour afficher leurs contributions liées
+ * (mandat §12) sans dupliquer la logique de colonnes. Chaque ligne mène à `ContributionDetail`.
+ * `adhesions`/`members` optionnels (mandat photos §7) : fournis par l'appelant quand plusieurs
+ * membres différents peuvent apparaître dans la même table (ex. `OccurrenceDetail`, où chaque
+ * ligne est une adhésion distincte) — affiche alors photo + nom au lieu du seul `adhesionId`
+ * brut. Omis par un appelant dont la table ne concerne qu'un seul membre déjà visible ailleurs
+ * sur l'écran (ex. `PeriodAdhesionDetail`), pour ne pas répéter une information redondante.
+ */
+export function ContributionTable({ t, rows, adhesions = [], members = [] }: { t: T; rows: Awaited<ReturnType<typeof tontineTurnsService.listContributionsByTontine>>; adhesions?: TontineAdhesion[]; members?: Member[] }) {
   const { tontineId = '' } = useParams();
   const navigate = useNavigate();
+  const adhesionById = new Map(adhesions.map((item) => [item.id, item]));
+  const memberById = new Map(members.map((item) => [item.id, item]));
   const columns: TableColumn<(typeof rows)[number]>[] = [
     { key: 'id', header: 'ID', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${tontineId}/contributions/${row.id}`)} className="font-mono text-xs text-primary hover:underline">{row.id}</button> },
-    { key: 'adhesionId', header: t('tontines', 'adhesion'), render: (row) => <span className="font-mono text-xs">{row.adhesionId}</span> },
+    ...(adhesions.length > 0 ? [{ key: 'member', header: t('tontines', 'adhesionMember'), render: (row: (typeof rows)[number]) => { const adhesion = adhesionById.get(row.adhesionId); const member = adhesion ? memberById.get(adhesion.memberId) : undefined; return <span className="flex items-center gap-2"><MemberAvatar member={member ?? { firstName: adhesion?.memberName ?? row.adhesionId, lastName: '' }} />{adhesion?.memberName ?? row.adhesionId}</span>; } }] : [{ key: 'adhesionId', header: t('tontines', 'adhesion'), render: (row: (typeof rows)[number]) => <span className="font-mono text-xs">{row.adhesionId}</span> }]),
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => t('tontines', row.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods') },
     { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
     { key: 'paid', header: t('tontines', 'contributionAmount'), render: (row) => formatValue(row.valueType, row.paidAmount, row.paidQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
@@ -63,6 +76,8 @@ export function ContributionList({ t }: { t: T }) {
   const { data: tontine, isLoading: isTontineLoading, isError: isTontineError, refetch: refetchTontine } = useQuery({ queryKey: ['tontines', 'detail', tontineId, currentTenant.id], queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId) });
   const { data: contributions = [], isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'contributions', tontineId, currentTenant.id], queryFn: () => tontineTurnsService.listContributionsByTontine(currentTenant.id, tontineId), enabled: Boolean(tontine) });
   const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'adhesions', tontineId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByTontine(currentTenant.id, tontineId), enabled: Boolean(tontine) });
+  const { data: allMembers = [] } = useQuery({ queryKey: ['members', 'list', currentTenant.id], queryFn: () => organizationService.listMembers(currentTenant.id), enabled: Boolean(tontine) });
+  const memberById = new Map(allMembers.map((item) => [item.id, item]));
 
   if (isTontineLoading) return <Page title={t('tontines', 'contributionsPageTitle')}><TableSkeleton /></Page>;
   if (isTontineError) return <Page title={t('tontines', 'contributionsPageTitle')}><ErrorState onRetry={refetchTontine} /></Page>;
@@ -70,7 +85,8 @@ export function ContributionList({ t }: { t: T }) {
   if (isLoading) return <Page title={t('tontines', 'contributionsPageTitle')}><TableSkeleton /></Page>;
   if (isError) return <Page title={t('tontines', 'contributionsPageTitle')}><ErrorState onRetry={refetch} /></Page>;
 
-  const memberNameOf = (adhesionId: string) => adhesions.find((item) => item.id === adhesionId)?.memberName ?? adhesionId;
+  const adhesionOf = (adhesionId: string) => adhesions.find((item) => item.id === adhesionId);
+  const memberNameOf = (adhesionId: string) => adhesionOf(adhesionId)?.memberName ?? adhesionId;
   const rows = contributions.filter((row) =>
     memberNameOf(row.adhesionId).toLowerCase().includes(search.toLowerCase()) &&
     (status === 'all' || row.status === status) &&
@@ -78,7 +94,7 @@ export function ContributionList({ t }: { t: T }) {
   );
   const columns: TableColumn<(typeof rows)[number]>[] = [
     { key: 'id', header: 'ID', render: (row) => <span className="font-mono text-xs">{row.id}</span> },
-    { key: 'member', header: t('tontines', 'adhesionMember'), render: (row) => memberNameOf(row.adhesionId) },
+    { key: 'member', header: t('tontines', 'adhesionMember'), render: (row) => { const adhesion = adhesionOf(row.adhesionId); const member = adhesion ? memberById.get(adhesion.memberId) : undefined; return <span className="flex items-center gap-2"><MemberAvatar member={member ?? { firstName: memberNameOf(row.adhesionId), lastName: '' }} />{memberNameOf(row.adhesionId)}</span>; } },
     { key: 'occurrence', header: t('tontines', 'occurrenceNumber'), render: (row) => <span className="font-mono text-xs">{row.tontineOccurrenceId}</span> },
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => t('tontines', row.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods') },
     { key: 'expected', header: t('tontines', 'expectedValue'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity, row.item, row.valueType === 'MONEY' ? row.currency : row.unit) },
@@ -129,7 +145,7 @@ export function ContributionCreate({ t }: { t: T }) {
 
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createContribution>>, ContributionInput>({
     mutationFn: (input) => tontineTurnsService.createContribution(currentTenant.id, input),
-    invalidateKeys: [['tontines', 'contributions', tontineId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'contributions', tontineId, currentTenant.id], queryKeys.tontines.allContributions(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
       notify.success(t('tontines', 'contributionCreated'));
@@ -207,7 +223,7 @@ export function ContributionDetail({ t }: { t: T }) {
 
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.recordContributionPayment>>, ContributionPaymentInput>({
     mutationFn: (input) => tontineTurnsService.recordContributionPayment(currentTenant.id, contributionId, input),
-    invalidateKeys: [['tontines', 'contribution', contributionId, currentTenant.id]],
+    invalidateKeys: [['tontines', 'contribution', contributionId, currentTenant.id], queryKeys.tontines.allContributions(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
       notify.success(t('tontines', 'paymentRecorded'));
