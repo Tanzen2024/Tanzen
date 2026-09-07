@@ -4,10 +4,10 @@
  * différents). Toute vue (Finance > Contributions, fiche Membre) doit lire
  * ce tableau et le filtrer, jamais recopier ses valeurs.
  *
- * Distinct de `CycleContribution` (dans mocks/tontines/tontine-cycles.ts) :
- * ce dernier est un enregistrement interne au moteur de cycle de tontine
- * (protégé, non modifié ici), alors que `Contribution` est l'écriture
- * ledger côté Finance, rattachée à un membre réel.
+ * Distinct de `TontineContribution` (dans mocks/tontines/tontine-occurrences.ts) :
+ * ce dernier est un enregistrement interne au modèle Tontine → Période →
+ * Occurrence (protégé, non modifié ici), alors que `Contribution` est
+ * l'écriture ledger côté Finance, rattachée à un membre réel.
  */
 export type ContributionStatus = 'completed' | 'pending';
 

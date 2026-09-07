@@ -81,7 +81,7 @@ export function PeriodAdhesionList({ t }: { t: T }) {
 
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createAdhesionsForPeriod>>, string[]>({
     mutationFn: (memberIds) => tontineTurnsService.createAdhesionsForPeriod(currentTenant.id, periodId, memberIds, joinedAt),
-    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
+    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], ['tontines', 'adhesions', tontineId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
       if (result.skippedMemberIds.length > 0) {
@@ -177,7 +177,7 @@ export function PeriodAdhesionCreate({ t }: { t: T }) {
 
   const mutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.createAdhesion>>, AdhesionInput>({
     mutationFn: (input) => tontineTurnsService.createAdhesion(currentTenant.id, input),
-    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
+    invalidateKeys: [['tontines', 'period-adhesions', periodId, currentTenant.id], ['tontines', 'adhesions', tontineId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
       notify.success(t('tontines', 'adhesionCreated'));
@@ -196,7 +196,7 @@ export function PeriodAdhesionCreate({ t }: { t: T }) {
     mutation.mutate({ periodId, memberId: member.id, memberName: `${member.firstName} ${member.lastName}`, joinedAt });
   };
 
-  return <Page title={t('tontines', 'addAdhesion')} description={t('tontines', 'addAdhesionSubtitle')} actions={<Back label={t('tontines', 'backToTontine')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions`)} />}>
+  return <Page title={t('tontines', 'addAdhesion')} description={t('tontines', 'addAdhesionSubtitle')} actions={<Back label={t('tontines', 'backToAdhesions')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions`)} />}>
     <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'general')}</CardTitle></CardHeader>
       <div className="grid gap-4 p-5 pt-0 sm:grid-cols-2">
         <div className="space-y-2"><Label htmlFor="adhesion-member">{t('tontines', 'selectMember')}</Label><select id="adhesion-member" value={memberId} onChange={(event) => setMemberId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm" aria-invalid={Boolean(error)}><option value="">{t('tontines', 'selectMember')}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.firstName} {member.lastName}</option>)}</select><FieldError message={error} /></div>
@@ -215,8 +215,7 @@ export function PeriodAdhesionDetail({ t }: { t: T }) {
   const { data: member } = useQuery({ queryKey: ['members', 'detail', adhesion?.memberId, currentTenant.id], queryFn: () => organizationService.getMember(currentTenant.id, adhesion!.memberId), enabled: Boolean(adhesion) });
   const { data: contributions = [] } = useQuery({ queryKey: ['tontines', 'adhesion-contributions', adhesionId, currentTenant.id], queryFn: () => tontineTurnsService.listContributionsByAdhesion(currentTenant.id, adhesionId), enabled: Boolean(adhesion) });
   const { data: beneficiaries = [] } = useQuery({ queryKey: ['tontines', 'adhesion-beneficiaries', adhesionId, currentTenant.id], queryFn: () => tontineTurnsService.listBeneficiariesByAdhesion(currentTenant.id, adhesionId), enabled: Boolean(adhesion) });
-  /** Résout Turn/Occurrence pour chaque bénéfice lié (mandat §Q1 : « distinguer/historiser » les différents tours occupés par une adhésion) — lectures tenant-larges déjà existantes (Vue d'ensemble), réutilisées telles quelles plutôt qu'un nouvel appel dédié. */
-  const { data: allTurns = [] } = useQuery({ queryKey: queryKeys.tontines.allTurns(currentTenant.id), queryFn: () => tontineTurnsService.listAllTurns(currentTenant.id), enabled: Boolean(adhesion) });
+  /** Résout l'Occurrence de chaque bénéfice lié (mandat §Q1 : « distinguer/historiser » les différentes occurrences occupées par une adhésion) — lecture tenant-large déjà existante (Vue d'ensemble), réutilisée telle quelle plutôt qu'un nouvel appel dédié. */
   const { data: allOccurrences = [] } = useQuery({ queryKey: queryKeys.tontines.allOccurrences(currentTenant.id), queryFn: () => tontineTurnsService.listAllOccurrences(currentTenant.id), enabled: Boolean(adhesion) });
   const { data: permutationHistory = [] } = useQuery({ queryKey: ['tontines', 'permutation-history', adhesionId, currentTenant.id], queryFn: () => tontineTurnsService.listPermutationHistoryForAdhesion(currentTenant.id, adhesionId), enabled: Boolean(adhesion) });
   const [closeOpen, setCloseOpen] = useState(false);
@@ -224,7 +223,7 @@ export function PeriodAdhesionDetail({ t }: { t: T }) {
   const [closeError, setCloseError] = useState<string | undefined>();
   const closeMutation = useMockMutation({
     mutationFn: (date: string) => tontineTurnsService.closeAdhesion(currentTenant.id, adhesionId, date),
-    invalidateKeys: [['tontines', 'adhesion', adhesionId, currentTenant.id], ['tontines', 'period-adhesions', periodId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
+    invalidateKeys: [['tontines', 'adhesion', adhesionId, currentTenant.id], ['tontines', 'period-adhesions', periodId, currentTenant.id], ['tontines', 'adhesions', tontineId, currentTenant.id], queryKeys.tontines.allAdhesions(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'fieldRequired')); return; }
       notify.success(t('tontines', 'adhesionClosed'));
@@ -236,10 +235,9 @@ export function PeriodAdhesionDetail({ t }: { t: T }) {
   if (isError) return <Page title={t('tontines', 'adhesionDetail')}><ErrorState onRetry={refetch} /></Page>;
   if (!adhesion) return <NotFoundPage />;
 
-  const turnById = new Map(allTurns.map((item) => [item.id, item]));
   const occurrenceById = new Map(allOccurrences.map((item) => [item.id, item]));
   const beneficiaryColumns: TableColumn<(typeof beneficiaries)[number]>[] = [
-    { key: 'turn', header: t('tontines', 'turnNumber'), render: (row) => { const turn = turnById.get(row.tontineTurnId); const occurrence = turn ? occurrenceById.get(turn.tontineOccurrenceId) : undefined; return turn ? <button type="button" onClick={() => occurrence && navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrence.id}/turn`)} className="font-medium text-primary hover:underline">#{turn.turnNumber}{occurrence ? ` · ${t('tontines', 'occurrenceNumber')} #${occurrence.occurrenceNumber}` : ''}</button> : '—'; } },
+    { key: 'occurrence', header: t('tontines', 'occurrenceNumber'), render: (row) => { const occurrence = occurrenceById.get(row.tontineOccurrenceId); return occurrence ? <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${occurrence.id}`)} className="font-medium text-primary hover:underline">#{occurrence.occurrenceNumber}</button> : '—'; } },
     { key: 'id', header: 'ID', render: (row) => <span className="font-mono text-xs">{row.id}</span> },
     { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => t('tontines', row.valueType === 'MONEY' ? 'valueTypeMoney' : 'valueTypeGoods') },
     { key: 'expected', header: t('tontines', 'expectedAmount'), render: (row) => formatValue(row.valueType, row.expectedAmount, row.expectedQuantity) },
@@ -247,7 +245,7 @@ export function PeriodAdhesionDetail({ t }: { t: T }) {
     { key: 'status', header: t('tontines', 'beneficiaryStatus'), render: (row) => <StatusBadge label={t('tontines', row.status === 'PENDING' ? 'statusReceptionPending' : row.status === 'PARTIAL' ? 'statusReceptionPartial' : 'statusReceptionReceived')} tone={row.status === 'RECEIVED' ? 'success' : row.status === 'PARTIAL' ? 'warning' : 'default'} /> },
   ];
 
-  return <Page title={adhesion.memberName} description={`${adhesion.id} · ${t('tontines', 'adhesion')}`} actions={<><Back label={t('tontines', 'backToTontine')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions`)} />{adhesion.status === 'active' && <PermissionGate permission="adhesions.manage"><Button variant="outline" onClick={() => setCloseOpen(true)}>{t('tontines', 'closeAdhesion')}</Button></PermissionGate>}</>}>
+  return <Page title={adhesion.memberName} description={`${adhesion.id} · ${t('tontines', 'adhesion')}`} actions={<><Back label={t('tontines', 'backToAdhesions')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/adhesions`)} />{adhesion.status === 'active' && <PermissionGate permission="adhesions.manage"><Button variant="outline" onClick={() => setCloseOpen(true)}>{t('tontines', 'closeAdhesion')}</Button></PermissionGate>}</>}>
     {closeOpen && <ConfirmDialog open title={t('tontines', 'closeAdhesion')} description={t('tontines', 'closeAdhesionConfirm')} confirmLabel={t('tontines', 'confirm')} cancelLabel={t('tontines', 'cancel')} onCancel={() => setCloseOpen(false)} onConfirm={() => {
       if (!endDate) { setCloseError(t('tontines', 'fieldRequired')); return; }
       setCloseError(undefined);

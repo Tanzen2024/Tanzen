@@ -54,7 +54,7 @@ export const permissionCatalog: Permission[] = [
   'members.read', 'members.create', 'members.update', 'members.delete',
   'governance.read', 'governance.create', 'governance.approve', 'governance.update', 'governance.delete',
   'accounts.read', 'accounts.create', 'accounts.update', 'accounts.delete', 'accounts.manage',
-  'transactions.read', 'transactions.export',
+  'transactions.read', 'transactions.export', 'transactions.create', 'transactions.update', 'transactions.cancel',
   'contributions.read',
   'distributions.read', 'distributions.create', 'distributions.approve',
   'applications.read', 'applications.create', 'applications.approve',

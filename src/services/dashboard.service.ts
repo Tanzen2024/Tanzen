@@ -1,14 +1,14 @@
 import { mockRequest } from './api-client';
 import { financialOverviewData, contributionsData, repaymentsData, tontineActivityData } from '@/mocks/dashboard';
 import { members } from '@/mocks/organization/members';
-import { accounts } from '@/mocks/finance/accounts';
+import { accounts, resolveAccount } from '@/mocks/finance/accounts';
 import { transactions } from '@/mocks/finance/transactions';
 import { contributions } from '@/mocks/finance/contributions';
 import { applications } from '@/mocks/finance/applications';
 import { loans } from '@/mocks/finance/loans';
 import { repayments } from '@/mocks/finance/repayments';
 import { tontines } from '@/mocks/tontines/tontines';
-import { tontineCycles } from '@/mocks/tontines/tontine-cycles';
+import { tontinePeriods } from '@/mocks/tontines/tontine-periods';
 
 type KpiValue = { value: number; delta: string };
 
@@ -21,7 +21,7 @@ export type DashboardOverview = {
     repayments: KpiValue;
     outstanding: KpiValue;
     activeTontines: KpiValue;
-    activeCycles: KpiValue;
+    activePeriods: KpiValue;
     pendingWorkflows: KpiValue;
   };
   loansDistribution: { key: string; value: number }[];
@@ -29,7 +29,6 @@ export type DashboardOverview = {
   recentTransactions: { id: string; member: string; typeKey: string; amount: number; date: string; statusKey: string }[];
   upcomingPayments: { id: string; member: string; amount: number; dueDate: string; statusKey: string }[];
   loanDueDates: { id: string; member: string; amount: number; dueDate: string; progress: number }[];
-  upcomingDraws: { id: string; tontine: string; cycle: number; drawDate: string; participants: number; amount: number }[];
   importantNotifications: { id: string; priority: 'high' | 'medium' | 'low'; titleKey: string; detail: string; date: string }[];
   pendingApprovals: { id: string; typeKey: string; requester: string; amount: number; date: string }[];
 };
@@ -37,8 +36,9 @@ export type DashboardOverview = {
 const noDelta: KpiValue['delta'] = '';
 const kpi = (value: number): KpiValue => ({ value, delta: noDelta });
 
+/** Nomenclature `Transaction.category` (mandat « CLASSIFICATION DES TRANSACTIONS ») → clé i18n du widget. */
 const TX_TYPE_KEY: Record<string, string> = {
-  contribution: 'txContribution', loanRepayment: 'txRepayment', repayment: 'txRepayment', loanDisbursement: 'txDisbursement', distribution: 'txDistribution', fee: 'txWithdrawal', transfer: 'txWithdrawal', penalty: 'txWithdrawal',
+  EPARGNE: 'txContribution', REMBOURSEMENT: 'txRepayment', PRET: 'txDisbursement', AUTRES: 'txWithdrawal',
 };
 
 function buildOverview(tenantId: string): DashboardOverview {
@@ -50,19 +50,21 @@ function buildOverview(tenantId: string): DashboardOverview {
   const tenantLoans = loans.filter((loan) => loan.tenantId === tenantId);
   const tenantRepayments = repayments.filter((repayment) => repayment.tenantId === tenantId);
   const tenantTontines = tontines.filter((tontine) => tontine.tenantId === tenantId);
-  const tenantCycles = tontineCycles.filter((cycle) => cycle.tenantId === tenantId);
+  /** Remplace `tontineCycles` (mandat « suppression complète de la logique Cycle/Tour ») — `Period` est le niveau temporel retenu du modèle Tontine → Fréquence → Période → Occurrence. */
+  const tenantPeriods = tontinePeriods.filter((period) => period.tenantId === tenantId);
 
   const byDateDesc = <T extends { date: string }>(rows: T[]) => [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const kpis: DashboardOverview['kpis'] = {
     members: kpi(tenantMembers.length),
-    treasury: kpi(tenantAccounts.reduce((sum, account) => sum + account.balance, 0)),
+    // Trésorerie = somme des soldes calculés (report d'ouverture + journal comptabilisé), même source que la fiche caisse.
+    treasury: kpi(tenantAccounts.reduce((sum, account) => sum + resolveAccount(account, tenantTransactions).balance, 0)),
     contributions: kpi(tenantContributions.filter((c) => c.status === 'completed').reduce((sum, c) => sum + c.amount, 0)),
     activeLoans: kpi(tenantLoans.filter((loan) => loan.status === 'active').length),
     repayments: kpi(tenantRepayments.filter((r) => r.status === 'completed').reduce((sum, r) => sum + r.amount, 0)),
     outstanding: kpi(tenantLoans.reduce((sum, loan) => sum + loan.outstanding, 0)),
     activeTontines: kpi(tenantTontines.filter((tontine) => tontine.status === 'statusActive').length),
-    activeCycles: kpi(tenantCycles.filter((cycle) => cycle.status === 'statusOpen').length),
+    activePeriods: kpi(tenantPeriods.filter((period) => period.status === 'ACTIVE').length),
     pendingWorkflows: kpi(0),
   };
 
@@ -84,9 +86,6 @@ function buildOverview(tenantId: string): DashboardOverview {
     const member = members.find((m) => m.id === latestContribution.memberId);
     recentActivity.push({ id: `activity-contribution-${latestContribution.id}`, typeKey: 'activityContributionReceived', label: member ? `${member.firstName} ${member.lastName}` : latestContribution.memberId, date: latestContribution.date });
   }
-  const completedDraws = tenantCycles.flatMap((cycle) => cycle.draws.filter((draw) => draw.status === 'statusCompleted').map((draw) => ({ ...draw, tontineName: tontines.find((t) => t.id === cycle.tontineId)?.name ?? cycle.tontineId })));
-  const latestDraw = byDateDesc(completedDraws)[0];
-  if (latestDraw) recentActivity.push({ id: `activity-draw-${latestDraw.id}`, typeKey: 'activityTontineDrawCompleted', label: `${latestDraw.tontineName} · ${latestDraw.winnerName}`, date: latestDraw.date });
 
   const recentTransactions: DashboardOverview['recentTransactions'] = byDateDesc(tenantTransactions).slice(0, 5).map((transaction) => ({
     id: transaction.id,
@@ -109,16 +108,6 @@ function buildOverview(tenantId: string): DashboardOverview {
     .slice(0, 4)
     .map((loan) => ({ id: loan.id, member: loan.borrower, amount: loan.outstanding, dueDate: loan.nextPaymentDate, progress: loan.progress }));
 
-  const scheduledDraws = tenantCycles.flatMap((cycle) => cycle.draws.filter((draw) => draw.status === 'statusScheduled').map((draw) => ({
-    id: draw.id,
-    tontine: tontines.find((t) => t.id === cycle.tontineId)?.name ?? cycle.tontineId,
-    cycle: cycle.cycleNumber,
-    drawDate: draw.date,
-    participants: cycle.members.filter((member) => member.status === 'statusActive').length,
-    amount: draw.contributionPool,
-  })));
-  const upcomingDraws = [...scheduledDraws].sort((a, b) => new Date(a.drawDate).getTime() - new Date(b.drawDate).getTime()).slice(0, 4);
-
   const importantNotifications: DashboardOverview['importantNotifications'] = [];
   const applicationsInReview = tenantApplications.filter((application) => application.stage === 'stageReview');
   if (applicationsInReview[0]) importantNotifications.push({ id: `notif-app-${applicationsInReview[0].id}`, priority: 'high', titleKey: 'loanReview', detail: `${applicationsInReview[0].applicant} · ${applicationsInReview[0].requestedAmount.toLocaleString('fr-FR')} FCFA`, date: applicationsInReview[0].submittedDate });
@@ -129,17 +118,18 @@ function buildOverview(tenantId: string): DashboardOverview {
   // notification/approbation ne peut plus jamais se déclencher (aucun membre ne peut plus
   // être 'pending'), retirée plutôt que conservée comme code mort silencieusement inatteignable.
   const now = Date.now();
-  const soonClosingCycles = tenantCycles.filter((cycle) => cycle.status === 'statusOpen' && new Date(cycle.endDate).getTime() - now < 45 * 86_400_000);
-  if (soonClosingCycles[0]) {
-    const tontine = tontines.find((t) => t.id === soonClosingCycles[0].tontineId);
-    importantNotifications.push({ id: `notif-cycle-${soonClosingCycles[0].id}`, priority: 'low', titleKey: 'cycleEndingSoon', detail: `${tontine?.name ?? soonClosingCycles[0].tontineId} · Cycle ${soonClosingCycles[0].cycleNumber}`, date: soonClosingCycles[0].endDate });
+  /** Remplace « cycle bientôt clôturé » (mandat « suppression complète de la logique Cycle/Tour ») — même fenêtre de 45 jours, portée par la Période (niveau temporel retenu) plutôt que par l'ancien Cycle. */
+  const soonEndingPeriods = tenantPeriods.filter((period) => period.status === 'ACTIVE' && new Date(period.endDate).getTime() - now < 45 * 86_400_000);
+  if (soonEndingPeriods[0]) {
+    const tontine = tontines.find((t) => t.id === soonEndingPeriods[0].tontineId);
+    importantNotifications.push({ id: `notif-period-${soonEndingPeriods[0].id}`, priority: 'low', titleKey: 'periodEndingSoon', detail: `${tontine?.name ?? soonEndingPeriods[0].tontineId} · ${soonEndingPeriods[0].startDate} → ${soonEndingPeriods[0].endDate}`, date: soonEndingPeriods[0].endDate });
   }
 
   const pendingApprovals: DashboardOverview['pendingApprovals'] = [];
   applicationsInReview.slice(0, 2).forEach((application) => pendingApprovals.push({ id: `approval-app-${application.id}`, typeKey: 'approvalLoan', requester: application.applicant, amount: application.requestedAmount, date: application.submittedDate }));
   // 'approvalMembership' (membre en attente d'adhésion) retiré — D-MEM-04, voir ci-dessus.
 
-  return { kpis, loansDistribution, recentActivity, recentTransactions, upcomingPayments, loanDueDates, upcomingDraws, importantNotifications, pendingApprovals };
+  return { kpis, loansDistribution, recentActivity, recentTransactions, upcomingPayments, loanDueDates, importantNotifications, pendingApprovals };
 }
 
 export const dashboardService = {

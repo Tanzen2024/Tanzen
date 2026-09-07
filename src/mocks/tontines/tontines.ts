@@ -38,16 +38,19 @@ export type Tontine = {
   unit?: UnitCode;
   status: TontineStatus;
   memberCount: number;
-  activeCycles: number;
   totalContributions: number;
   createdAt: string;
-} & Partial<FrequencyConfig>;
+} & { frequency: FrequencyConfig['frequency'] } & Partial<Omit<FrequencyConfig, 'frequency'>>;
 
 export const tontines: Tontine[] = [
   /** frequency MONTHLY/DAY_OF_MONTH=20 déduit des occurrences déjà seedées (OCC-001 : 2026-06-20, OCC-002 : 2026-07-20 — même jour du mois, un mois d'écart), pas inventé (mandat §32). */
-  { id: 'TON-001', tenantId: 'T-002', name: 'Tontine Horizon', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 50_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 20, status: 'statusActive', memberCount: 12, activeCycles: 2, totalContributions: 4_200_000, createdAt: '2025-01-15' },
-  { id: 'TON-002', tenantId: 'T-005', name: 'Tontine Avenir', valueType: 'GOODS', item: 'Bidon d’huile 5L', quantity: 2, unit: 'BIDON', status: 'statusActive', memberCount: 8, activeCycles: 1, totalContributions: 1_440_000, createdAt: '2025-03-20' },
-  { id: 'TON-003', tenantId: 'T-003', name: 'Mutuelle Teranga', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 30_000, status: 'statusActive', memberCount: 15, activeCycles: 1, totalContributions: 3_600_000, createdAt: '2024-11-10' },
-  { id: 'TON-004', tenantId: 'T-001', name: 'Coopérative Sutura', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 25_000, status: 'statusActive', memberCount: 24, activeCycles: 3, totalContributions: 8_640_000, createdAt: '2024-06-01' },
-  { id: 'TON-005', tenantId: 'T-004', name: 'Association Jappo', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000, status: 'statusInactive', memberCount: 6, activeCycles: 0, totalContributions: 720_000, createdAt: '2025-05-05' },
+  { id: 'TON-001', tenantId: 'T-002', name: 'Tontine Horizon', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 50_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 20, status: 'statusActive', memberCount: 12, totalContributions: 4_200_000, createdAt: '2025-01-15' },
+  /** Migration (mandat « Fréquence obligatoire ») : frequency MONTHLY/DAY_OF_MONTH=15 déduite de sa seule occurrence seedée (OCC-003, planifiée le 2026-08-15) — pas inventée. */
+  { id: 'TON-002', tenantId: 'T-005', name: 'Tontine Avenir', valueType: 'GOODS', item: 'Bidon d’huile 5L', quantity: 2, unit: 'BIDON', frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 15, status: 'statusActive', memberCount: 8, totalContributions: 1_440_000, createdAt: '2025-03-20' },
+  /** Migration (mandat « Fréquence obligatoire ») : aucune Period/Occurrence seedée pour cette tontine, donc aucune valeur ne peut être déduite — défaut neutre explicite MONTHLY/DAY_OF_MONTH=1, à ajuster par un utilisateur habilité si besoin. */
+  { id: 'TON-003', tenantId: 'T-003', name: 'Mutuelle Teranga', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 30_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, status: 'statusActive', memberCount: 15, totalContributions: 3_600_000, createdAt: '2024-11-10' },
+  /** Migration (mandat « Fréquence obligatoire ») : idem TON-003, aucune donnée d'occurrence à partir de laquelle déduire une fréquence réelle — défaut neutre explicite. */
+  { id: 'TON-004', tenantId: 'T-001', name: 'Coopérative Sutura', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 25_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, status: 'statusActive', memberCount: 24, totalContributions: 8_640_000, createdAt: '2024-06-01' },
+  /** Migration (mandat « Fréquence obligatoire ») : idem TON-003, aucune donnée d'occurrence à partir de laquelle déduire une fréquence réelle — défaut neutre explicite. */
+  { id: 'TON-005', tenantId: 'T-004', name: 'Association Jappo', valueType: 'MONEY', currency: 'XOF', purchaseMode: 'WITHOUT_PURCHASE', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, status: 'statusInactive', memberCount: 6, totalContributions: 720_000, createdAt: '2025-05-05' },
 ];

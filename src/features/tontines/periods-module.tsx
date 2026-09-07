@@ -99,7 +99,7 @@ export function PeriodDetail({ t }: { t: T }) {
   const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'period-adhesions', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
   const generateMutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.generateOccurrences>>, void>({
     mutationFn: () => tontineTurnsService.generateOccurrences(currentTenant.id, periodId),
-    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id], queryKeys.tontines.allOccurrences(currentTenant.id), queryKeys.tontines.allTurns(currentTenant.id)],
+    invalidateKeys: [['tontines', 'occurrences', periodId, currentTenant.id], ['tontines', 'occurrences-by-tontine', tontineId, currentTenant.id], queryKeys.tontines.allOccurrences(currentTenant.id)],
     onSuccess: (created) => {
       if (!created) { notify.error(t('tontines', 'generationUnavailable')); return; }
       notify.success(created.length > 0 ? t('tontines', 'occurrencesGenerated', { count: String(created.length) }) : t('tontines', 'occurrencesGeneratedNone'));

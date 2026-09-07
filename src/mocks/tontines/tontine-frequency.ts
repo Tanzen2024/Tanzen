@@ -1,8 +1,9 @@
 /**
  * Périodicité de la Tontine (mandat fréquence) — appartient exclusivement à
- * la CONFIGURATION PERMANENTE de la Tontine (jamais à une Occurrence, jamais
- * à l'ancien Cycle légataire, cf. tontine-cycles.ts qui n'est pas touché
- * ici). Sert de règle de référence pour calculer les dates d'Occurrences
+ * la CONFIGURATION PERMANENTE de la Tontine (jamais à une Occurrence ; le
+ * modèle Cycle/Turn hérité a été entièrement retiré, cf. le mandat
+ * « suppression complète de la logique Cycle/Tour »). Sert de règle de
+ * référence pour calculer les dates d'Occurrences
  * d'une Période (`generateOccurrenceDates`), réutilisée telle quelle par
  * toutes les Périodes successives d'une même Tontine (aucune recopie, aucune
  * nouvelle Tontine créée pour changer de période — cf. tontine-periods.ts).
@@ -53,14 +54,20 @@ const ORDINAL_NUMBER: Record<Ordinal, number | 'LAST'> = { FIRST: 1, SECOND: 2, 
 const QUARTER_MONTH_LABEL: Record<QuarterMonth, { fr: string; en: string }> = { 1: { fr: 'premier', en: 'first' }, 2: { fr: 'deuxième', en: 'second' }, 3: { fr: 'troisième', en: 'third' } };
 
 function pad(n: number): string { return String(n).padStart(2, '0'); }
-function toISODate(year: number, month: number, day: number): string { return `${year}-${pad(month)}-${pad(day)}`; }
+export function toISODate(year: number, month: number, day: number): string { return `${year}-${pad(month)}-${pad(day)}`; }
 function splitYearMonth(iso: string): [number, number] { const [y, m] = iso.split('-').map(Number); return [y, m]; }
-/** `month` 1-12 (convention de ce module, jamais l'index JS 0-based). */
-function daysInMonth(year: number, month: number): number { return new Date(year, month, 0).getDate(); }
+/**
+ * `month` 1-12 (convention de ce module, jamais l'index JS 0-based).
+ * Exporté (avec `computeDayOfMonthDate`/`computeNthWeekdayDate`/`iterateMonths`) pour
+ * être réutilisé par le wrapper de récurrence des réunions d'exercice fiscal
+ * (`src/mocks/settings/meeting-schedule.ts`) — le mandat « source de vérité des dates
+ * de réunion » impose de réutiliser ce moteur, pas d'en dupliquer un.
+ */
+export function daysInMonth(year: number, month: number): number { return new Date(year, month, 0).getDate(); }
 function weekdayOf(year: number, month: number, day: number): number { return new Date(year, month - 1, day).getDay(); }
 
 /** Retourne le jour (1-31) du n-ième (ou dernier) `weekdayIndex` du mois, ou `null` s'il n'existe pas (ex. un 5ᵉ lundi qui n'existe pas ce mois-là) — jamais de décalage automatique. */
-function nthWeekdayOfMonth(year: number, month: number, weekdayIndex: number, ordinal: number | 'LAST'): number | null {
+export function nthWeekdayOfMonth(year: number, month: number, weekdayIndex: number, ordinal: number | 'LAST'): number | null {
   const total = daysInMonth(year, month);
   if (ordinal === 'LAST') {
     for (let day = total; day >= 1; day -= 1) if (weekdayOf(year, month, day) === weekdayIndex) return day;
@@ -76,13 +83,13 @@ function nthWeekdayOfMonth(year: number, month: number, weekdayIndex: number, or
   return null;
 }
 
-function computeDayOfMonthDate(year: number, month: number, dayOfMonth: number | undefined): string | null {
+export function computeDayOfMonthDate(year: number, month: number, dayOfMonth: number | undefined): string | null {
   if (!dayOfMonth) return null;
   if (dayOfMonth > daysInMonth(year, month)) return null; // ex. "31" en février : absent ce mois-ci, jamais décalé.
   return toISODate(year, month, dayOfMonth);
 }
 
-function computeNthWeekdayDate(year: number, month: number, ordinal: Ordinal | undefined, weekday: Weekday | undefined): string | null {
+export function computeNthWeekdayDate(year: number, month: number, ordinal: Ordinal | undefined, weekday: Weekday | undefined): string | null {
   if (!ordinal || !weekday) return null;
   const day = nthWeekdayOfMonth(year, month, WEEKDAY_INDEX[weekday], ORDINAL_NUMBER[ordinal]);
   return day ? toISODate(year, month, day) : null;
@@ -96,7 +103,7 @@ function allWeekdayDatesInMonth(year: number, month: number, weekdayIndex: numbe
   return result;
 }
 
-function* iterateMonths(startYear: number, startMonth: number, endYear: number, endMonth: number): Generator<{ year: number; month: number }> {
+export function* iterateMonths(startYear: number, startMonth: number, endYear: number, endMonth: number): Generator<{ year: number; month: number }> {
   let y = startYear; let m = startMonth;
   while (y < endYear || (y === endYear && m <= endMonth)) {
     yield { year: y, month: m };
@@ -287,6 +294,31 @@ export function applyQuarterlyWeekday(current: Partial<FrequencyConfig>, weekday
 
 /** Exposé uniquement pour les tests d'edge case (§17 : « cinquième occurrence inexistante ») — l'UI ne propose jamais d'ordinal au-delà de FOURTH/LAST, mais l'algorithme sous-jacent doit rester sûr si on l'interroge au-delà. */
 export const __testing = { nthWeekdayOfMonth, daysInMonth };
+
+/**
+ * Prédicat pur, sans dépendance à `t()` (mandat « Fréquence obligatoire ») —
+ * réutilisable côté service (`tontinesService`), qui ne doit jamais dépendre
+ * de l'i18n pour une règle métier. Duplique délibérément les conditions
+ * structurelles déjà présentes dans `validateFrequency` ci-dessous plutôt
+ * que de refactorer cette dernière (fonction UI existante, déjà testée,
+ * hors périmètre de ce mandat) : les deux doivent rester en accord sur ce
+ * qu'est une configuration de fréquence complète, mais aucune des deux
+ * n'est la dépendance de l'autre.
+ */
+export function isValidFrequencyConfig(value: Partial<FrequencyConfig>): value is FrequencyConfig {
+  if (!value.frequency) return false;
+  if (value.frequency === 'WEEKLY') return Boolean(value.weekday);
+  if (value.frequency === 'MONTHLY') {
+    if ((value.monthlyRule ?? 'DAY_OF_MONTH') === 'DAY_OF_MONTH') return Boolean(value.monthlyDayOfMonth && value.monthlyDayOfMonth >= 1 && value.monthlyDayOfMonth <= 31);
+    return Boolean(value.monthlyOrdinal && value.monthlyWeekday);
+  }
+  if (value.frequency === 'QUARTERLY') {
+    if (!value.quarterlyMonth) return false;
+    if ((value.quarterlyRule ?? 'DAY_OF_MONTH') === 'DAY_OF_MONTH') return Boolean(value.quarterlyDayOfMonth && value.quarterlyDayOfMonth >= 1 && value.quarterlyDayOfMonth <= 31);
+    return Boolean(value.quarterlyOrdinal && value.quarterlyWeekday);
+  }
+  return true;
+}
 
 /** Validation §8 du mandat — un seul message combiné par section (cohérent avec la granularité déjà utilisée ailleurs dans le formulaire Tontine). Fonction pure prenant `t` en paramètre plutôt que de dépendre de React, pour rester colocalisée avec le reste de la logique de fréquence (évite de mélanger export de composant et export de fonction dans un même fichier `.tsx`, source du seul type de warning ESLint déjà toléré ailleurs dans ce projet). */
 export function validateFrequency(t: (section: 'tontines', key: string) => string, value: Partial<FrequencyConfig>): string | undefined {

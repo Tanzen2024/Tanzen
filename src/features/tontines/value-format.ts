@@ -9,10 +9,10 @@ export function formatMoney(amount: number, currencyCode?: string): string {
 
 /**
  * Affichage MONEY/GOODS commun, partagé entre les écrans
- * Occurrence/Turn/Beneficiary, Adhesion et Contribution.
+ * Occurrence/Beneficiary, Adhesion et Contribution.
  * `currencyOrUnit` porte la devise (MONEY) ou le code d'unité (GOODS) — les
  * deux ne coexistant jamais pour une même valeur, un seul paramètre positionnel
- * suffit. Sans unité connue (ex. TontineTurnBeneficiary, qui n'en porte pas),
+ * suffit. Sans unité connue (ex. OccurrenceBeneficiary, qui n'en porte pas),
  * le comportement historique (quantité « · » nature) est conservé.
  */
 export function formatValue(valueType: ValueType, amount?: number, quantity?: number, item?: string, currencyOrUnit?: string): string {

@@ -6,18 +6,16 @@ import { tontines } from '@/mocks/tontines/tontines';
 import { members } from '@/mocks/organization/members';
 import { generateOccurrenceDates } from '@/mocks/tontines/tontine-frequency';
 import {
-  tontineAdhesions, tontineOccurrences, tontineTurns, tontineTurnBeneficiaries, tontineContributions, tontineTurnPermutations,
-  computeReceivedTotal, computeBeneficiaryStatus, isAdhesionActiveAt,
-  type TontineAdhesion, type TontineOccurrence, type TontineTurn, type TontineTurnBeneficiary, type TontineContribution, type TontineTurnPermutation, type ReceptionOperation, type PaymentOperation, type ValueType,
+  tontineAdhesions, tontineOccurrences, occurrenceBeneficiaries, tontineContributions, occurrenceBeneficiaryPermutations,
+  computeReceivedTotal, computePurchaseTotal, computeBeneficiaryStatus, isAdhesionActiveAt,
+  type TontineAdhesion, type TontineOccurrence, type OccurrenceBeneficiary, type TontineContribution, type OccurrenceBeneficiaryPermutation, type ReceptionOperation, type PaymentOperation, type ValueType,
 } from '@/mocks/tontines/tontine-occurrences';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { workflowService } from './workflow.service';
 import type { UnitCode } from '@/constants/units';
 
-export type ReceptionInput = { amount?: number; quantity?: number };
-export type CorrectionInput = { operationId: string; amount?: number; quantity?: number; reason: string };
-export type CancellationInput = { operationId: string; reason: string };
+export type ReceptionInput = { amount?: number; quantity?: number; purchaseAmount?: number };
 /** Champs limités à ceux déjà portés par `TontineAdhesion` (memberId, joinedAt) — D-TON-04-07 (forme technique) reste ouverte, aucun champ métier supplémentaire n'est inventé ici. `periodId` remplace `tontineId` (mandat « adhésions au niveau de la période ») : une Adhésion est toujours créée directement dans une Période existante. */
 export type AdhesionInput = { periodId: string; memberId: string; memberName: string; joinedAt: string };
 /** Champs limités à ceux déjà portés par `TontineContribution` — la valeur attendue générée devient une donnée historique dès la création (D-TON-04-29), `paidAmount`/`paidQuantity`/`paidAt` démarrent donc toujours à zéro/nul, statut `PENDING` (aucun flux de paiement n'est inventé à ce stade). */
@@ -27,32 +25,33 @@ export type ContributionPaymentInput = { amount?: number; quantity?: number };
 /**
  * Enregistrement du résultat d'un tirage MANUEL réalisé en amont, hors TANZEN (mandat
  * bénéficiaires) — jamais un tirage. Champs strictement limités à ceux déjà portés par
- * `TontineTurnBeneficiary` (pas de `currency`/`unit` : ce type ne les porte pas,
+ * `OccurrenceBeneficiary` (pas de `currency`/`unit` : ce type ne les porte pas,
  * contrairement à `TontineContribution` — asymétrie déjà présente dans le modèle, non
  * ajoutée ici). `adhesionIds` accepte 0..N entrées (RB-04/RB-05, aucune limite inventée).
  */
 export type BeneficiaryInput = { adhesionIds: string[]; valueType: ValueType; expectedAmount?: number; expectedQuantity?: number; item?: string };
 /**
- * Demande de permutation entre deux `TontineTurnBeneficiary` déjà existants (jamais un
- * simple couple tour/adhésion : un tour peut porter plusieurs bénéficiaires, D-TON-04-19,
- * donc seul l'identifiant du `TontineTurnBeneficiary` désigne sans ambiguïté QUI échange
- * avec QUI). `requestedByUserId` suit exactement le même rôle que sur `WorkflowRequest`
- * (D-FY-08) — ici renseigné mais jamais comparé à l'acteur lors de la décision : décision
- * explicite du mandat de ne PAS généraliser le blocage d'auto-approbation à ce domaine.
+ * Demande de permutation entre deux `OccurrenceBeneficiary` déjà existants (jamais un
+ * simple couple occurrence/adhésion : une occurrence peut porter plusieurs bénéficiaires,
+ * D-TON-04-19, donc seul l'identifiant du `OccurrenceBeneficiary` désigne sans ambiguïté
+ * QUI échange avec QUI). `requestedByUserId` suit exactement le même rôle que sur
+ * `WorkflowRequest` (D-FY-08) — ici renseigné mais jamais comparé à l'acteur lors de la
+ * décision : décision explicite du mandat de ne PAS généraliser le blocage
+ * d'auto-approbation à ce domaine.
  */
-export type TurnPermutationInput = { turnBeneficiaryAId: string; turnBeneficiaryBId: string; requestedBy: string; requestedByUserId?: string; justification?: string };
+export type BeneficiaryPermutationInput = { beneficiaryAId: string; beneficiaryBId: string; requestedBy: string; requestedByUserId?: string; justification?: string };
 /** Champs strictement limités à ceux déjà portés par `TontineOccurrence` — aucune notion de fréquence/périodicité n'existe dans le modèle (confirmé absent, D-TON-04-11), donc non demandée ici : chaque occurrence est créée manuellement, une par une. */
 export type OccurrenceInput = { periodId: string; occurrenceNumber: number; plannedDate: string; actualDate?: string | null };
 /** Champs strictement limités à ceux du dictionnaire canonique Period (mandat refonte §4) — pas de « numéro de période » ni de champ supplémentaire non demandé. */
 export type PeriodInput = { tontineId: string; startDate: string; endDate: string };
 
-/** Un Turn ne peut être clôturé normalement que si TOUS ses bénéficiaires sont RECEIVED (D-TON-06-09/-13, règle de clôture reprise dans les consolidations D-TON-04-19/-21 de cette session). */
-function allBeneficiariesReceived(turnId: string): boolean {
-  const beneficiaries = tontineTurnBeneficiaries.filter((item) => item.tontineTurnId === turnId);
+/** Une Occurrence ne peut être clôturée normalement que si TOUS ses bénéficiaires sont RECEIVED (D-TON-06-09/-13, règle de clôture reprise dans les consolidations D-TON-04-19/-21 de cette session). */
+function allBeneficiariesReceived(occurrenceId: string): boolean {
+  const beneficiaries = occurrenceBeneficiaries.filter((item) => item.tontineOccurrenceId === occurrenceId);
   return beneficiaries.length > 0 && beneficiaries.every((item) => computeBeneficiaryStatus(item) === 'RECEIVED');
 }
 
-function appendOperation(beneficiary: TontineTurnBeneficiary, operation: ReceptionOperation) {
+function appendOperation(beneficiary: OccurrenceBeneficiary, operation: ReceptionOperation) {
   beneficiary.operations.push(operation);
 }
 
@@ -144,30 +143,29 @@ export const tontineTurnsService = {
     mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId && item.adhesionId === adhesionId)),
   listBeneficiariesByAdhesion: (tenantId: string, adhesionId: string) =>
     mockRequest(() =>
-      tontineTurnBeneficiaries
+      occurrenceBeneficiaries
         .filter((item) => item.tenantId === tenantId && item.adhesionId === adhesionId)
-        .map((item) => ({ ...item, receivedTotal: computeReceivedTotal(item.operations), status: computeBeneficiaryStatus(item) })),
+        .map((item) => ({ ...item, receivedTotal: computeReceivedTotal(item.operations), purchaseTotal: computePurchaseTotal(item.operations), status: computeBeneficiaryStatus(item) })),
     ),
 
-  /** Périodes d'une Tontine (nouveau niveau temporel, remplace Cycle comme parent d'Occurrence — mandat refonte). `TontineCycle` reste une structure légataire séparée, non traversée ici. */
+  /** Périodes d'une Tontine (nouveau niveau temporel, remplace Cycle comme parent d'Occurrence — mandat refonte). `TontineCycle` a été supprimé (mandat « suppression complète de la logique Cycle/Tour »). */
   listPeriodsByTontine: (tenantId: string, tontineId: string) =>
     mockRequest(() => tontinePeriods.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId).sort((a, b) => a.startDate.localeCompare(b.startDate))),
   /**
    * Vues agrégées transverses (mandat vue d'ensemble « Membres »/« Cotisations »/« Opérations » —
    * toutes tontines confondues) : simples filtres par `tenantId`, déjà porté directement par
-   * chaque entité (Adhesion/Contribution/Occurrence/Turn/Period) — aucune jointure Tontine→Période
-   * n'est nécessaire pour filtrer, seulement pour l'affichage (nom de la tontine), résolu côté UI
-   * via `listAllPeriods`. N'introduit aucune nouvelle entité ni règle métier, uniquement des
-   * lectures agrégées de ce qui existe déjà.
+   * chaque entité (Adhesion/Contribution/Occurrence/Bénéficiaire/Period) — aucune jointure
+   * Tontine→Période n'est nécessaire pour filtrer, seulement pour l'affichage (nom de la
+   * tontine), résolu côté UI via `listAllPeriods`. N'introduit aucune nouvelle entité ni
+   * règle métier, uniquement des lectures agrégées de ce qui existe déjà.
    */
   listAllPeriods: (tenantId: string) => mockRequest(() => tontinePeriods.filter((item) => item.tenantId === tenantId)),
   listAllAdhesions: (tenantId: string) => mockRequest(() => tontineAdhesions.filter((item) => item.tenantId === tenantId)),
   listAllContributions: (tenantId: string) => mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId)),
   listAllOccurrences: (tenantId: string) => mockRequest(() => tontineOccurrences.filter((item) => item.tenantId === tenantId).sort((a, b) => a.plannedDate.localeCompare(b.plannedDate))),
-  listAllTurns: (tenantId: string) => mockRequest(() => tontineTurns.filter((item) => item.tenantId === tenantId)),
-  listAllBeneficiaries: (tenantId: string) => mockRequest(() => tontineTurnBeneficiaries.filter((item) => item.tenantId === tenantId)),
-  /** Lecture pure du lien technique demande↔bénéficiaires (cf. `TontineTurnPermutation`) — utilisée par l'écran de planification pour signaler une permutation déjà en cours sur un tour, sans dupliquer l'état déjà porté par `WorkflowRequest.status`. */
-  listTurnPermutations: (tenantId: string) => mockRequest(() => tontineTurnPermutations.filter((item) => item.tenantId === tenantId)),
+  listAllBeneficiaries: (tenantId: string) => mockRequest(() => occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId)),
+  /** Lecture pure du lien technique demande↔bénéficiaires (cf. `OccurrenceBeneficiaryPermutation`) — utilisée par l'écran de planification pour signaler une permutation déjà en cours sur une occurrence, sans dupliquer l'état déjà porté par `WorkflowRequest.status`. */
+  listBeneficiaryPermutations: (tenantId: string) => mockRequest(() => occurrenceBeneficiaryPermutations.filter((item) => item.tenantId === tenantId)),
   getPeriod: (tenantId: string, periodId: string) =>
     mockRequest(() => getTenantScoped(tontinePeriods, (item) => item.id === periodId, tenantId)),
   /**
@@ -198,15 +196,14 @@ export const tontineTurnsService = {
   getOccurrence: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId)),
   /**
-   * Crée l'Occurrence ET son Turn associé dans le même appel : la relation
-   * 1:1 Occurrence↔Turn est déjà confirmée (D-TON-04-06) — une Occurrence
-   * sans Turn serait un état incomplet jamais défini par aucune source, pas
-   * un état "en attente" valide. Refuse un `occurrenceNumber` déjà utilisé
-   * dans la période (contrainte déjà documentée dans le dictionnaire
-   * canonique). Création unitaire manuelle — pour générer plusieurs
-   * occurrences d'un coup à partir de la fréquence de la Tontine, voir
-   * `generateOccurrences` ci-dessous (mandat fréquence) ; les deux chemins
-   * restent disponibles côté UI (création manuelle jamais retirée, §25).
+   * Crée l'Occurrence (mandat « suppression complète de la logique Cycle/Tour ») —
+   * plus de Turn intermédiaire créé en parallèle : les bénéficiaires se rattachent
+   * directement à `occurrence.id`. Refuse un `occurrenceNumber` déjà utilisé dans
+   * la période (contrainte déjà documentée dans le dictionnaire canonique).
+   * Création unitaire manuelle — pour générer plusieurs occurrences d'un coup à
+   * partir de la fréquence de la Tontine, voir `generateOccurrences` ci-dessous
+   * (mandat fréquence) ; les deux chemins restent disponibles côté UI (création
+   * manuelle jamais retirée, §25).
    */
   createOccurrence: (tenantId: string, input: OccurrenceInput) =>
     mockRequest(() => {
@@ -216,20 +213,18 @@ export const tontineTurnsService = {
       if (duplicate) return undefined;
       const occurrence: TontineOccurrence = { id: uniqueId('OCC'), tenantId, status: 'OPEN', actualDate: null, ...input };
       tontineOccurrences.push(occurrence);
-      const turn: TontineTurn = { id: uniqueId('TURN'), tenantId, tontineOccurrenceId: occurrence.id, turnNumber: input.occurrenceNumber, status: 'OPEN' };
-      tontineTurns.push(turn);
       return occurrence;
     }),
   /**
-   * Génère en une fois les Occurrences (+ Turns) d'une Période à partir de
-   * la fréquence configurée sur sa Tontine (mandat fréquence) — la
-   * périodicité est désormais une décision métier fournie, contrairement
-   * au P1 (`GÉNÉRATION AUTOMATIQUE — DÉCISION MÉTIER MANQUANTE`, obsolète).
-   * Refuse si la Tontine n'a pas de fréquence configurée (`undefined`, pas
-   * d'erreur silencieuse). Numérote à la suite des occurrences déjà
-   * présentes dans la Période (jamais de numérotation globale Tontine, §26)
-   * et ignore toute date déjà occupée par une occurrence existante — un
-   * second clic sur « Générer » ne crée donc jamais de doublon (§25).
+   * Génère en une fois les Occurrences d'une Période à partir de la fréquence
+   * configurée sur sa Tontine (mandat fréquence) — la périodicité est désormais
+   * une décision métier fournie, contrairement au P1 (`GÉNÉRATION AUTOMATIQUE —
+   * DÉCISION MÉTIER MANQUANTE`, obsolète). Refuse si la Tontine n'a pas de
+   * fréquence configurée (`undefined`, pas d'erreur silencieuse). Numérote à la
+   * suite des occurrences déjà présentes dans la Période (jamais de numérotation
+   * globale Tontine, §26) et ignore toute date déjà occupée par une occurrence
+   * existante — un second clic sur « Générer » ne crée donc jamais de doublon
+   * (§25).
    */
   generateOccurrences: (tenantId: string, periodId: string) =>
     mockRequest(() => {
@@ -246,71 +241,58 @@ export const tontineTurnsService = {
         if (existingDates.has(plannedDate)) continue;
         const occurrence: TontineOccurrence = { id: uniqueId('OCC'), tenantId, periodId, occurrenceNumber: nextNumber, plannedDate, actualDate: null, status: 'OPEN' };
         tontineOccurrences.push(occurrence);
-        const turn: TontineTurn = { id: uniqueId('TURN'), tenantId, tontineOccurrenceId: occurrence.id, turnNumber: nextNumber, status: 'OPEN' };
-        tontineTurns.push(turn);
         created.push(occurrence);
         nextNumber += 1;
       }
       return created;
     }),
 
-  /** Une occurrence possède un seul Turn (D-TON-04-06, relation 1:1). */
-  getTurnByOccurrence: (tenantId: string, occurrenceId: string) =>
+  /** 1..N bénéficiaires par Occurrence (D-TON-04-19, confirmé) — jamais un champ unique. */
+  listBeneficiariesByOccurrence: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => {
       const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
-      if (!occurrence) return undefined;
-      return tontineTurns.find((item) => item.tontineOccurrenceId === occurrence.id);
-    }),
-  getTurn: (tenantId: string, turnId: string) =>
-    mockRequest(() => getTenantScoped(tontineTurns, (item) => item.id === turnId, tenantId)),
-
-  /** 1..N bénéficiaires par Turn (D-TON-04-19, confirmé) — jamais un champ unique. */
-  listBeneficiariesByTurn: (tenantId: string, turnId: string) =>
-    mockRequest(() => {
-      const turn = getTenantScoped(tontineTurns, (item) => item.id === turnId, tenantId);
-      if (!turn) return [];
-      return tontineTurnBeneficiaries
-        .filter((item) => item.tontineTurnId === turn.id)
-        .map((item) => ({ ...item, receivedTotal: computeReceivedTotal(item.operations), status: computeBeneficiaryStatus(item) }));
+      if (!occurrence) return [];
+      return occurrenceBeneficiaries
+        .filter((item) => item.tontineOccurrenceId === occurrence.id)
+        .map((item) => ({ ...item, receivedTotal: computeReceivedTotal(item.operations), purchaseTotal: computePurchaseTotal(item.operations), status: computeBeneficiaryStatus(item) }));
     }),
   getBeneficiary: (tenantId: string, beneficiaryId: string) =>
     mockRequest(() => {
-      const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+      const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
       if (!beneficiary) return undefined;
-      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
+      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), purchaseTotal: computePurchaseTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
     }),
   /**
    * Enregistre le résultat d'un tirage MANUEL déjà réalisé hors TANZEN (RB-06/RB-07) —
    * ne choisit, ne calcule ni ne propose jamais lui-même un bénéficiaire.
    *
    * RB-01/RB-02/RB-03 : une adhésion n'est acceptée que si elle appartient à LA MÊME
-   * Période que l'Occurrence de ce Turn (donc à la même Tontine, par construction de la
-   * chaîne Adhesion→Période→Tontine) — même contrainte déjà appliquée par
-   * `createContribution` ci-dessus, réutilisée telle quelle (pas une règle nouvelle).
-   * Réutilise également `isAdhesionActiveAt` (même fonction que pour les Contributions,
-   * RB-10 : aucune nouvelle règle d'éligibilité inventée).
+   * Période que l'Occurrence (donc à la même Tontine, par construction de la chaîne
+   * Adhesion→Période→Tontine) — même contrainte déjà appliquée par `createContribution`
+   * ci-dessus, réutilisée telle quelle (pas une règle nouvelle). Réutilise également
+   * `isAdhesionActiveAt` (même fonction que pour les Contributions, RB-10 : aucune
+   * nouvelle règle d'éligibilité inventée).
    *
    * RB-08/RB-09 : aucune vérification "déjà bénéficiaire d'une autre tontine" ni "déjà
    * bénéficiaire par le passé dans cette tontine" — ce ne sont pas des règles sourcées,
    * volontairement non ajoutées. Seul un doublon strict est empêché : la même adhésion
-   * deux fois dans le même appel, ou une adhésion déjà bénéficiaire de CE turn précis.
+   * deux fois dans le même appel, ou une adhésion déjà bénéficiaire de CETTE occurrence
+   * précise.
    *
-   * Refuse (retourne undefined) si le Turn est CLOSED — même immuabilité que
-   * `recordReception`/`correctReception`/`regularizeReception`/`cancelReception`.
+   * Refuse (retourne undefined) si l'Occurrence est CLOSED — même immuabilité que
+   * `recordReception`.
    * Une adhésion invalide/hors tontine/déjà présente est silencieusement ignorée plutôt
    * que de faire échouer tout le lot (même convention que `createAdhesionsForPeriod`) ;
    * `skippedAdhesionIds` permet à l'UI d'en informer précisément l'utilisateur.
    */
-  addBeneficiaries: (tenantId: string, turnId: string, input: BeneficiaryInput) =>
+  addBeneficiaries: (tenantId: string, occurrenceId: string, input: BeneficiaryInput) =>
     mockRequest(() => {
-      const turn = getTenantScoped(tontineTurns, (item) => item.id === turnId, tenantId);
-      if (!turn) return undefined;
-      if (turn.status === 'CLOSED') return undefined;
-      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === turn.tontineOccurrenceId, tenantId);
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
       if (!occurrence) return undefined;
+      if (occurrence.status === 'CLOSED') return undefined;
       const referenceDate = occurrence.actualDate ?? occurrence.plannedDate;
-      const alreadyAdhesionIds = new Set(tontineTurnBeneficiaries.filter((item) => item.tontineTurnId === turnId).map((item) => item.adhesionId));
-      const created: TontineTurnBeneficiary[] = [];
+      const alreadyAdhesionIds = new Set(occurrenceBeneficiaries.filter((item) => item.tontineOccurrenceId === occurrenceId).map((item) => item.adhesionId));
+      const created: OccurrenceBeneficiary[] = [];
       const skippedAdhesionIds: string[] = [];
       const seenThisCall = new Set<string>();
       for (const adhesionId of input.adhesionIds) {
@@ -318,8 +300,8 @@ export const tontineTurnsService = {
         const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
         if (!adhesion || adhesion.periodId !== occurrence.periodId || !isAdhesionActiveAt(adhesion, referenceDate)) { skippedAdhesionIds.push(adhesionId); continue; }
         seenThisCall.add(adhesionId);
-        const beneficiary: TontineTurnBeneficiary = { id: uniqueId('TB'), tenantId, tontineTurnId: turnId, adhesionId, valueType: input.valueType, expectedAmount: input.expectedAmount, expectedQuantity: input.expectedQuantity, item: input.item, operations: [] };
-        tontineTurnBeneficiaries.push(beneficiary);
+        const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, tontineOccurrenceId: occurrenceId, adhesionId, valueType: input.valueType, expectedAmount: input.expectedAmount, expectedQuantity: input.expectedQuantity, item: input.item, operations: [] };
+        occurrenceBeneficiaries.push(beneficiary);
         alreadyAdhesionIds.add(adhesionId);
         created.push(beneficiary);
       }
@@ -327,53 +309,73 @@ export const tontineTurnsService = {
     }),
 
   /**
+   * Retrait d'un bénéficiaire désigné par erreur (mandat « Gestion des
+   * opérations » §18) — jamais une suppression physique aveugle : refusé
+   * dès qu'une opération (réception/correction/régularisation) existe déjà
+   * sur ce bénéficiaire, ou que son Occurrence est CLOSED. Si aucune
+   * opération n'a jamais été enregistrée, il n'y a aucun historique
+   * financier à perdre — la ligne peut alors être retirée sans violer
+   * l'immuabilité déjà appliquée à `recordReception`/etc. Pour défaire un
+   * bénéficiaire qui a déjà reçu quelque chose, la seule voie reste la
+   * permutation (`requestBeneficiaryPermutation`), jamais ce retrait direct.
+   */
+  removeBeneficiary: (tenantId: string, beneficiaryId: string) =>
+    mockRequest(() => {
+      const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+      if (!beneficiary) return undefined;
+      const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.tontineOccurrenceId);
+      if (!occurrence || occurrence.status === 'CLOSED') return undefined;
+      if (beneficiary.operations.length > 0) return undefined;
+      const index = occurrenceBeneficiaries.findIndex((item) => item.id === beneficiaryId);
+      occurrenceBeneficiaries.splice(index, 1);
+      return { removed: true } as const;
+    }),
+
+  /**
    * Historique des permutations d'un bénéficiaire (mandat §16/§Q1 : « distinguer/
-   * historiser » les différents tours qu'une adhésion a occupés). Dérivé, jamais stocké
-   * séparément — chaque `AuditEvent` `tontines.turnPermutationApplied` écrit par
-   * `applyTurnPermutationDecision` porte déjà avant/après ; ce lecteur les retrouve pour
-   * une adhésion donnée (des deux côtés d'un échange, `context.otherAdhesionId`).
+   * historiser » les différentes occurrences qu'une adhésion a occupées). Dérivé, jamais
+   * stocké séparément — chaque `AuditEvent` `tontines.beneficiaryPermutationApplied` écrit
+   * par `applyBeneficiaryPermutationDecision` porte déjà avant/après ; ce lecteur les
+   * retrouve pour une adhésion donnée (des deux côtés d'un échange, `context.otherAdhesionId`).
    */
   listPermutationHistoryForAdhesion: (tenantId: string, adhesionId: string) =>
     mockRequest(() =>
       auditEvents
-        .filter((event) => event.tenantId === tenantId && event.module === 'tontines' && event.action === 'tontines.turnPermutationApplied' && (event.context?.adhesionId === adhesionId || event.context?.otherAdhesionId === adhesionId))
+        .filter((event) => event.tenantId === tenantId && event.module === 'tontines' && event.action === 'tontines.beneficiaryPermutationApplied' && (event.context?.adhesionId === adhesionId || event.context?.otherAdhesionId === adhesionId))
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
     ),
 
   /**
    * Crée une `WorkflowRequest` (domaine `tontines`, `WD-006`) via le moteur générique —
-   * ne modifie RIEN dans `tontineTurnBeneficiaries` avant approbation effective (mandat
-   * §9-10 : la permutation ne devient effective qu'après validation). `turnBeneficiaryAId`/
-   * `turnBeneficiaryBId` désignent directement les deux `TontineTurnBeneficiary` à
-   * échanger — jamais un couple tour/adhésion : un tour peut porter plusieurs
+   * ne modifie RIEN dans `occurrenceBeneficiaries` avant approbation effective (mandat
+   * §9-10 : la permutation ne devient effective qu'après validation). `beneficiaryAId`/
+   * `beneficiaryBId` désignent directement les deux `OccurrenceBeneficiary` à échanger —
+   * jamais un couple occurrence/adhésion : une occurrence peut porter plusieurs
    * bénéficiaires (D-TON-04-19), seul l'id du bénéficiaire lève l'ambiguïté.
    *
    * Refuse (retourne `undefined`) si : même bénéficiaire des deux côtés, bénéficiaire
-   * introuvable/autre tenant, les deux bénéficiaires appartiennent déjà au même tour,
-   * l'un des deux tours est CLOSED (même immuabilité que `recordReception`/
-   * `addBeneficiaries`), les deux tours n'appartiennent pas à la MÊME tontine (aucune
-   * permutation inter-tontine — jamais demandée par le mandat, mélanger deux tontines
-   * serait un mélange de fonds distincts), ou une permutation déjà `pending`/`inProgress`
-   * référence déjà l'un des deux bénéficiaires (§17, TEST 14 : deux demandes concurrentes
-   * incompatibles).
+   * introuvable/autre tenant, les deux bénéficiaires appartiennent déjà à la même
+   * occurrence, l'une des deux occurrences est CLOSED (même immuabilité que
+   * `recordReception`/`addBeneficiaries`), les deux occurrences n'appartiennent pas à la
+   * MÊME tontine (aucune permutation inter-tontine — jamais demandée par le mandat,
+   * mélanger deux tontines serait un mélange de fonds distincts), ou une permutation déjà
+   * `pending`/`inProgress` référence déjà l'un des deux bénéficiaires (§17, TEST 14 : deux
+   * demandes concurrentes incompatibles).
    */
-  requestTurnPermutation: async (tenantId: string, input: TurnPermutationInput): Promise<WorkflowRequest | undefined> => {
-    if (input.turnBeneficiaryAId === input.turnBeneficiaryBId) return undefined;
-    const beneficiaryA = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === input.turnBeneficiaryAId, tenantId);
-    const beneficiaryB = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === input.turnBeneficiaryBId, tenantId);
-    if (!beneficiaryA || !beneficiaryB || beneficiaryA.tontineTurnId === beneficiaryB.tontineTurnId) return undefined;
-    const turnA = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryA.tontineTurnId, tenantId);
-    const turnB = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryB.tontineTurnId, tenantId);
-    if (!turnA || !turnB || turnA.status === 'CLOSED' || turnB.status === 'CLOSED') return undefined;
-    const occurrenceA = getTenantScoped(tontineOccurrences, (item) => item.id === turnA.tontineOccurrenceId, tenantId);
-    const occurrenceB = getTenantScoped(tontineOccurrences, (item) => item.id === turnB.tontineOccurrenceId, tenantId);
-    if (!occurrenceA || !occurrenceB) return undefined;
+  requestBeneficiaryPermutation: async (tenantId: string, input: BeneficiaryPermutationInput): Promise<WorkflowRequest | undefined> => {
+    if (input.beneficiaryAId === input.beneficiaryBId) return undefined;
+    const beneficiaryA = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === input.beneficiaryAId, tenantId);
+    const beneficiaryB = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === input.beneficiaryBId, tenantId);
+    if (!beneficiaryA || !beneficiaryB || beneficiaryA.tontineOccurrenceId === beneficiaryB.tontineOccurrenceId) return undefined;
+    const occurrenceA = getTenantScoped(tontineOccurrences, (item) => item.id === beneficiaryA.tontineOccurrenceId, tenantId);
+    const occurrenceB = getTenantScoped(tontineOccurrences, (item) => item.id === beneficiaryB.tontineOccurrenceId, tenantId);
+    if (!occurrenceA || !occurrenceB || occurrenceA.status === 'CLOSED' || occurrenceB.status === 'CLOSED') return undefined;
     const periodA = getTenantScoped(tontinePeriods, (item) => item.id === occurrenceA.periodId, tenantId);
     const periodB = getTenantScoped(tontinePeriods, (item) => item.id === occurrenceB.periodId, tenantId);
     if (!periodA || !periodB || periodA.tontineId !== periodB.tontineId) return undefined;
-    const conflicting = tontineTurnPermutations.some((permutation) => {
+    const conflicting = occurrenceBeneficiaryPermutations.some((permutation) => {
       if (permutation.tenantId !== tenantId) return false;
-      if (permutation.turnBeneficiaryAId !== input.turnBeneficiaryAId && permutation.turnBeneficiaryAId !== input.turnBeneficiaryBId && permutation.turnBeneficiaryBId !== input.turnBeneficiaryAId && permutation.turnBeneficiaryBId !== input.turnBeneficiaryBId) return false;
+      if (permutation.beneficiaryAId !== input.beneficiaryAId && permutation.beneficiaryAId !== input.beneficiaryBId && permutation.beneficiaryBId !== input.beneficiaryAId && permutation.beneficiaryBId !== input.beneficiaryBId) return false;
       const existingRequest = workflowRequests.find((item) => item.id === permutation.workflowRequestId);
       return Boolean(existingRequest && (existingRequest.status === 'pending' || existingRequest.status === 'inProgress'));
     });
@@ -381,12 +383,12 @@ export const tontineTurnsService = {
 
     const adhesionA = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiaryA.adhesionId, tenantId);
     const adhesionB = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiaryB.adhesionId, tenantId);
-    const entityLabel = `Tour ${turnA.turnNumber} · ${adhesionA?.memberName ?? beneficiaryA.adhesionId} ↔ Tour ${turnB.turnNumber} · ${adhesionB?.memberName ?? beneficiaryB.adhesionId}`;
-    const permutationId = uniqueId('TPM');
+    const entityLabel = `Occurrence ${occurrenceA.occurrenceNumber} · ${adhesionA?.memberName ?? beneficiaryA.adhesionId} ↔ Occurrence ${occurrenceB.occurrenceNumber} · ${adhesionB?.memberName ?? beneficiaryB.adhesionId}`;
+    const permutationId = uniqueId('BPM');
     const request = await workflowService.createRequest(tenantId, 'WD-006', { entityId: permutationId, entityLabel, requestedBy: input.requestedBy, requestedByUserId: input.requestedByUserId, justification: input.justification });
     if (!request) return undefined;
-    const permutation: TontineTurnPermutation = { id: permutationId, tenantId, workflowRequestId: request.id, turnBeneficiaryAId: input.turnBeneficiaryAId, turnBeneficiaryBId: input.turnBeneficiaryBId, appliedAt: null };
-    tontineTurnPermutations.push(permutation);
+    const permutation: OccurrenceBeneficiaryPermutation = { id: permutationId, tenantId, workflowRequestId: request.id, beneficiaryAId: input.beneficiaryAId, beneficiaryBId: input.beneficiaryBId, appliedAt: null };
+    occurrenceBeneficiaryPermutations.push(permutation);
     return request;
   },
 
@@ -398,26 +400,26 @@ export const tontineTurnsService = {
    * explicite du mandat : ne pas généraliser D-FY-08 à ce domaine) — aucune comparaison
    * `requestedByUserId`/acteur ici, contrairement à `decideFiscalYearReopen`.
    *
-   * Échange atomique (mandat §13) : les deux `TontineTurnBeneficiary.adhesionId` sont permutés
+   * Échange atomique (mandat §13) : les deux `OccurrenceBeneficiary.adhesionId` sont permutés
    * dans le même appel synchrone — aucun état intermédiaire n'est jamais observable (le
    * moteur mock est mono-thread, comme `applyFiscalYearReopenDecision`). N'applique rien
    * (silencieusement, même tolérance que `applyFiscalYearReopenDecision` pour une FiscalYear
-   * déjà rouverte entretemps) si l'un des deux Turns est devenu CLOSED, ou si l'un des deux
-   * bénéficiaires a déjà une réception enregistrée depuis la demande — permuter après coup
-   * réattribuerait un historique financier déjà réel à la mauvaise personne (règle non
-   * demandée explicitement par le mandat mais directement dictée par l'intégrité des
-   * données, cf. immuabilité déjà appliquée à `recordReception` etc.).
+   * déjà rouverte entretemps) si l'une des deux Occurrences est devenue CLOSED, ou si l'un
+   * des deux bénéficiaires a déjà une réception enregistrée depuis la demande — permuter
+   * après coup réattribuerait un historique financier déjà réel à la mauvaise personne
+   * (règle non demandée explicitement par le mandat mais directement dictée par l'intégrité
+   * des données, cf. immuabilité déjà appliquée à `recordReception` etc.).
    */
-  applyTurnPermutationDecision: (tenantId: string, request: WorkflowRequest) => {
-    if (request.domain !== 'tontines' || request.entityType !== 'turnPermutation' || request.status !== 'approved') return;
-    const permutation = tontineTurnPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === request.id);
+  applyBeneficiaryPermutationDecision: (tenantId: string, request: WorkflowRequest) => {
+    if (request.domain !== 'tontines' || request.entityType !== 'beneficiaryPermutation' || request.status !== 'approved') return;
+    const permutation = occurrenceBeneficiaryPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === request.id);
     if (!permutation || permutation.appliedAt) return;
-    const beneficiaryA = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === permutation.turnBeneficiaryAId, tenantId);
-    const beneficiaryB = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === permutation.turnBeneficiaryBId, tenantId);
+    const beneficiaryA = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === permutation.beneficiaryAId, tenantId);
+    const beneficiaryB = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === permutation.beneficiaryBId, tenantId);
     if (!beneficiaryA || !beneficiaryB || beneficiaryA.operations.length > 0 || beneficiaryB.operations.length > 0) return;
-    const turnA = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryA.tontineTurnId, tenantId);
-    const turnB = getTenantScoped(tontineTurns, (item) => item.id === beneficiaryB.tontineTurnId, tenantId);
-    if (!turnA || !turnB || turnA.status === 'CLOSED' || turnB.status === 'CLOSED') return;
+    const occurrenceA = getTenantScoped(tontineOccurrences, (item) => item.id === beneficiaryA.tontineOccurrenceId, tenantId);
+    const occurrenceB = getTenantScoped(tontineOccurrences, (item) => item.id === beneficiaryB.tontineOccurrenceId, tenantId);
+    if (!occurrenceA || !occurrenceB || occurrenceA.status === 'CLOSED' || occurrenceB.status === 'CLOSED') return;
     const adhesionIdA = beneficiaryA.adhesionId;
     const adhesionIdB = beneficiaryB.adhesionId;
     if (adhesionIdA === adhesionIdB) return;
@@ -428,50 +430,44 @@ export const tontineTurnsService = {
     const memberNameB = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionIdB, tenantId)?.memberName ?? adhesionIdB;
     const event: AuditEvent = {
       id: uniqueId('AUD-TON'), tenantId, timestamp: new Date().toISOString(), actorId: currentUser.id, actorName: currentUser.name,
-      module: 'tontines', action: 'tontines.turnPermutationApplied', eventType: 'sensitiveAction',
-      resourceType: 'turnBeneficiary', resourceId: permutation.id, resourceLabel: request.entityLabel, status: 'success', sensitive: true, correlationId: permutation.id,
-      before: { [`turn${turnA.turnNumber}`]: memberNameA, [`turn${turnB.turnNumber}`]: memberNameB },
-      after: { [`turn${turnA.turnNumber}`]: memberNameB, [`turn${turnB.turnNumber}`]: memberNameA },
-      context: { adhesionId: adhesionIdA, otherAdhesionId: adhesionIdB, turnBeneficiaryAId: beneficiaryA.id, turnBeneficiaryBId: beneficiaryB.id },
+      module: 'tontines', action: 'tontines.beneficiaryPermutationApplied', eventType: 'sensitiveAction',
+      resourceType: 'occurrenceBeneficiary', resourceId: permutation.id, resourceLabel: request.entityLabel, status: 'success', sensitive: true, correlationId: permutation.id,
+      before: { [`occurrence${occurrenceA.occurrenceNumber}`]: memberNameA, [`occurrence${occurrenceB.occurrenceNumber}`]: memberNameB },
+      after: { [`occurrence${occurrenceA.occurrenceNumber}`]: memberNameB, [`occurrence${occurrenceB.occurrenceNumber}`]: memberNameA },
+      context: { adhesionId: adhesionIdA, otherAdhesionId: adhesionIdB, beneficiaryAId: beneficiaryA.id, beneficiaryBId: beneficiaryB.id },
     };
     auditEvents.push(event);
   },
 
   /**
    * Lecture de composition pure (aucune mutation) — reconstruit les deux côtés d'une
-   * permutation (tour, adhérent, photo) à partir du seul `workflowRequestId`, pour que
-   * l'écran générique `WorkflowDetail` (`operations-module.tsx`, cross-domaine
+   * permutation (occurrence, adhérent, photo) à partir du seul `workflowRequestId`, pour
+   * que l'écran générique `WorkflowDetail` (`operations-module.tsx`, cross-domaine
    * Credit/Governance/Finance/Settings/Tontines) puisse afficher les photos des deux
    * bénéficiaires (mandat §9 « validation de permutation ») sans dupliquer la traversée
-   * Turn→TurnBeneficiary→Adhesion→Member déjà utilisée partout ailleurs dans ce fichier.
+   * Occurrence→OccurrenceBeneficiary→Adhesion→Member déjà utilisée partout ailleurs dans ce
+   * fichier.
    */
-  getTurnPermutationPreview: (tenantId: string, workflowRequestId: string) =>
+  getBeneficiaryPermutationPreview: (tenantId: string, workflowRequestId: string) =>
     mockRequest(() => {
-      const permutation = tontineTurnPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === workflowRequestId);
+      const permutation = occurrenceBeneficiaryPermutations.find((item) => item.tenantId === tenantId && item.workflowRequestId === workflowRequestId);
       if (!permutation) return undefined;
       const side = (beneficiaryId: string) => {
-        const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+        const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
         if (!beneficiary) return undefined;
-        const turn = getTenantScoped(tontineTurns, (item) => item.id === beneficiary.tontineTurnId, tenantId);
+        const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === beneficiary.tontineOccurrenceId, tenantId);
         const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
         const member = adhesion ? getTenantScoped(members, (item) => item.id === adhesion.memberId, tenantId) : undefined;
-        return { turnId: beneficiary.tontineTurnId, turnNumber: turn?.turnNumber, memberName: adhesion?.memberName ?? beneficiary.adhesionId, photoUrl: member?.photoUrl };
+        return { occurrenceId: beneficiary.tontineOccurrenceId, occurrenceNumber: occurrence?.occurrenceNumber, memberName: adhesion?.memberName ?? beneficiary.adhesionId, photoUrl: member?.photoUrl };
       };
-      const a = side(permutation.turnBeneficiaryAId);
-      const b = side(permutation.turnBeneficiaryBId);
+      const a = side(permutation.beneficiaryAId);
+      const b = side(permutation.beneficiaryBId);
       if (!a || !b) return undefined;
       return { a, b };
     }),
 
   listContributionsByOccurrence: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId && item.tontineOccurrenceId === occurrenceId)),
-  /** Traverse Adhesion → Contribution (D-TON-04-29 : la contribution référence l'adhésion, jamais directement Member) pour peupler la liste globale d'une tontine. */
-  listContributionsByTontine: (tenantId: string, tontineId: string) =>
-    mockRequest(() => {
-      const periodIds = new Set(tontinePeriods.filter((period) => period.tenantId === tenantId && period.tontineId === tontineId).map((period) => period.id));
-      const adhesionIds = new Set(tontineAdhesions.filter((item) => item.tenantId === tenantId && periodIds.has(item.periodId)).map((item) => item.id));
-      return tontineContributions.filter((item) => item.tenantId === tenantId && adhesionIds.has(item.adhesionId));
-    }),
   /**
    * Valeur attendue figée à la création (D-TON-04-29 : "donnée historique"),
    * paiement toujours à 0/PENDING au départ — aucune saisie de paiement à la
@@ -496,8 +492,6 @@ export const tontineTurnsService = {
       tontineContributions.push(contribution);
       return contribution;
     }),
-  getContribution: (tenantId: string, contributionId: string) =>
-    mockRequest(() => getTenantScoped(tontineContributions, (item) => item.id === contributionId, tenantId)),
   /**
    * Une opération = une nouvelle entrée dans `payments[]`, jamais un
    * remplacement (« les paiements successifs doivent rester traçables »,
@@ -524,78 +518,59 @@ export const tontineTurnsService = {
       return contribution;
     }),
 
-  /** Nouvelle réception — une opération, jamais un remplacement (D-TON-04-21, D-TON-06-09/-11/-12 : "une réception ne remplace jamais une précédente"). Refuse si le Turn est CLOSED (immuabilité, D-TON-06-16). */
+  /** Nouvelle réception — une opération, jamais un remplacement (D-TON-04-21, D-TON-06-09/-11/-12 : "une réception ne remplace jamais une précédente"). Refuse si l'Occurrence est CLOSED (immuabilité, D-TON-06-16). */
   recordReception: (tenantId: string, beneficiaryId: string, input: ReceptionInput) =>
     mockRequest(() => {
-      const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+      const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
       if (!beneficiary) return undefined;
-      const turn = tontineTurns.find((item) => item.id === beneficiary.tontineTurnId);
-      if (!turn || turn.status === 'CLOSED') return undefined;
-      appendOperation(beneficiary, { id: uniqueId('OP'), type: 'reception', amount: input.amount, quantity: input.quantity, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: null });
-      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
+      const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.tontineOccurrenceId);
+      if (!occurrence || occurrence.status === 'CLOSED') return undefined;
+      appendOperation(beneficiary, { id: uniqueId('OP'), type: 'reception', amount: input.amount, quantity: input.quantity, purchaseAmount: input.purchaseAmount, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: null });
+      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), purchaseTotal: computePurchaseTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
     }),
 
-  /** Correction — conserve l'ancienne opération, ajoute une nouvelle entrée référençant la valeur corrigée + motif obligatoire (D-TON-06-12). */
-  correctReception: (tenantId: string, beneficiaryId: string, input: CorrectionInput) =>
+  /**
+   * Synthèse financière d'une Occurrence (mandat « Gestion des opérations ») —
+   * dérivée à 100% de données déjà existantes, aucun solde n'est stocké nulle
+   * part pour une Tontine (contrairement à `Account.balance`, domaine
+   * Finance, sans rapport). `totalCollected` = somme des cotisations déjà
+   * réglées sur cette Occurrence (`TontineContribution.paidAmount`, MONEY
+   * uniquement — une tontine GOODS n'a pas de « disponible » financier à
+   * calculer, §14 du mandat) ; `totalNet`/`totalPurchases` = sommes déjà
+   * attribuées aux bénéficiaires de cette Occurrence. `available` est ce qui
+   * reste dans la cagnotte de la séance après ces attributions — jamais un
+   * calcul inventé, seulement une soustraction de valeurs déjà correctement
+   * calculées ailleurs (`computeReceivedTotal`/`computePurchaseTotal`).
+   */
+  getOccurrenceFinancialSummary: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => {
-      const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
-      if (!beneficiary) return undefined;
-      const turn = tontineTurns.find((item) => item.id === beneficiary.tontineTurnId);
-      if (!turn || turn.status === 'CLOSED') return undefined;
-      if (!input.reason.trim()) return undefined;
-      const target = beneficiary.operations.find((item) => item.id === input.operationId);
-      if (!target) return undefined;
-      appendOperation(beneficiary, { id: uniqueId('OP'), type: 'correction', amount: input.amount, quantity: input.quantity, correctedOperationId: target.id, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: input.reason });
-      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence) return undefined;
+      const contributions = tontineContributions.filter((item) => item.tenantId === tenantId && item.tontineOccurrenceId === occurrence.id);
+      const totalCollected = contributions.filter((item) => item.valueType === 'MONEY').reduce((sum, item) => sum + item.paidAmount, 0);
+      const beneficiaries = occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId && item.tontineOccurrenceId === occurrenceId);
+      const totalNet = beneficiaries.reduce((sum, item) => sum + computeReceivedTotal(item.operations), 0);
+      const totalPurchases = beneficiaries.reduce((sum, item) => sum + computePurchaseTotal(item.operations), 0);
+      return { totalCollected, totalNet, totalPurchases, available: totalCollected - totalNet - totalPurchases };
     }),
 
-  /** Régularisation — nouvelle opération métier, ne réécrit jamais une opération précédente (distincte d'une correction). */
-  regularizeReception: (tenantId: string, beneficiaryId: string, input: ReceptionInput & { reason: string }) =>
-    mockRequest(() => {
-      const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
-      if (!beneficiary) return undefined;
-      const turn = tontineTurns.find((item) => item.id === beneficiary.tontineTurnId);
-      if (!turn || turn.status === 'CLOSED') return undefined;
-      if (!input.reason.trim()) return undefined;
-      appendOperation(beneficiary, { id: uniqueId('OP'), type: 'regularization', amount: input.amount, quantity: input.quantity, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: input.reason });
-      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
-    }),
-
-  /** Annulation — invalide une opération sans la supprimer physiquement (D-TON-06-12 : "n'efface jamais physiquement l'historique"). */
-  cancelReception: (tenantId: string, beneficiaryId: string, input: CancellationInput) =>
-    mockRequest(() => {
-      const beneficiary = getTenantScoped(tontineTurnBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
-      if (!beneficiary) return undefined;
-      const turn = tontineTurns.find((item) => item.id === beneficiary.tontineTurnId);
-      if (!turn || turn.status === 'CLOSED') return undefined;
-      if (!input.reason.trim()) return undefined;
-      const target = beneficiary.operations.find((item) => item.id === input.operationId);
-      if (!target) return undefined;
-      appendOperation(beneficiary, { id: uniqueId('OP'), type: 'cancellation', cancelledOperationId: target.id, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: input.reason });
-      return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
-    }),
-
-  /** Clôture explicite, définitive, uniquement si tous les bénéficiaires sont RECEIVED (D-TON-06-09/-13). */
-  closeTurn: (tenantId: string, turnId: string) =>
-    mockRequest(() => {
-      const turn = getTenantScoped(tontineTurns, (item) => item.id === turnId, tenantId);
-      if (!turn || turn.status === 'CLOSED') return undefined;
-      if (!allBeneficiariesReceived(turn.id)) return undefined;
-      turn.status = 'CLOSED';
-      return turn;
-    }),
-
-  /** Précondition : Turn CLOSED. actual_date requise à la clôture. Ne clôture jamais automatiquement le Cycle (D-TON-06-10). */
+  /**
+   * Clôture d'une Occurrence (mandat « suppression complète de la logique
+   * Cycle/Tour » §10 : `closeOccurrence()` directe, plus de `closeTurn()`
+   * intermédiaire). Précondition inchangée (D-TON-06-09/-13) : tous les
+   * bénéficiaires de l'Occurrence doivent être RECEIVED. actual_date requise
+   * à la clôture. Ne clôture jamais automatiquement le Cycle — le modèle
+   * Cycle n'existe plus dans le module Tontine (D-TON-06-10, obsolète).
+   */
   closeOccurrence: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => {
       const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
       if (!occurrence || occurrence.status === 'CLOSED') return undefined;
-      const turn = tontineTurns.find((item) => item.tontineOccurrenceId === occurrence.id);
-      if (!turn || turn.status !== 'CLOSED') return undefined;
+      if (!allBeneficiariesReceived(occurrence.id)) return undefined;
       occurrence.status = 'CLOSED';
       occurrence.actualDate = occurrence.actualDate ?? new Date().toISOString().slice(0, 10);
       return occurrence;
     }),
 };
 
-export type { TontineAdhesion, TontineOccurrence, TontineTurn, TontineTurnBeneficiary, TontineContribution };
+export type { TontineAdhesion, TontineOccurrence, OccurrenceBeneficiary, TontineContribution };

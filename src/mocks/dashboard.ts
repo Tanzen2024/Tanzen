@@ -40,12 +40,12 @@ export const repaymentsData = [
 ];
 
 export const tontineActivityData = [
-  { month: 'Jan', cycles: 8, participants: 96 },
-  { month: 'Feb', cycles: 9, participants: 108 },
-  { month: 'Mar', cycles: 10, participants: 120 },
-  { month: 'Apr', cycles: 10, participants: 115 },
-  { month: 'May', cycles: 11, participants: 132 },
-  { month: 'Jun', cycles: 11, participants: 138 },
-  { month: 'Jul', cycles: 12, participants: 145 },
-  { month: 'Aug', cycles: 12, participants: 152 },
+  { month: 'Jan', occurrences: 8, participants: 96 },
+  { month: 'Feb', occurrences: 9, participants: 108 },
+  { month: 'Mar', occurrences: 10, participants: 120 },
+  { month: 'Apr', occurrences: 10, participants: 115 },
+  { month: 'May', occurrences: 11, participants: 132 },
+  { month: 'Jun', occurrences: 11, participants: 138 },
+  { month: 'Jul', occurrences: 12, participants: 145 },
+  { month: 'Aug', occurrences: 12, participants: 152 },
 ];

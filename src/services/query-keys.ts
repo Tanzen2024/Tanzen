@@ -40,10 +40,17 @@ export const queryKeys = {
     voteOptions: (voteId: string) => ['governance', 'vote-options', voteId] as const,
     memberVotes: (voteId: string) => ['governance', 'member-votes', voteId] as const,
   },
+  /** Réunions dérivées d'un exercice fiscal (source de vérité des « Date de réunion »), cf. `meeting.service.ts`. */
+  meetings: {
+    forFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['meetings', 'for-fiscal-year', tenantId, fiscalYearId] as const,
+    nearest: (tenantId: string, fiscalYearId: string | undefined, currentDate: string) => ['meetings', 'nearest', tenantId, fiscalYearId, currentDate] as const,
+  },
   finance: {
     accounts: (tenantId: string) => ['finance', 'accounts', tenantId] as const,
     account: (id: string) => ['finance', 'accounts', 'detail', id] as const,
     transactions: (tenantId: string) => ['finance', 'transactions', tenantId] as const,
+    transactionsByFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'transactions', 'by-fiscal-year', tenantId, fiscalYearId] as const,
+    transaction: (id: string) => ['finance', 'transactions', 'detail', id] as const,
     contributions: (tenantId: string) => ['finance', 'contributions', tenantId] as const,
     contributionsByMember: (memberId: string) => ['finance', 'contributions', 'member', memberId] as const,
     contributionsTrend: ['finance', 'contributions', 'trend'] as const,
@@ -65,16 +72,11 @@ export const queryKeys = {
   tontines: {
     list: (tenantId: string) => ['tontines', 'list', tenantId] as const,
     detail: (id: string) => ['tontines', 'detail', id] as const,
-    cycles: (tontineId: string) => ['tontines', 'cycles', tontineId] as const,
-    cycle: (id: string) => ['tontines', 'cycles', 'detail', id] as const,
-    cyclesByMember: (memberId: string) => ['tontines', 'cycles', 'member', memberId] as const,
     allPeriods: (tenantId: string) => ['tontines', 'all-periods', tenantId] as const,
     allAdhesions: (tenantId: string) => ['tontines', 'all-adhesions', tenantId] as const,
-    allContributions: (tenantId: string) => ['tontines', 'all-contributions', tenantId] as const,
     allOccurrences: (tenantId: string) => ['tontines', 'all-occurrences', tenantId] as const,
-    allTurns: (tenantId: string) => ['tontines', 'all-turns', tenantId] as const,
     allBeneficiaries: (tenantId: string) => ['tontines', 'all-beneficiaries', tenantId] as const,
-    turnPermutations: (tenantId: string) => ['tontines', 'turn-permutations', tenantId] as const,
+    beneficiaryPermutations: (tenantId: string) => ['tontines', 'beneficiary-permutations', tenantId] as const,
   },
   operations: {
     workflowDefinitions: (tenantId: string) => ['operations', 'workflow-definitions', tenantId] as const,

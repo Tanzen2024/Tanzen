@@ -1,10 +1,15 @@
 /**
- * Modèle cible Tontine (Occurrence → Turn → TurnBeneficiary → Adhesion, +
- * Contribution) issu de la consolidation D-TON-04-01→31 de cette session.
- * Additif au modèle legacy (`tontine-cycles.ts` : CycleMember/CycleContribution/
- * CycleDraw) — celui-ci n'est ni modifié ni remplacé, conformément à la
- * recommandation de tous les audits précédents (ne jamais réutiliser
- * `declareWinner`/`CycleDraw.amountReceived` pour porter cette mécanique).
+ * Modèle cible Tontine — Tontine → Fréquence → Période → Occurrence →
+ * Opérations/Contributions/Bénéficiaire (mandat « suppression complète de la
+ * logique Cycle/Tour »). Un bénéficiaire est rattaché DIRECTEMENT à
+ * l'Occurrence (`OccurrenceBeneficiary.tontineOccurrenceId`) — l'ancien
+ * niveau intermédiaire `TontineTurn` a été retiré : il était en relation 1:1
+ * stricte avec `TontineOccurrence` (jamais d'autre cardinalité observée dans
+ * ce modèle) et ne portait donc aucune information que `TontineOccurrence`
+ * ne porte pas déjà (son `status` fusionné dans `closeOccurrence`). Le
+ * modèle legacy `Cycle` (`tontine-cycles.ts` : CycleMember/CycleContribution/
+ * CycleDraw) a été supprimé du module Tontine (mandat « suppression complète
+ * de la logique Cycle/Tour »).
  *
  * Forme technique de TontineAdhesion : lecture (B) — entité séparée à
  * identité stable, recommandée (pas formellement validée PO) par la
@@ -16,7 +21,6 @@ import type { UnitCode } from '@/constants/units';
 
 export type ValueType = 'MONEY' | 'GOODS';
 export type TontineOccurrenceStatus = 'OPEN' | 'CLOSED';
-export type TontineTurnStatus = 'OPEN' | 'CLOSED';
 export type BeneficiaryReceptionStatus = 'PENDING' | 'PARTIAL' | 'RECEIVED';
 export type ContributionStatus = 'PENDING' | 'PARTIAL' | 'PAID' | 'WAIVED';
 export type ReceptionOperationType = 'reception' | 'correction' | 'regularization' | 'cancellation';
@@ -43,20 +47,12 @@ export function isAdhesionActiveAt(adhesion: TontineAdhesion, date: string): boo
 export type TontineOccurrence = {
   id: string;
   tenantId: string;
-  /** Parent temporel — remplace l'ancien `tontineCycleId` (mandat refonte Tontine→Période→Occurrence). `TontineCycle` reste une structure légataire séparée, jamais référencée ici. */
+  /** Parent temporel — remplace l'ancien `tontineCycleId` (mandat refonte Tontine→Période→Occurrence). `TontineCycle` a été supprimé (mandat « suppression complète de la logique Cycle/Tour »). */
   periodId: string;
   occurrenceNumber: number;
   plannedDate: string;
   actualDate: string | null;
   status: TontineOccurrenceStatus;
-};
-
-export type TontineTurn = {
-  id: string;
-  tenantId: string;
-  tontineOccurrenceId: string;
-  turnNumber: number;
-  status: TontineTurnStatus;
 };
 
 /** Une opération n'écrase jamais la précédente — reconstitution chronologique via `operations[]`, jamais de mutation destructive d'une entrée existante. */
@@ -65,6 +61,15 @@ export type ReceptionOperation = {
   type: ReceptionOperationType;
   amount?: number;
   quantity?: number;
+  /**
+   * Montant d'achat lié à une réception (mandat « Gestion des opérations »)
+   * — pertinent uniquement quand `Tontine.purchaseMode === 'WITH_PURCHASE'`.
+   * Porté par l'opération plutôt que par un nouveau champ sur
+   * `TontineTurnBeneficiary` : c'est la même ligne d'historique que la
+   * réception qu'il accompagne, jamais une transaction séparée — aucune
+   * nouvelle entité/relation créée pour ce mandat.
+   */
+  purchaseAmount?: number;
   date: string;
   actorId: string;
   actorName: string;
@@ -75,10 +80,11 @@ export type ReceptionOperation = {
   cancelledOperationId?: string;
 };
 
-export type TontineTurnBeneficiary = {
+/** Rattaché directement à l'Occurrence (mandat « suppression complète de la logique Cycle/Tour » §7) — jamais un Turn intermédiaire. */
+export type OccurrenceBeneficiary = {
   id: string;
   tenantId: string;
-  tontineTurnId: string;
+  tontineOccurrenceId: string;
   adhesionId: string;
   valueType: ValueType;
   expectedAmount?: number;
@@ -88,35 +94,35 @@ export type TontineTurnBeneficiary = {
 };
 
 /**
- * Contexte technique d'une demande de permutation de tours (mandat
- * planification/permutation) — le moteur de workflow générique
- * (`workflowService`/`WorkflowRequest`) porte un seul `entityId`/string ;
- * une permutation référence DEUX `TontineTurnBeneficiary` (mandat §9-13).
- * Ce petit enregistrement de liaison est donc la seule addition de modèle
- * réellement nécessaire — il ne duplique ni Member, ni TontineAdhesion, ni
- * TontineTurnBeneficiary lui-même : il se contente de faire le pont entre
- * une `WorkflowRequest.entityId` et les deux bénéficiaires concernés,
- * exactement comme `FiscalYear.id` sert déjà d'`entityId` pour WD-005 (sauf
- * qu'ici un seul entityId ne suffit pas à référencer les deux côtés d'un
- * échange). Jamais modifié après création (immuable, comme une demande) —
- * seul `TontineTurnBeneficiary.adhesionId` change, au moment de
- * l'application (`applyTurnPermutationDecision`).
+ * Contexte technique d'une demande de permutation entre deux bénéficiaires
+ * d'Occurrences (mandat planification/permutation) — le moteur de workflow
+ * générique (`workflowService`/`WorkflowRequest`) porte un seul
+ * `entityId`/string ; une permutation référence DEUX `OccurrenceBeneficiary`
+ * (mandat §9-13). Ce petit enregistrement de liaison est donc la seule
+ * addition de modèle réellement nécessaire — il ne duplique ni Member, ni
+ * TontineAdhesion, ni OccurrenceBeneficiary lui-même : il se contente de
+ * faire le pont entre une `WorkflowRequest.entityId` et les deux
+ * bénéficiaires concernés, exactement comme `FiscalYear.id` sert déjà
+ * d'`entityId` pour WD-005 (sauf qu'ici un seul entityId ne suffit pas à
+ * référencer les deux côtés d'un échange). Jamais modifié après création
+ * (immuable, comme une demande) — seul `OccurrenceBeneficiary.adhesionId`
+ * change, au moment de l'application (`applyBeneficiaryPermutationDecision`).
  */
-export type TontineTurnPermutation = {
+export type OccurrenceBeneficiaryPermutation = {
   id: string;
   tenantId: string;
   workflowRequestId: string;
-  turnBeneficiaryAId: string;
-  turnBeneficiaryBId: string;
+  beneficiaryAId: string;
+  beneficiaryBId: string;
   /**
    * Renseignée UNE SEULE fois, au moment où l'échange est réellement appliqué —
    * garde d'idempotence. `workflowService.submitAction` tolère un second appel
    * `approve` sur une demande déjà `approved` (no-op, retourne la requête inchangée,
    * cf. son propre commentaire) ; sans cette marque, un second appel à
-   * `applyTurnPermutationDecision` réappliquerait l'échange une seconde fois et
-   * annulerait silencieusement la permutation (bug réel trouvé par TEST15, corrigé
-   * ici plutôt que d'exiger que chaque appelant se souvienne de ne jamais rappeler
-   * la fonction).
+   * `applyBeneficiaryPermutationDecision` réappliquerait l'échange une seconde
+   * fois et annulerait silencieusement la permutation (bug réel trouvé par
+   * TEST15, corrigé ici plutôt que d'exiger que chaque appelant se souvienne
+   * de ne jamais rappeler la fonction).
    */
   appliedAt: string | null;
 };
@@ -160,8 +166,8 @@ export type TontineContribution = {
   payments: PaymentOperation[];
 };
 
-/** Contribution nette d'une opération au total reçu — jamais une simple somme brute, pour que correction/annulation restent des opérations distinctes de la réception qu'elles affectent (D-TON-04-14/-21, règles Réceptions/Corrections). */
-function operationContribution(op: ReceptionOperation, all: ReceptionOperation[]): number {
+/** Contribution nette d'une opération au total reçu — jamais une simple somme brute, pour que correction/annulation restent des opérations distinctes de la réception qu'elles affectent (D-TON-04-14/-21, règles Réceptions/Corrections). Exportée (mandat « DataTable ledger ») pour que le tableau de séance puisse dériver Débit/Crédit par opération sans dupliquer cette logique de signe. */
+export function operationContribution(op: ReceptionOperation, all: ReceptionOperation[]): number {
   switch (op.type) {
     case 'reception':
     case 'regularization':
@@ -182,7 +188,19 @@ export function computeReceivedTotal(operations: ReceptionOperation[]): number {
   return operations.reduce((sum, op) => sum + operationContribution(op, operations), 0);
 }
 
-export function computeBeneficiaryStatus(beneficiary: TontineTurnBeneficiary): BeneficiaryReceptionStatus {
+/**
+ * Total des montants d'achat enregistrés pour un bénéficiaire (mandat
+ * « Gestion des opérations », mode d'achat) — délibérément plus simple que
+ * `computeReceivedTotal` : aucune règle de correction/annulation n'est
+ * sourcée pour ce montant (seule la réception le porte), donc une simple
+ * somme suffit, sans inventer une logique de reprise symétrique à celle du
+ * bénéfice principal.
+ */
+export function computePurchaseTotal(operations: ReceptionOperation[]): number {
+  return operations.reduce((sum, op) => sum + (op.purchaseAmount ?? 0), 0);
+}
+
+export function computeBeneficiaryStatus(beneficiary: OccurrenceBeneficiary): BeneficiaryReceptionStatus {
   const received = computeReceivedTotal(beneficiary.operations);
   const expected = beneficiary.expectedAmount ?? beneficiary.expectedQuantity ?? 0;
   if (received <= 0) return 'PENDING';
@@ -214,21 +232,15 @@ export const tontineOccurrences: TontineOccurrence[] = [
   { id: 'OCC-003', tenantId: 'T-005', periodId: 'PER-002', occurrenceNumber: 1, plannedDate: '2026-08-15', actualDate: null, status: 'OPEN' },
 ];
 
-export const tontineTurns: TontineTurn[] = [
-  { id: 'TURN-001', tenantId: 'T-002', tontineOccurrenceId: 'OCC-001', turnNumber: 1, status: 'CLOSED' },
-  { id: 'TURN-002', tenantId: 'T-002', tontineOccurrenceId: 'OCC-002', turnNumber: 2, status: 'OPEN' },
-  { id: 'TURN-003', tenantId: 'T-005', tontineOccurrenceId: 'OCC-003', turnNumber: 1, status: 'OPEN' },
-];
-
-export const tontineTurnBeneficiaries: TontineTurnBeneficiary[] = [
+export const occurrenceBeneficiaries: OccurrenceBeneficiary[] = [
   {
-    id: 'TB-001', tenantId: 'T-002', tontineTurnId: 'TURN-001', adhesionId: 'ADH-001', valueType: 'MONEY', expectedAmount: 1_400_000,
+    id: 'TB-001', tenantId: 'T-002', tontineOccurrenceId: 'OCC-001', adhesionId: 'ADH-001', valueType: 'MONEY', expectedAmount: 1_400_000,
     operations: [
       { id: 'OP-001', type: 'reception', amount: 1_400_000, date: '2026-06-21', actorId: 'U-001', actorName: 'Amadou Mbaye', reason: null },
     ],
   },
   {
-    id: 'TB-002', tenantId: 'T-002', tontineTurnId: 'TURN-002', adhesionId: 'ADH-002', valueType: 'MONEY', expectedAmount: 1_400_000,
+    id: 'TB-002', tenantId: 'T-002', tontineOccurrenceId: 'OCC-002', adhesionId: 'ADH-002', valueType: 'MONEY', expectedAmount: 1_400_000,
     operations: [
       { id: 'OP-002', type: 'reception', amount: 800_000, date: '2026-07-22', actorId: 'U-001', actorName: 'Amadou Mbaye', reason: null },
       { id: 'OP-003', type: 'correction', amount: 750_000, correctedOperationId: 'OP-002', date: '2026-07-23', actorId: 'U-001', actorName: 'Amadou Mbaye', reason: 'Erreur de saisie initiale : virement réel de 750 000, pas 800 000.' },
@@ -236,19 +248,19 @@ export const tontineTurnBeneficiaries: TontineTurnBeneficiary[] = [
     ],
   },
   {
-    id: 'TB-003', tenantId: 'T-002', tontineTurnId: 'TURN-002', adhesionId: 'ADH-003', valueType: 'MONEY', expectedAmount: 1_400_000,
+    id: 'TB-003', tenantId: 'T-002', tontineOccurrenceId: 'OCC-002', adhesionId: 'ADH-003', valueType: 'MONEY', expectedAmount: 1_400_000,
     operations: [],
   },
   {
-    id: 'TB-004', tenantId: 'T-005', tontineTurnId: 'TURN-003', adhesionId: 'ADH-005', valueType: 'GOODS', item: 'Bidon d’huile 5L', expectedQuantity: 2,
+    id: 'TB-004', tenantId: 'T-005', tontineOccurrenceId: 'OCC-003', adhesionId: 'ADH-005', valueType: 'GOODS', item: 'Bidon d’huile 5L', expectedQuantity: 2,
     operations: [
       { id: 'OP-005', type: 'reception', quantity: 1, date: '2026-08-16', actorId: 'U-009', actorName: 'Awa Cissé', reason: null },
     ],
   },
 ];
 
-/** Aucune demande de permutation en seed (fonctionnalité nouvelle, non rétro-historisée) — peuplé uniquement à l'exécution par `tontineTurnsService.requestTurnPermutation`. */
-export const tontineTurnPermutations: TontineTurnPermutation[] = [];
+/** Aucune demande de permutation en seed (fonctionnalité nouvelle, non rétro-historisée) — peuplé uniquement à l'exécution par `tontineTurnsService.requestBeneficiaryPermutation`. */
+export const occurrenceBeneficiaryPermutations: OccurrenceBeneficiaryPermutation[] = [];
 
 export const tontineContributions: TontineContribution[] = [
   {

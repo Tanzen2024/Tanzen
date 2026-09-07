@@ -1,20 +1,17 @@
 import {
   Activity,
-  Banknote,
   BarChart3,
   Bell,
   Building2,
   CalendarDays,
   ClipboardCheck,
-  CreditCard,
-  FileCheck2,
   FileClock,
   FileText,
   Fingerprint,
   Globe2,
   KeyRound,
-  LayoutDashboard,
   Landmark,
+  LayoutDashboard,
   ListChecks,
   LockKeyhole,
   ReceiptText,
@@ -52,21 +49,20 @@ export const navigationTree: NavigationNode[] = [
       },
     ],
   },
+  /**
+   * Mandat « Transactions = journal financier central » : le groupe Finances ne
+   * contient QUE deux entrées — Comptes (gestion des caisses) et Transactions
+   * (journal financier, point d'entrée unique de toute opération via le bouton
+   * « + Ajouter une transaction »). Contributions / Demandes de prêts / Prêts /
+   * Remboursements / Garants / Distributions ne sont pas des modules autonomes
+   * mais des TYPES D'OPÉRATION : leurs écrans et routes ont été supprimés. Seule
+   * `/finance/credit/loan-rules` subsiste comme route (éditeur de politique de
+   * prêt), atteignable depuis la page Comptes — jamais depuis le menu.
+   */
   {
     label: 'Finance', path: '/finance', icon: Landmark, children: [
       { label: 'Accounts', path: '/finance/accounts', icon: WalletCards },
       { label: 'Transactions', path: '/finance/transactions', icon: ReceiptText },
-      { label: 'Contributions', path: '/finance/contributions', icon: Banknote },
-      {
-        label: 'Credit', path: '/finance/credit', icon: CreditCard, children: [
-          { label: 'Applications', path: '/finance/credit/applications', icon: FileCheck2 },
-          { label: 'Loans', path: '/finance/credit/loans', icon: CreditCard },
-          { label: 'Repayments', path: '/finance/credit/repayments', icon: ReceiptText },
-          { label: 'Guarantors', path: '/finance/credit/guarantors', icon: Users },
-          { label: 'Loan Rules', path: '/finance/credit/loan-rules', icon: ListChecks },
-        ],
-      },
-      { label: 'Distributions', path: '/finance/distributions', icon: SlidersHorizontal },
     ],
   },
   { label: 'Tontines', path: '/tontines', icon: Sparkles },

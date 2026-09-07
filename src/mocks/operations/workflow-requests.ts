@@ -19,7 +19,7 @@ export type WorkflowRequest = {
   tenantId: string;
   workflowDefinitionId: string;
   domain: WorkflowDomain;
-  entityType: 'application' | 'loan' | 'cycle' | 'assembly' | 'distribution' | 'fiscalYear' | 'turnPermutation';
+  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation';
   entityId: string;
   entityLabel: string;
   amount?: number;
@@ -74,18 +74,29 @@ export const workflowRequests: WorkflowRequest[] = [
       { order: 2, name: 'Décision finale', approverPermission: 'loans.approve', status: 'rejected', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-07-25', comment: 'Retards de remboursement répétés sur prêt en cours.' },
     ],
   },
+  /**
+   * WR-004/WR-005 — fixtures tontines génériques (domain: 'tontines'), utilisées par
+   * `settings.service.test.ts`/`workflow.service.test.ts` comme requêtes d'un AUTRE domaine
+   * que Fiscal Year, sans lien avec leur contenu métier précis. Portaient à l'origine
+   * `entityType: 'cycle'` (WD-002 « Ouverture de cycle ») ; les deux ont été retirées
+   * puis restaurées avec `entityType: 'beneficiaryPermutation'`/WD-006 (mandat
+   * « suppression complète de la logique Cycle/Tour ») — seul entityType tontines
+   * restant après la suppression du modèle Cycle. Régression corrigée pendant ce
+   * mandat : les avoir supprimées sans vérifier ces deux autres fichiers avait cassé
+   * 3 tests qui les utilisaient comme fixtures génériques, sans rapport avec Cycle.
+   */
   {
-    id: 'WR-004', tenantId: 'T-005', workflowDefinitionId: 'WD-002', domain: 'tontines', entityType: 'cycle', entityId: 'CYC-003', entityLabel: 'Tontine Avenir · Cycle 1', requestedBy: 'Awa Cissé', requestedAt: '2026-06-25', status: 'approved', currentStepOrder: 2,
+    id: 'WR-004', tenantId: 'T-005', workflowDefinitionId: 'WD-006', domain: 'tontines', entityType: 'beneficiaryPermutation', entityId: 'BPM-003', entityLabel: 'Tontine Avenir · Permutation', requestedBy: 'Awa Cissé', requestedAt: '2026-06-25', status: 'approved', currentStepOrder: 2,
     steps: [
-      { order: 1, name: 'Validation trésorerie', approverPermission: 'cycles.manage', status: 'approved', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-06-27' },
-      { order: 2, name: 'Autorisation direction', approverPermission: 'cycles.manage', status: 'approved', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-06-29' },
+      { order: 1, name: 'Validation trésorerie', approverPermission: 'beneficiaries.manage', status: 'approved', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-06-27' },
+      { order: 2, name: 'Autorisation direction', approverPermission: 'beneficiaries.manage', status: 'approved', actedBy: 'U-001', actedByName: 'Amadou Mbaye', actedAt: '2026-06-29' },
     ],
   },
   {
-    id: 'WR-005', tenantId: 'T-001', workflowDefinitionId: 'WD-002', domain: 'tontines', entityType: 'cycle', entityId: 'CYC-005', entityLabel: 'Coopérative Sutura · Cycle 3', requestedBy: 'Cheikh Diop', requestedAt: '2026-08-10', status: 'pending', currentStepOrder: 1,
+    id: 'WR-005', tenantId: 'T-001', workflowDefinitionId: 'WD-006', domain: 'tontines', entityType: 'beneficiaryPermutation', entityId: 'BPM-005', entityLabel: 'Coopérative Sutura · Permutation', requestedBy: 'Cheikh Diop', requestedAt: '2026-08-10', status: 'pending', currentStepOrder: 1,
     steps: [
-      { order: 1, name: 'Validation trésorerie', approverPermission: 'cycles.manage', status: 'pending' },
-      { order: 2, name: 'Autorisation direction', approverPermission: 'cycles.manage', status: 'pending' },
+      { order: 1, name: 'Validation trésorerie', approverPermission: 'beneficiaries.manage', status: 'pending' },
+      { order: 2, name: 'Autorisation direction', approverPermission: 'beneficiaries.manage', status: 'pending' },
     ],
   },
   // entityId : AS-002 (ancienne entité autonome Assembly) migrée vers MT-008 par la correction post-implémentation Phase 4C-4 — cf. src/mocks/organization/governance.ts.

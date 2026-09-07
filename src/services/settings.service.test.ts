@@ -230,7 +230,7 @@ describe('settingsService — §24-BIS: applyFiscalYearReopenDecision (le statut
   });
 
   it('applyFiscalYearReopenDecision is a no-op for any other domain (does not touch unrelated WorkflowRequests)', async () => {
-    const tontineRequest = await workflowService.getRequest('T-005', 'WR-004'); // seeded tontines/cycle request, unrelated to Fiscal Year
+    const tontineRequest = await workflowService.getRequest('T-005', 'WR-004'); // seeded tontines request, unrelated to Fiscal Year
     expect(tontineRequest).not.toBeNull();
     expect(tontineRequest?.domain).toBe('tontines');
     await settingsService.applyFiscalYearReopenDecision('T-005', tontineRequest!);
@@ -365,7 +365,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
   });
 
   it('DEFENSIVE: decideFiscalYearReopen returns null for a request outside the settings/fiscalYear domain — never imposes the self-approval rule on other domains (Credit/Tontines/Governance/Finance), which have no PO decision on the subject', async () => {
-    const result = await settingsService.decideFiscalYearReopen('T-005', 'WR-004', 'approve', 'U-777', 'Amadou Mbaye'); // WR-004: seeded tontines/cycle request
+    const result = await settingsService.decideFiscalYearReopen('T-005', 'WR-004', 'approve', 'U-777', 'Amadou Mbaye'); // WR-004: seeded tontines request
     expect(result).toBeNull();
   });
 

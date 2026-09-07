@@ -1,4 +1,5 @@
 export * from './accounts';
+export * from './transaction-classification';
 export * from './transactions';
 export * from './contributions';
 export * from './distributions';

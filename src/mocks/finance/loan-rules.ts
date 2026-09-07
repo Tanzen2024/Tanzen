@@ -66,4 +66,10 @@ export const loanRules: LoanRule[] = [
     maxActiveLoans: 1, maxLoanExposure: null, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 1, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
     requiresApproval: false, approvalLevel: null, status: 'INACTIVE', deletedAt: null,
   },
+  {
+    id: 'LR-004', tenantId: 'T-001', accountId: 'AC-009', accountNumber: 'CS-001-CX-001', name: 'Politique Épargne volontaire Sutura',
+    allowLoans: true, loanMode: 'INTERNAL', minAmount: 20_000, maxAmount: 1_000_000, interestRate: 9, interestType: 'FLAT', interestPeriod: 'MONTHLY', durationMonths: 12,
+    maxActiveLoans: 3, maxLoanExposure: 2_000_000, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
+    requiresApproval: false, approvalLevel: null, status: 'ACTIVE', deletedAt: null,
+  },
 ];

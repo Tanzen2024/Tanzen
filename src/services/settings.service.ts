@@ -2,6 +2,7 @@ import { mockRequest } from './api-client';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
 import { localizationSettingsList } from '@/mocks/settings/localization-settings';
 import { fiscalYears, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { isValidMeetingScheduleConfig, type MeetingScheduleConfig } from '@/mocks/settings/meeting-schedule';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
@@ -29,6 +30,13 @@ export type CreateFiscalYearInput = {
    * développeur futur ne suppose un effet de bord inexistant.
    */
   transferSelections?: string[];
+  /**
+   * Calendrier des réunions de l'exercice (mandat « RÈGLE CENTRALE — DATES DE
+   * RÉUNION » §2/§3). Optionnel à la création — un exercice peut être créé sans
+   * calendrier puis configuré ensuite (`updateFiscalYearMeetingSchedule`).
+   * Ignoré s'il est structurellement incomplet.
+   */
+  meetingSchedule?: MeetingScheduleConfig;
 };
 
 /**
@@ -112,9 +120,28 @@ export const settingsService = {
       const tenantYears = fiscalYears.filter((item) => item.tenantId === tenantId);
       const duplicate = tenantYears.some((item) => item.label === label || (item.startDate === input.startDate && item.endDate === input.endDate));
       if (duplicate) return undefined;
-      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}`, tenantId, label, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10) };
+      const meetingSchedule = isValidMeetingScheduleConfig(input.meetingSchedule) ? input.meetingSchedule : undefined;
+      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}`, tenantId, label, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), meetingSchedule };
       fiscalYears.push(year);
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(',') }, sensitive: false });
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(','), meetingFrequency: meetingSchedule?.frequency ?? '' }, sensitive: false });
+      return year;
+    }),
+
+  /**
+   * Configure / met à jour le calendrier des réunions d'un exercice (mandat
+   * « RÈGLE CENTRALE — DATES DE RÉUNION » §2). Autorisé tant que l'exercice
+   * n'est pas `closed` (un exercice clôturé est verrouillé, cohérent avec le
+   * cycle de vie). `config = null` retire le calendrier. Régénère implicitement
+   * les occurrences (dérivées) — aucune donnée de réunion n'est stockée.
+   */
+  updateFiscalYearMeetingSchedule: (tenantId: string, fiscalYearId: string, config: MeetingScheduleConfig | null) =>
+    mockRequest(() => {
+      const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
+      if (!year || year.status === 'closed') return undefined;
+      if (config !== null && !isValidMeetingScheduleConfig(config)) return undefined;
+      const before = year.meetingSchedule?.frequency ?? '';
+      year.meetingSchedule = config ?? undefined;
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.meetingScheduleUpdated', year, before: { meetingFrequency: before }, after: { meetingFrequency: year.meetingSchedule?.frequency ?? '' }, sensitive: false });
       return year;
     }),
 

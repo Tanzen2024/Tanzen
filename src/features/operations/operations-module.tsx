@@ -38,16 +38,19 @@ const REQUEST_STATUS_TONE: Record<WorkflowStatus, StatusTone> = { pending: 'warn
 const REQUEST_STATUS_KEY: Record<WorkflowStatus, string> = { pending: 'statusPending', inProgress: 'statusInProgress', approved: 'statusApproved', rejected: 'statusRejected', returned: 'statusReturned', cancelled: 'statusCancelled' };
 const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings' };
 const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon };
-const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', cycle: 'entityCycle', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', turnPermutation: 'entityTurnPermutation' };
+const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', beneficiaryPermutation: 'entityBeneficiaryPermutation' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
+/** `cycle` (historique, mandat « suppression complète de la logique Cycle/Tour ») n'apparaît plus dans `CREATABLE_ENTITY_TYPES` — plus aucun nouveau document ne peut y être rattaché — mais reste ici pour libeller correctement les documents déjà existants qui le référencent (DOC-004/DOC-011/DOC-013). */
 const ENTITY_TYPE_KEY: Record<DocumentEntityType, string> = { member: 'entityMember', loan: 'entityLoan', tontine: 'entityTontine', cycle: 'entityCycle', assembly: 'entityAssembly' };
+const CREATABLE_ENTITY_TYPES: Exclude<DocumentEntityType, 'cycle'>[] = ['member', 'loan', 'tontine', 'assembly'];
 
 function Page({ title, description, actions, children }: { title: string; description?: string; actions?: ReactNode; children: ReactNode }) { return <div className="mx-auto max-w-[1600px] space-y-6 p-5 sm:p-7"><PageHeader eyebrow="OPERATIONS" title={title} description={description} actions={actions} />{children}</div>; }
 function Back({ label }: { label: string }) { const navigate = useNavigate(); return <Button variant="ghost" size="sm" onClick={() => navigate(-1)}><ArrowLeft size={15} />{label}</Button>; }
 function Info({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Landmark }) { return <div className="flex gap-3"><span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon size={15} /></span><div><p className="text-[11px] text-muted-foreground">{label}</p><p className="mt-0.5 text-sm font-medium">{value}</p></div></div>; }
-function entityLink(request: WorkflowRequest) { if (request.entityType === 'application') return `/finance/credit/applications/${request.entityId}`; if (request.entityType === 'loan') return `/finance/credit/loans/${request.entityId}`; return null; }
+/** Mandat « Refonte module Finances » : les écrans Demandes/Prêts dédiés n'existent plus — toute opération financière (dont un prêt) vit dans le journal central. Une demande liée à une entité `application`/`loan` renvoie donc vers `/finance/transactions`. */
+function entityLink(request: WorkflowRequest) { return request.entityType === 'application' || request.entityType === 'loan' ? '/finance/transactions' : null; }
 
 // ----------------------------------------------------------------------- Workflows
 
@@ -148,8 +151,8 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
   const isFiscalYearReopen = Boolean(request && request.domain === 'settings' && request.entityType === 'fiscalYear');
   /** Mandat §9 « photos partout où l'identité du bénéficiaire est affichée, y compris en validation de permutation » — écran générique, donc lecture activée seulement pour ce domaine/entityType précis (même garde que `isFiscalYearReopen` ci-dessus). */
-  const isTurnPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'turnPermutation');
-  const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineTurnsService.getTurnPermutationPreview(currentTenant.id, requestId), enabled: isTurnPermutation });
+  const isBeneficiaryPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'beneficiaryPermutation');
+  const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineTurnsService.getBeneficiaryPermutationPreview(currentTenant.id, requestId), enabled: isBeneficiaryPermutation });
 
   const mutation = useMutation({
     mutationFn: async (action: 'approve' | 'reject' | 'return' | 'cancel') => {
@@ -178,12 +181,12 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       if (result) await settingsService.applyFiscalYearReopenDecision(currentTenant.id, result);
       /**
        * Même point d'intégration générique, second domaine (mandat planification/
-       * permutation) — `applyTurnPermutationDecision` est également un no-op pour tout
-       * autre domaine/entityType et pour toute action qui ne fait pas passer le statut
-       * à `approved`. Auto-approbation volontairement non bloquée ici (décision du
-       * mandat), contrairement à la branche Fiscal Year ci-dessus.
+       * permutation) — `applyBeneficiaryPermutationDecision` est également un no-op pour
+       * tout autre domaine/entityType et pour toute action qui ne fait pas passer le
+       * statut à `approved`. Auto-approbation volontairement non bloquée ici (décision
+       * du mandat), contrairement à la branche Fiscal Year ci-dessus.
        */
-      if (result) tontineTurnsService.applyTurnPermutationDecision(currentTenant.id, result);
+      if (result) tontineTurnsService.applyBeneficiaryPermutationDecision(currentTenant.id, result);
       return result;
     },
     onSuccess: (result, action) => {
@@ -197,18 +200,18 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       if (result?.domain === 'settings' && result.entityType === 'fiscalYear') queryClient.invalidateQueries({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id) });
       /**
        * Bug réel trouvé à l'audit (relecture fraîche) : `allBeneficiaries` (agrégat) était
-       * bien invalidé, mais jamais les clés `['tontines','turn-beneficiaries', turnId,
-       * tenantId]` que `TurnDetail`/`BeneficiaryCard` lisent réellement — avec
-       * `staleTime: 30_000` (`app/providers.tsx`), un gestionnaire ayant déjà consulté l'un
-       * des deux Turn juste avant d'approuver pouvait y revoir l'ancien bénéficiaire jusqu'à
-       * 30s après validation. `permutationPreview` est déjà chargé (photos) et porte
-       * désormais `turnId` des deux côtés — réutilisé ici, aucune requête supplémentaire.
+       * bien invalidé, mais jamais les clés `['tontines','occurrence-beneficiaries',
+       * occurrenceId, tenantId]` que le panneau Opérations lit réellement — avec
+       * `staleTime: 30_000` (`app/providers.tsx`), un gestionnaire ayant déjà consulté l'une
+       * des deux Occurrences juste avant d'approuver pouvait y revoir l'ancien bénéficiaire
+       * jusqu'à 30s après validation. `permutationPreview` est déjà chargé (photos) et porte
+       * `occurrenceId` des deux côtés — réutilisé ici, aucune requête supplémentaire.
        */
-      if (result?.domain === 'tontines' && result.entityType === 'turnPermutation') {
+      if (result?.domain === 'tontines' && result.entityType === 'beneficiaryPermutation') {
         queryClient.invalidateQueries({ queryKey: queryKeys.tontines.allBeneficiaries(currentTenant.id) });
         if (permutationPreview) {
-          queryClient.invalidateQueries({ queryKey: ['tontines', 'turn-beneficiaries', permutationPreview.a.turnId, currentTenant.id] });
-          queryClient.invalidateQueries({ queryKey: ['tontines', 'turn-beneficiaries', permutationPreview.b.turnId, currentTenant.id] });
+          queryClient.invalidateQueries({ queryKey: ['tontines', 'occurrence-beneficiaries', permutationPreview.a.occurrenceId, currentTenant.id] });
+          queryClient.invalidateQueries({ queryKey: ['tontines', 'occurrence-beneficiaries', permutationPreview.b.occurrenceId, currentTenant.id] });
         }
       }
       setPendingAction(null); setComment('');
@@ -235,11 +238,11 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
       <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'approvalTimeline')}</CardTitle></CardHeader><CardContent className="p-5"><ApprovalTimeline request={request} t={t} locale={locale} /></CardContent></Card>
       <div className="space-y-5">
-        {isTurnPermutation && permutationPreview && (
+        {isBeneficiaryPermutation && permutationPreview && (
           <Card><CardContent className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 p-5">
-            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.a.memberName, lastName: '', photoUrl: permutationPreview.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.a.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityTurnPermutation')} · #{permutationPreview.a.turnNumber}</p></div>
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.a.memberName, lastName: '', photoUrl: permutationPreview.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.a.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.a.occurrenceNumber}</p></div>
             <Repeat className="text-muted-foreground" size={18} />
-            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityTurnPermutation')} · #{permutationPreview.b.turnNumber}</p></div>
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.b.occurrenceNumber}</p></div>
           </CardContent></Card>
         )}
         <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'requestDetail')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
@@ -357,33 +360,27 @@ function downloadDocument(document: DocumentRecord) {
   URL.revokeObjectURL(url);
 }
 
-function EntityPicker({ t, tenantId, entityType, entityId, onSelect }: { t: T; tenantId: string; entityType: DocumentEntityType; entityId: string; onSelect: (entityId: string, entityLabel: string) => void }) {
+function EntityPicker({ t, tenantId, entityType, entityId, onSelect }: { t: T; tenantId: string; entityType: Exclude<DocumentEntityType, 'cycle'>; entityId: string; onSelect: (entityId: string, entityLabel: string) => void }) {
   const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(tenantId), queryFn: () => organizationService.listMembers(tenantId), enabled: entityType === 'member' });
   const { data: loans = [] } = useQuery({ queryKey: queryKeys.credit.loans(tenantId), queryFn: () => creditService.listLoans(tenantId), enabled: entityType === 'loan' });
-  const { data: tontinesList = [] } = useQuery({ queryKey: queryKeys.tontines.list(tenantId), queryFn: () => tontinesService.listTontines(tenantId), enabled: entityType === 'tontine' || entityType === 'cycle' });
+  const { data: tontinesList = [] } = useQuery({ queryKey: queryKeys.tontines.list(tenantId), queryFn: () => tontinesService.listTontines(tenantId), enabled: entityType === 'tontine' });
   // `assembly` (DocumentEntityType) désigne désormais un Meeting — Assembly/GeneralAssembly ne sont plus des entités autonomes (correction post-implémentation Phase 4C-4).
   const { data: assemblies = [] } = useQuery({ queryKey: queryKeys.governance.meetings(tenantId), queryFn: () => organizationService.listMeetings(tenantId), enabled: entityType === 'assembly' });
-  const [selectedTontineId, setSelectedTontineId] = useState('');
-  const { data: cycles = [] } = useQuery({ queryKey: queryKeys.tontines.cycles(selectedTontineId), queryFn: () => tontinesService.listCyclesByTontine(tenantId, selectedTontineId), enabled: entityType === 'cycle' && Boolean(selectedTontineId) });
   const selectClass = 'flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm';
 
   if (entityType === 'member') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const m = members.find((item) => item.id === e.target.value); onSelect(e.target.value, m ? `${m.firstName} ${m.lastName}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{members.map((m) => <option key={m.id} value={m.id}>{m.firstName} {m.lastName}</option>)}</select>;
   if (entityType === 'loan') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const l = loans.find((item) => item.id === e.target.value); onSelect(e.target.value, l ? `${l.id} · ${l.borrower}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{loans.map((l) => <option key={l.id} value={l.id}>{l.id} · {l.borrower}</option>)}</select>;
   if (entityType === 'tontine') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const item = tontinesList.find((tt) => tt.id === e.target.value); onSelect(e.target.value, item?.name ?? ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{tontinesList.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}</select>;
-  if (entityType === 'assembly') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const a = assemblies.find((item) => item.id === e.target.value); onSelect(e.target.value, a?.title ?? ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{assemblies.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</select>;
-  return <div className="grid gap-3 sm:grid-cols-2">
-    <select value={selectedTontineId} onChange={(e) => { setSelectedTontineId(e.target.value); onSelect('', ''); }} className={selectClass}><option value="">{t('operations', 'entityTontine')}</option>{tontinesList.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}</select>
-    <select id="doc-upload-entity" value={entityId} disabled={!selectedTontineId} onChange={(e) => { const c = cycles.find((item) => item.id === e.target.value); const tontine = tontinesList.find((tt) => tt.id === selectedTontineId); onSelect(e.target.value, c ? `${tontine?.name ?? ''} · ${t('operations', 'requestId')} ${c.cycleNumber}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{cycles.map((c) => <option key={c.id} value={c.id}>{t('operations', 'requestId')} {c.cycleNumber}</option>)}</select>
-  </div>;
+  return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const a = assemblies.find((item) => item.id === e.target.value); onSelect(e.target.value, a?.title ?? ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{assemblies.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</select>;
 }
 
-type DocumentUploadFormValues = { file: File | null; category: DocumentCategory; entityType: DocumentEntityType; entityId: string; entityLabel: string };
+type DocumentUploadFormValues = { file: File | null; category: DocumentCategory; entityType: Exclude<DocumentEntityType, 'cycle'>; entityId: string; entityLabel: string };
 
 function DocumentUploadForm({ t, tenantId, values, onChange, error }: { t: T; tenantId: string; values: DocumentUploadFormValues; onChange: (patch: Partial<DocumentUploadFormValues>) => void; error?: string }) {
   return <div className="grid gap-4 sm:grid-cols-2">
     <div className="space-y-2 sm:col-span-2"><Label className="flex h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-input text-xs text-muted-foreground hover:border-primary/50"><Upload size={20} aria-hidden="true" /><input type="file" className="hidden" onChange={(e) => onChange({ file: e.target.files?.[0] ?? null })} /><span>{values.file ? values.file.name : t('operations', 'selectFile')}</span></Label></div>
     <div className="space-y-2"><Label htmlFor="doc-upload-type">{t('operations', 'fileType')}</Label><select id="doc-upload-type" value={values.category} onChange={(e) => onChange({ category: e.target.value as DocumentCategory })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{(Object.keys(CATEGORY_KEY) as DocumentCategory[]).map((c) => <option key={c} value={c}>{t('operations', CATEGORY_KEY[c])}</option>)}</select></div>
-    <div className="space-y-2"><Label htmlFor="doc-upload-entity-type">{t('operations', 'linkedTo')}</Label><select id="doc-upload-entity-type" value={values.entityType} onChange={(e) => onChange({ entityType: e.target.value as DocumentEntityType, entityId: '', entityLabel: '' })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{(Object.keys(ENTITY_TYPE_KEY) as DocumentEntityType[]).map((et) => <option key={et} value={et}>{t('operations', ENTITY_TYPE_KEY[et])}</option>)}</select></div>
+    <div className="space-y-2"><Label htmlFor="doc-upload-entity-type">{t('operations', 'linkedTo')}</Label><select id="doc-upload-entity-type" value={values.entityType} onChange={(e) => onChange({ entityType: e.target.value as Exclude<DocumentEntityType, 'cycle'>, entityId: '', entityLabel: '' })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">{CREATABLE_ENTITY_TYPES.map((et) => <option key={et} value={et}>{t('operations', ENTITY_TYPE_KEY[et])}</option>)}</select></div>
     <div className="space-y-2 sm:col-span-2"><EntityPicker t={t} tenantId={tenantId} entityType={values.entityType} entityId={values.entityId} onSelect={(id, label) => onChange({ entityId: id, entityLabel: label })} /></div>
     {error && <p className="text-xs text-destructive sm:col-span-2">{error}</p>}
   </div>;

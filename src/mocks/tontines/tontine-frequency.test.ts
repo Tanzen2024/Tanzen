@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  generateOccurrenceDates, formatFrequencyDescription, validateFrequency,
+  generateOccurrenceDates, formatFrequencyDescription, validateFrequency, isValidFrequencyConfig,
   applyWeekday, applyMonthlyRule, applyMonthlyDayOfMonth, applyMonthlyOrdinal, applyMonthlyWeekday,
   applyQuarterlyRule, applyQuarterlyMonth, applyQuarterlyDayOfMonth, applyQuarterlyOrdinal, applyQuarterlyWeekday,
   __testing, type FrequencyConfig,
@@ -375,6 +375,41 @@ describe('validateFrequency — configuration minimale requise par scénario (ma
     expect(validateFrequency(t, config)).toBeUndefined();
     const dates = generateOccurrenceDates({ startDate: '2026-01-01', endDate: '2026-03-31' }, config);
     expect(dates).toEqual(['2026-01-29', '2026-02-26', '2026-03-26']);
+  });
+});
+
+describe('isValidFrequencyConfig — prédicat pur sans i18n pour le service (mandat « Fréquence obligatoire »)', () => {
+  it('rejects an empty/missing frequency, exactly like validateFrequency', () => {
+    expect(isValidFrequencyConfig({})).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: undefined })).toBe(false);
+  });
+
+  it('DAILY is valid as soon as frequency = DAILY', () => {
+    expect(isValidFrequencyConfig({ frequency: 'DAILY' })).toBe(true);
+  });
+
+  it('WEEKLY requires weekday', () => {
+    expect(isValidFrequencyConfig({ frequency: 'WEEKLY' })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'WEEKLY', weekday: 'MONDAY' })).toBe(true);
+  });
+
+  it('MONTHLY + DAY_OF_MONTH requires a monthlyDayOfMonth within 1-31', () => {
+    expect(isValidFrequencyConfig({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH' })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 32 })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 15 })).toBe(true);
+  });
+
+  it('MONTHLY + NTH_WEEKDAY requires monthlyOrdinal AND monthlyWeekday', () => {
+    expect(isValidFrequencyConfig({ frequency: 'MONTHLY', monthlyRule: 'NTH_WEEKDAY', monthlyOrdinal: 'LAST' })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'MONTHLY', monthlyRule: 'NTH_WEEKDAY', monthlyOrdinal: 'LAST', monthlyWeekday: 'SUNDAY' })).toBe(true);
+  });
+
+  it('QUARTERLY requires quarterlyMonth plus the day-of-month or ordinal/weekday pair depending on quarterlyRule', () => {
+    expect(isValidFrequencyConfig({ frequency: 'QUARTERLY' })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'QUARTERLY', quarterlyRule: 'DAY_OF_MONTH', quarterlyMonth: 2 })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'QUARTERLY', quarterlyRule: 'DAY_OF_MONTH', quarterlyMonth: 2, quarterlyDayOfMonth: 3 })).toBe(true);
+    expect(isValidFrequencyConfig({ frequency: 'QUARTERLY', quarterlyRule: 'NTH_WEEKDAY', quarterlyMonth: 1, quarterlyOrdinal: 'FIRST' })).toBe(false);
+    expect(isValidFrequencyConfig({ frequency: 'QUARTERLY', quarterlyRule: 'NTH_WEEKDAY', quarterlyMonth: 1, quarterlyOrdinal: 'FIRST', quarterlyWeekday: 'SUNDAY' })).toBe(true);
   });
 });
 

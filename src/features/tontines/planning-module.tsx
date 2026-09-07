@@ -1,11 +1,13 @@
 /**
  * Planification des bénéficiaires (mandat planification/permutation) — écran additif,
- * jamais un remplacement de `TurnDetail`/`TurnBeneficiariesManage` : réutilise les mêmes
- * lectures (`listAllTurns`/`listAllBeneficiaries`, déjà existantes pour la Vue
- * d'ensemble) pour donner une vue groupée « quel tour a déjà son bénéficiaire ? » sur une
- * Période entière, avant même que la 1ʳᵉ occurrence ait eu lieu. Aucun tirage : ce n'est
- * qu'un tableau de bord + un point d'entrée vers l'ajout déjà construit sur
- * `TurnBeneficiariesManage`, plus la demande de permutation (workflow générique, jamais
+ * jamais un remplacement du panneau Opérations : réutilise les mêmes lectures
+ * (`listOccurrencesByPeriod`/`listAllBeneficiaries`, déjà existantes pour la Vue
+ * d'ensemble) pour donner une vue groupée « quelle occurrence a déjà son bénéficiaire ? »
+ * sur une Période entière, avant même que la 1ʳᵉ occurrence ait eu lieu (mandat
+ * « suppression complète de la logique Cycle/Tour » : plus de niveau Tour intermédiaire,
+ * les bénéficiaires sont rattachés directement à l'Occurrence). Aucun tirage : ce n'est
+ * qu'un tableau de bord + un renvoi vers Opérations (point d'entrée unique de désignation
+ * d'un bénéficiaire), plus la demande de permutation (workflow générique, jamais
  * d'application directe).
  */
 import { useMemo, useState, type ReactNode } from 'react';
@@ -37,11 +39,9 @@ function Back({ label, onClick }: { label: string; onClick: () => void }) { retu
 
 type PlanningRow = {
   id: string;
-  turnId: string;
-  turnNumber: number;
-  turnStatus: 'OPEN' | 'CLOSED';
   occurrenceId: string;
   occurrenceNumber: number;
+  occurrenceStatus: 'OPEN' | 'CLOSED';
   plannedDate: string;
   beneficiaryId?: string;
   adhesionId?: string;
@@ -58,11 +58,10 @@ export function TurnPlanningList({ t }: { t: T }) {
   const { data: period, isLoading, isError, refetch } = useQuery({ queryKey: ['tontines', 'period', periodId, currentTenant.id], queryFn: () => tontineTurnsService.getPeriod(currentTenant.id, periodId) });
   const { data: tontine } = useQuery({ queryKey: queryKeys.tontines.detail(tontineId), queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId), enabled: Boolean(period) });
   const { data: occurrences = [] } = useQuery({ queryKey: ['tontines', 'occurrences', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listOccurrencesByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
-  const { data: allTurns = [] } = useQuery({ queryKey: queryKeys.tontines.allTurns(currentTenant.id), queryFn: () => tontineTurnsService.listAllTurns(currentTenant.id), enabled: Boolean(period) });
   const { data: allBeneficiaries = [] } = useQuery({ queryKey: queryKeys.tontines.allBeneficiaries(currentTenant.id), queryFn: () => tontineTurnsService.listAllBeneficiaries(currentTenant.id), enabled: Boolean(period) });
   const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'period-adhesions', periodId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByPeriod(currentTenant.id, periodId), enabled: Boolean(period) });
   const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id), enabled: Boolean(period) });
-  const { data: permutations = [] } = useQuery({ queryKey: queryKeys.tontines.turnPermutations(currentTenant.id), queryFn: () => tontineTurnsService.listTurnPermutations(currentTenant.id), enabled: Boolean(period) });
+  const { data: permutations = [] } = useQuery({ queryKey: queryKeys.tontines.beneficiaryPermutations(currentTenant.id), queryFn: () => tontineTurnsService.listBeneficiaryPermutations(currentTenant.id), enabled: Boolean(period) });
   const { data: pendingRequests = [] } = useQuery({ queryKey: queryKeys.operations.workflowRequests(currentTenant.id), queryFn: () => workflowService.listRequests(currentTenant.id), enabled: Boolean(period) });
 
   const [selectedA, setSelectedA] = useState<PlanningRow | null>(null);
@@ -72,43 +71,41 @@ export function TurnPlanningList({ t }: { t: T }) {
   const adhesionById = useMemo(() => new Map(adhesions.map((item) => [item.id, item])), [adhesions]);
   const memberById = useMemo(() => new Map(members.map((item) => [item.id, item])), [members]);
   const pendingBeneficiaryIds = useMemo(() => {
-    const pendingRequestIds = new Set(pendingRequests.filter((item) => item.domain === 'tontines' && item.entityType === 'turnPermutation' && (item.status === 'pending' || item.status === 'inProgress')).map((item) => item.id));
+    const pendingRequestIds = new Set(pendingRequests.filter((item) => item.domain === 'tontines' && item.entityType === 'beneficiaryPermutation' && (item.status === 'pending' || item.status === 'inProgress')).map((item) => item.id));
     const ids = new Set<string>();
     for (const permutation of permutations) {
-      if (pendingRequestIds.has(permutation.workflowRequestId)) { ids.add(permutation.turnBeneficiaryAId); ids.add(permutation.turnBeneficiaryBId); }
+      if (pendingRequestIds.has(permutation.workflowRequestId)) { ids.add(permutation.beneficiaryAId); ids.add(permutation.beneficiaryBId); }
     }
     return ids;
   }, [permutations, pendingRequests]);
 
   const rows = useMemo<PlanningRow[]>(() => {
-    const occurrenceById = new Map(occurrences.map((item) => [item.id, item]));
-    const turnsInPeriod = allTurns.filter((turn) => occurrenceById.has(turn.tontineOccurrenceId)).sort((a, b) => a.turnNumber - b.turnNumber);
     const list: PlanningRow[] = [];
-    for (const turn of turnsInPeriod) {
-      const occurrence = occurrenceById.get(turn.tontineOccurrenceId)!;
-      const beneficiaries = allBeneficiaries.filter((item) => item.tontineTurnId === turn.id);
+    for (const occurrence of [...occurrences].sort((a, b) => a.occurrenceNumber - b.occurrenceNumber)) {
+      const beneficiaries = allBeneficiaries.filter((item) => item.tontineOccurrenceId === occurrence.id);
       if (beneficiaries.length === 0) {
-        list.push({ id: `empty-${turn.id}`, turnId: turn.id, turnNumber: turn.turnNumber, turnStatus: turn.status, occurrenceId: occurrence.id, occurrenceNumber: occurrence.occurrenceNumber, plannedDate: occurrence.plannedDate, pendingPermutation: false });
+        list.push({ id: `empty-${occurrence.id}`, occurrenceId: occurrence.id, occurrenceNumber: occurrence.occurrenceNumber, occurrenceStatus: occurrence.status, plannedDate: occurrence.plannedDate, pendingPermutation: false });
         continue;
       }
       for (const beneficiary of beneficiaries) {
         const adhesion = adhesionById.get(beneficiary.adhesionId);
         const member = adhesion ? memberById.get(adhesion.memberId) : undefined;
-        list.push({ id: beneficiary.id, turnId: turn.id, turnNumber: turn.turnNumber, turnStatus: turn.status, occurrenceId: occurrence.id, occurrenceNumber: occurrence.occurrenceNumber, plannedDate: occurrence.plannedDate, beneficiaryId: beneficiary.id, adhesionId: beneficiary.adhesionId, memberName: adhesion?.memberName, photoUrl: member?.photoUrl, pendingPermutation: pendingBeneficiaryIds.has(beneficiary.id) });
+        list.push({ id: beneficiary.id, occurrenceId: occurrence.id, occurrenceNumber: occurrence.occurrenceNumber, occurrenceStatus: occurrence.status, plannedDate: occurrence.plannedDate, beneficiaryId: beneficiary.id, adhesionId: beneficiary.adhesionId, memberName: adhesion?.memberName, photoUrl: member?.photoUrl, pendingPermutation: pendingBeneficiaryIds.has(beneficiary.id) });
       }
     }
     return list;
-  }, [occurrences, allTurns, allBeneficiaries, adhesionById, memberById, pendingBeneficiaryIds]);
+  }, [occurrences, allBeneficiaries, adhesionById, memberById, pendingBeneficiaryIds]);
 
   const plannedCount = rows.filter((row) => Boolean(row.beneficiaryId)).length;
-  const totalTurns = new Set(rows.map((row) => row.turnId)).size;
-  const isComplete = totalTurns > 0 && plannedCount === totalTurns;
+  const totalOccurrences = new Set(rows.map((row) => row.occurrenceId)).size;
+  const isComplete = totalOccurrences > 0 && plannedCount === totalOccurrences;
   /**
    * Mandat §6 — dérivé uniquement des données déjà chargées (`adhesions` de la Période,
    * `rows` déjà résolues), aucune nouvelle règle métier : un adhérent « jamais affecté »
    * n'apparaît dans aucun `beneficiary.adhesionId` de cette Période ; un adhérent
    * « affecté plusieurs fois » est explicitement autorisé (décision métier déjà actée,
-   * cf. `requestTurnPermutation`/RB-08-09) — affiché à titre informatif, jamais bloqué.
+   * cf. `requestBeneficiaryPermutation`/RB-08-09) — affiché à titre informatif, jamais
+   * bloqué.
    */
   const assignmentCountByAdhesionId = useMemo(() => {
     const map = new Map<string, number>();
@@ -118,9 +115,9 @@ export function TurnPlanningList({ t }: { t: T }) {
   const unassignedAdherents = useMemo(() => adhesions.filter((adhesion) => adhesion.status === 'active' && !assignmentCountByAdhesionId.has(adhesion.id)), [adhesions, assignmentCountByAdhesionId]);
   const multiAssignedAdherents = useMemo(() => adhesions.filter((adhesion) => (assignmentCountByAdhesionId.get(adhesion.id) ?? 0) > 1).map((adhesion) => ({ adhesion, count: assignmentCountByAdhesionId.get(adhesion.id)! })), [adhesions, assignmentCountByAdhesionId]);
 
-  const permutationMutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.requestTurnPermutation>>, { turnBeneficiaryAId: string; turnBeneficiaryBId: string; justification?: string }>({
-    mutationFn: (vars) => tontineTurnsService.requestTurnPermutation(currentTenant.id, { ...vars, requestedBy: user.name, requestedByUserId: user.id }),
-    invalidateKeys: [queryKeys.tontines.turnPermutations(currentTenant.id), queryKeys.operations.workflowRequests(currentTenant.id)],
+  const permutationMutation = useMockMutation<Awaited<ReturnType<typeof tontineTurnsService.requestBeneficiaryPermutation>>, { beneficiaryAId: string; beneficiaryBId: string; justification?: string }>({
+    mutationFn: (vars) => tontineTurnsService.requestBeneficiaryPermutation(currentTenant.id, { ...vars, requestedBy: user.name, requestedByUserId: user.id }),
+    invalidateKeys: [queryKeys.tontines.beneficiaryPermutations(currentTenant.id), queryKeys.operations.workflowRequests(currentTenant.id)],
     onSuccess: (result) => {
       if (!result) { notify.error(t('tontines', 'permutationRequestFailed')); return; }
       notify.success(t('tontines', 'permutationRequested'));
@@ -142,33 +139,33 @@ export function TurnPlanningList({ t }: { t: T }) {
   };
 
   const columns: TableColumn<PlanningRow>[] = [
-    { key: 'turn', header: t('tontines', 'turnNumber'), render: (row) => `#${row.turnNumber}` },
+    { key: 'occurrence', header: t('tontines', 'occurrenceNumber'), render: (row) => `#${row.occurrenceNumber}` },
     { key: 'beneficiary', header: t('tontines', 'beneficiary'), render: (row) => row.memberName
       ? <span className="flex items-center gap-2 font-medium"><MemberAvatar member={{ firstName: row.memberName, lastName: '', photoUrl: row.photoUrl }} />{row.memberName}</span>
       : <span className="text-xs text-muted-foreground">{t('tontines', 'notPlannedYet')}</span> },
-    { key: 'occurrence', header: t('tontines', 'occurrenceNumber'), render: (row) => `#${row.occurrenceNumber}` },
     { key: 'date', header: t('tontines', 'plannedDate'), render: (row) => <DateDisplay value={row.plannedDate} /> },
     { key: 'reference', header: t('tontines', 'adhesionReference'), render: (row) => row.adhesionId ? <span className="font-mono text-xs text-muted-foreground">{row.adhesionId}</span> : <span className="text-muted-foreground">—</span> },
     { key: 'status', header: t('tontines', 'planningStatus'), render: (row) => row.beneficiaryId
       ? (row.pendingPermutation ? <StatusBadge label={t('tontines', 'permutationPending')} tone={'warning' as StatusTone} /> : <StatusBadge label={t('tontines', 'statusPlanned')} tone={'success' as StatusTone} />)
       : <StatusBadge label={t('tontines', 'statusNotPlanned')} tone={'default' as StatusTone} /> },
     { key: 'actions', header: '', className: 'w-64', render: (row) => <div className="flex flex-wrap items-center justify-end gap-2">
-      {!row.beneficiaryId && <Button size="sm" variant="outline" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.occurrenceId}/turn`)}>{t('tontines', 'planBeneficiary')}</Button>}
-      {row.beneficiaryId && row.turnStatus === 'OPEN' && !row.pendingPermutation && (
+      {/* Désigner un bénéficiaire se fait désormais exclusivement depuis Opérations (mandat « suppression complète de la logique Cycle/Tour ») — plus d'écran dédié par occurrence. */}
+      {!row.beneficiaryId && <Button size="sm" variant="outline" onClick={() => navigate('/tontines/operations')}>{t('tontines', 'planBeneficiary')}</Button>}
+      {row.beneficiaryId && row.occurrenceStatus === 'OPEN' && !row.pendingPermutation && (
         <PermissionGate permission="beneficiaries.manage">
           <Button size="sm" variant={selectedA?.beneficiaryId === row.beneficiaryId ? 'default' : 'outline'} onClick={() => handlePermuteClick(row)}>
             <Repeat size={14} />{selectedA?.beneficiaryId === row.beneficiaryId ? t('tontines', 'cancelSelection') : t('tontines', 'requestPermutation')}
           </Button>
         </PermissionGate>
       )}
-      <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.occurrenceId}/turn`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button>
+      <button type="button" onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}/occurrences/${row.occurrenceId}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button>
     </div> },
   ];
 
   return <Page title={t('tontines', 'planningTitle')} description={`${tontine.name} · ${period.startDate} → ${period.endDate}`} actions={<Back label={t('tontines', 'backToPeriod')} onClick={() => navigate(`/tontines/${tontineId}/periods/${periodId}`)} />}>
-    {selectedA && <p className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3 text-xs text-primary">{t('tontines', 'permutationSelectHint', { turn: String(selectedA.turnNumber), member: selectedA.memberName ?? '' })}</p>}
+    {selectedA && <p className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3 text-xs text-primary">{t('tontines', 'permutationSelectHint', { turn: String(selectedA.occurrenceNumber), member: selectedA.memberName ?? '' })}</p>}
     <Card><CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
-      <div><p className="text-sm font-semibold">{t('tontines', 'planningCompletion')}</p><p className="text-xs text-muted-foreground">{t('tontines', 'planningCompletionCount', { planned: String(plannedCount), total: String(totalTurns) })}</p></div>
+      <div><p className="text-sm font-semibold">{t('tontines', 'planningCompletion')}</p><p className="text-xs text-muted-foreground">{t('tontines', 'planningCompletionCount', { planned: String(plannedCount), total: String(totalOccurrences) })}</p></div>
       <StatusBadge label={t('tontines', isComplete ? 'planningComplete' : 'planningIncomplete')} tone={(isComplete ? 'success' : 'warning') as StatusTone} />
     </CardContent></Card>
     {(unassignedAdherents.length > 0 || multiAssignedAdherents.length > 0) && <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-2">
@@ -186,14 +183,14 @@ export function TurnPlanningList({ t }: { t: T }) {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader><DialogTitle>{t('tontines', 'permutationRequestTitle')}</DialogTitle><DialogDescription>{t('tontines', 'permutationRequestSubtitle')}</DialogDescription></DialogHeader>
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 py-2">
-          <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: pendingPair.a.memberName ?? '', lastName: '', photoUrl: pendingPair.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{pendingPair.a.memberName}</p><p className="text-xs text-muted-foreground">{t('tontines', 'turnNumber')} #{pendingPair.a.turnNumber} · {t('tontines', 'occurrenceNumber')} #{pendingPair.a.occurrenceNumber}</p></div>
+          <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: pendingPair.a.memberName ?? '', lastName: '', photoUrl: pendingPair.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{pendingPair.a.memberName}</p><p className="text-xs text-muted-foreground">{t('tontines', 'occurrenceNumber')} #{pendingPair.a.occurrenceNumber}</p></div>
           <Repeat className="text-muted-foreground" size={18} />
-          <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: pendingPair.b.memberName ?? '', lastName: '', photoUrl: pendingPair.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{pendingPair.b.memberName}</p><p className="text-xs text-muted-foreground">{t('tontines', 'turnNumber')} #{pendingPair.b.turnNumber} · {t('tontines', 'occurrenceNumber')} #{pendingPair.b.occurrenceNumber}</p></div>
+          <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: pendingPair.b.memberName ?? '', lastName: '', photoUrl: pendingPair.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{pendingPair.b.memberName}</p><p className="text-xs text-muted-foreground">{t('tontines', 'occurrenceNumber')} #{pendingPair.b.occurrenceNumber}</p></div>
         </div>
         <div className="space-y-1"><Label htmlFor="permutation-justification">{t('tontines', 'permutationReason')}</Label><Textarea id="permutation-justification" value={justification} onChange={(event) => setJustification(event.target.value)} disabled={permutationMutation.isPending} /></div>
         <DialogFooter>
           <Button variant="outline" onClick={() => { setPendingPair(null); setJustification(''); }}>{t('tontines', 'cancel')}</Button>
-          <Button disabled={permutationMutation.isPending} onClick={() => permutationMutation.mutate({ turnBeneficiaryAId: pendingPair.a.beneficiaryId!, turnBeneficiaryBId: pendingPair.b.beneficiaryId!, justification: justification.trim() || undefined })}>{permutationMutation.isPending ? t('tontines', 'saving') : t('tontines', 'submitPermutationRequest')}</Button>
+          <Button disabled={permutationMutation.isPending} onClick={() => permutationMutation.mutate({ beneficiaryAId: pendingPair.a.beneficiaryId!, beneficiaryBId: pendingPair.b.beneficiaryId!, justification: justification.trim() || undefined })}>{permutationMutation.isPending ? t('tontines', 'saving') : t('tontines', 'submitPermutationRequest')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>}

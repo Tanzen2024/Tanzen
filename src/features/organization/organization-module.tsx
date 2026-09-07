@@ -15,6 +15,7 @@ import { organizationService, type MemberInput } from '@/services/organization.s
 import { financeService } from '@/services/finance.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
+import { tontineTurnsService } from '@/services/tontine-turns.service';
 import { attendanceService, type AttendanceInput } from '@/services/attendance.service';
 import { quorumService, type QuorumThresholdInput } from '@/services/quorum.service';
 import { assemblyDecisionService, type AssemblyDecisionInput } from '@/services/assembly-decision.service';
@@ -141,29 +142,28 @@ function MemberPhotoField({ t, value, onChange }: { t: T; value: string; onChang
     setFileName(file.name);
   };
   const handleRemove = () => { onChange(''); setFileName(null); };
-  return <div className="space-y-2">
-    <Label>{t('organization', 'memberPhoto')}</Label>
-    <div className="flex items-center gap-4">
-      <span className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-muted-foreground">
-        {value ? <img src={value} alt="" className="size-full object-cover" /> : <Camera size={22} aria-hidden="true" />}
+  return <fieldset className="rounded-xl border border-border bg-card p-5 shadow-sm lg:sticky lg:top-6">
+    <legend className="px-2 text-sm font-semibold text-foreground">{t('organization', 'memberPhoto')}</legend>
+    <div className="flex flex-col items-center gap-4">
+      <span className="grid aspect-square w-full max-w-[220px] shrink-0 place-items-center overflow-hidden rounded-xl border border-border bg-muted text-muted-foreground">
+        {value ? <img src={value} alt="" className="size-full object-cover" /> : <Camera size={40} aria-hidden="true" />}
       </span>
-      <div className="space-y-1.5">
-        <div className="flex gap-2">
-          <Label htmlFor="member-photo-input" className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted">
-            <Camera size={15} />{t('organization', value ? 'changePhoto' : 'selectPhoto')}
-          </Label>
-          <input id="member-photo-input" type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
-          {value && <Button type="button" variant="ghost" size="sm" onClick={handleRemove}><X size={14} />{t('organization', 'removePhoto')}</Button>}
-        </div>
-        {fileName && <p className="text-xs text-muted-foreground">{fileName}</p>}
-        <p className="text-xs text-muted-foreground">{t('organization', 'memberPhotoHint')}</p>
+      <div className="w-full max-w-[220px] space-y-2">
+        <Label htmlFor="member-photo-input" className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted">
+          <Camera size={15} />{t('organization', value ? 'changePhoto' : 'selectPhoto')}
+        </Label>
+        <input id="member-photo-input" type="file" accept="image/*" className="hidden" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
+        {value && <Button type="button" variant="ghost" size="sm" className="w-full" onClick={handleRemove}><X size={14} />{t('organization', 'removePhoto')}</Button>}
+        {fileName && <p className="truncate text-center text-xs text-muted-foreground">{fileName}</p>}
+        <p className="text-center text-xs leading-5 text-muted-foreground">{t('organization', 'memberPhotoHint')}</p>
       </div>
     </div>
-  </div>;
+  </fieldset>;
 }
 
 function MemberFormFields({ values, onChange, errors, t }: { values: MemberFormValues; onChange: (patch: Partial<MemberFormValues>) => void; errors: MemberFormErrors; t: T }) {
-  return <><FormSection title={t('organization', 'personalInfo')}><div className="grid gap-4 sm:grid-cols-2">
+  return <><div className="grid gap-5 lg:grid-cols-3 lg:items-start">
+    <FormSection title={t('organization', 'personalInfo')} className="lg:col-span-2"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
     <div className="space-y-2"><Label htmlFor="member-first-name">{t('organization', 'firstName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-first-name" value={values.firstName} onChange={(event) => onChange({ firstName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.firstName)} aria-describedby={errors.firstName ? 'member-first-name-error' : undefined} /><span id="member-first-name-error"><FieldError message={errors.firstName} /></span></div>
     <div className="space-y-2"><Label htmlFor="member-last-name">{t('organization', 'lastName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="member-last-name" value={values.lastName} onChange={(event) => onChange({ lastName: event.target.value })} required aria-required="true" aria-invalid={Boolean(errors.lastName)} aria-describedby={errors.lastName ? 'member-last-name-error' : undefined} /><span id="member-last-name-error"><FieldError message={errors.lastName} /></span></div>
     <div className="space-y-2"><Label htmlFor="member-matricule">{t('organization', 'matricule')}</Label><Input id="member-matricule" value={values.matricule} onChange={(event) => onChange({ matricule: event.target.value })} aria-invalid={Boolean(errors.matricule)} aria-describedby={errors.matricule ? 'member-matricule-error' : undefined} /><span id="member-matricule-error"><FieldError message={errors.matricule} /></span></div>
@@ -173,9 +173,10 @@ function MemberFormFields({ values, onChange, errors, t }: { values: MemberFormV
     <div className="space-y-2"><Label htmlFor="member-joined-at">{t('organization', 'joinDateLabel')}</Label><Input id="member-joined-at" type="date" value={values.joinedAt} onChange={(event) => onChange({ joinedAt: event.target.value })} /></div>
     <div className="space-y-2"><Label htmlFor="member-occupation">{t('organization', 'occupation')}</Label><Input id="member-occupation" value={values.occupation} onChange={(event) => onChange({ occupation: event.target.value })} /></div>
     <div className="space-y-2"><Label htmlFor="member-nationality">{t('organization', 'nationality')}</Label><Input id="member-nationality" value={values.nationality} onChange={(event) => onChange({ nationality: event.target.value })} /></div>
-    <div className="space-y-2 sm:col-span-2"><Label htmlFor="member-address">{t('organization', 'address')}</Label><Input id="member-address" value={values.address} onChange={(event) => onChange({ address: event.target.value })} /></div>
-    <div className="sm:col-span-2"><MemberPhotoField t={t} value={values.photoUrl} onChange={(photoUrl) => onChange({ photoUrl })} /></div>
+    <div className="space-y-2 sm:col-span-2 xl:col-span-3"><Label htmlFor="member-address">{t('organization', 'address')}</Label><Input id="member-address" value={values.address} onChange={(event) => onChange({ address: event.target.value })} /></div>
   </div></FormSection>
+    <MemberPhotoField t={t} value={values.photoUrl} onChange={(photoUrl) => onChange({ photoUrl })} />
+  </div>
     {errors.general && <p className="text-sm text-destructive" role="alert">{errors.general}</p>}
   </>;
 }
@@ -206,7 +207,7 @@ function MemberCreate({ t }: { t: T }) {
     mutation.mutate(buildMemberInput(values, currentTenant.name));
   };
   const isBusy = mutation.isPending || isChecking;
-  return <OrganizationPage title={t('organization', 'addMember')} description={t('organization', 'membersDescription')} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate('/organization/members')}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
+  return <OrganizationPage title={t('organization', 'addMember')} description={t('organization', 'membersDescription')} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="space-y-5"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate('/organization/members')}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
 }
 
 /** Le tenant n'est plus un champ de formulaire (dérivé de `currentTenant`, jamais éditable — cf. `MemberFormFields`) : la valeur transmise ici est toujours celle du contexte tenant courant, jamais une sélection utilisateur. `gender` n'est plus forcé à une valeur par défaut arbitraire (bug corrigé — voir `MemberGenderValue`). */
@@ -289,7 +290,7 @@ function MemberEditForm({ t, member }: { t: T; member: Member }) {
     mutation.mutate(buildMemberInput(values, member.tenantName));
   };
   const isBusy = mutation.isPending || isChecking;
-  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="grid gap-5 lg:grid-cols-2"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
+  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="space-y-5"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
 }
 
 function MemberTabs({ t, member }: { t: T; member: Member }) {
@@ -327,12 +328,24 @@ function LoansTab({ t, memberId }: { t: T; memberId: string }) {
   return <div className="space-y-3">{loans.map((loan: Loan) => <Card key={loan.id}><CardContent className="flex flex-wrap items-center gap-4 p-4"><span className="grid size-9 place-items-center rounded-lg bg-amber-500/10 text-amber-600"><Network size={17} /></span><div className="min-w-24 flex-1"><p className="text-xs text-muted-foreground">{loan.id}</p><p className="font-semibold"><MoneyDisplay amount={loan.principal} /></p></div><div><p className="text-xs text-muted-foreground">{t('organization', 'dueDate')}</p><p className="text-sm"><DateDisplay value={loan.nextPaymentDate} /></p></div><div className="min-w-32"><p className="mb-1 text-xs text-muted-foreground">{t('organization', 'progress')} · {loan.progress}%</p><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${loan.progress}%` }} /></div></div><StatusBadge label={t('organization', loan.status)} tone={LOAN_STATUS_TONE[loan.status]} /></CardContent></Card>)}{loans.length === 0 && <EmptyState icon={Network} title={t('organization', 'noLoans')} />}</div>;
 }
 
-const CYCLE_STATUS_LABEL: Record<string, string> = { statusDraft: 'Brouillon', statusOpen: 'Ouvert', statusSuspended: 'Suspendu', statusClosed: 'Clôturé' };
-
+/**
+ * Adhésions du membre, toutes tontines confondues (mandat « suppression complète de la
+ * logique Cycle/Tour » — migré depuis `tontinesService.listCyclesByMember`, qui affichait
+ * les anciens `TontineCycle` d'un membre). Réutilise `tontineTurnsService.listAdhesionsByMember`
+ * (déjà existant) + `listAllPeriods` pour résoudre `periodId → tontineId`, exactement le
+ * même pattern de résolution que `PeriodAdhesionDetail` ailleurs dans le module Tontines —
+ * aucune nouvelle lecture ni règle métier inventée.
+ */
 function TontinesTab({ t, memberId, tontineNameById }: { t: T; memberId: string; tontineNameById: Map<string, string> }) {
   const { currentTenant } = useTenant();
-  const { data: cycles = [] } = useQuery({ queryKey: queryKeys.tontines.cyclesByMember(memberId), queryFn: () => tontinesService.listCyclesByMember(currentTenant.id, memberId) });
-  return <div className="grid gap-4 sm:grid-cols-2">{cycles.map((cycle) => <Card key={cycle.id}><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Landmark size={17} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={tontineNameById.get(cycle.tontineId) ?? cycle.tontineId}>{tontineNameById.get(cycle.tontineId) ?? cycle.tontineId}</p><p className="text-xs text-muted-foreground">{t('organization', 'cycle')} {cycle.cycleNumber}</p></div><StatusBadge label={CYCLE_STATUS_LABEL[cycle.status] ?? cycle.status} tone={cycle.status === 'statusOpen' ? 'success' : cycle.status === 'statusSuspended' ? 'warning' : 'default'} /></CardContent></Card>)}{cycles.length === 0 && <EmptyState icon={Landmark} title={t('organization', 'noTontines')} />}</div>;
+  const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'adhesions-by-member', memberId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByMember(currentTenant.id, memberId) });
+  const { data: periods = [] } = useQuery({ queryKey: queryKeys.tontines.allPeriods(currentTenant.id), queryFn: () => tontineTurnsService.listAllPeriods(currentTenant.id), enabled: adhesions.length > 0 });
+  const periodById = new Map(periods.map((period) => [period.id, period]));
+  return <div className="grid gap-4 sm:grid-cols-2">{adhesions.map((adhesion) => {
+    const period = periodById.get(adhesion.periodId);
+    const tontineId = period?.tontineId ?? '';
+    return <Card key={adhesion.id}><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Landmark size={17} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={tontineNameById.get(tontineId) ?? tontineId}>{tontineNameById.get(tontineId) ?? tontineId}</p><p className="text-xs text-muted-foreground">{period ? `${period.startDate} → ${period.endDate}` : '—'}</p></div><StatusBadge label={t('organization', adhesion.status === 'active' ? 'active' : 'exited')} tone={adhesion.status === 'active' ? 'success' : 'default'} /></CardContent></Card>;
+  })}{adhesions.length === 0 && <EmptyState icon={Landmark} title={t('organization', 'noTontines')} />}</div>;
 }
 
 function GovernanceTab({ t, member }: { t: T; member: Member }) { return <Card><CardContent className="p-5">{member.governanceParticipation.length ? <Timeline items={member.governanceParticipation.map((item) => ({ id: item.id, title: item.assemblyName, description: item.role, date: formatDate(item.date), tone: 'success' as const }))} /> : <EmptyState icon={ShieldCheck} title={t('organization', 'noGovernance')} />}</CardContent></Card>; }

@@ -35,3 +35,34 @@ describe('navigationTree — Governance (correction post-implémentation Phase 4
     expect(paths.some((path) => path.endsWith('/governance/assemblies'))).toBe(false);
   });
 });
+
+/**
+ * Mandat « Refonte module Finances » : le groupe `Finance` ne contient QUE deux
+ * enfants — `Accounts` (Comptes) et `Transactions` (journal, point d'entrée
+ * unique). Contribution / Demandes / Prêts / Remboursements / Garants /
+ * Distributions ne sont pas des modules mais des TYPES D'OPÉRATION : plus aucune
+ * entrée de menu, plus aucune route (`credit/loan-rules` mis à part, hors menu).
+ */
+describe('navigationTree — Finance (mandat « Refonte module Finances »)', () => {
+  const finance = navigationTree.find((node) => node.label === 'Finance');
+  const paths = flattenNavigation(navigationTree).map((node) => node.path);
+
+  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Transactions]', () => {
+    expect(finance?.path).toBe('/finance');
+    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Transactions']);
+    expect(finance?.children?.find((child) => child.label === 'Accounts')?.path).toBe('/finance/accounts');
+    expect(finance?.children?.find((child) => child.label === 'Transactions')?.path).toBe('/finance/transactions');
+  });
+
+  it('DENY: no "Contributions" / "Credit" / "Distributions" / "Loans" / "Guarantors" menu entries anywhere', () => {
+    for (const label of ['Contributions', 'Credit', 'Distributions', 'Loans', 'Guarantors', 'Repayments', 'Applications']) {
+      expect(flattenNavigation(navigationTree).some((node) => node.label === label)).toBe(false);
+    }
+  });
+
+  it('DENY: no navigation node points at /finance/contributions, /finance/distributions or /finance/credit/*', () => {
+    expect(paths.some((path) => path === '/finance/contributions')).toBe(false);
+    expect(paths.some((path) => path === '/finance/distributions')).toBe(false);
+    expect(paths.some((path) => path.startsWith('/finance/credit'))).toBe(false);
+  });
+});

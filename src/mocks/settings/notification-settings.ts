@@ -15,7 +15,7 @@ export type NotificationChannel = {
   destination: string;
 };
 
-export type NotificationRuleTrigger = 'loanOverdue' | 'applicationSubmitted' | 'cycleEndingSoon' | 'workflowPending' | 'sessionRevoked' | 'memberJoined';
+export type NotificationRuleTrigger = 'loanOverdue' | 'applicationSubmitted' | 'periodEndingSoon' | 'workflowPending' | 'sessionRevoked' | 'memberJoined';
 
 export type NotificationRule = {
   id: string;
@@ -52,12 +52,12 @@ export const notificationChannels: NotificationChannel[] = [
 export const notificationRules: NotificationRule[] = [
   { id: 'NR-001', tenantId: 'T-001', trigger: 'loanOverdue', channels: ['email', 'sms', 'inApp'], enabled: true },
   { id: 'NR-002', tenantId: 'T-001', trigger: 'applicationSubmitted', channels: ['inApp'], enabled: true },
-  { id: 'NR-003', tenantId: 'T-001', trigger: 'cycleEndingSoon', channels: ['email', 'inApp'], enabled: true },
+  { id: 'NR-003', tenantId: 'T-001', trigger: 'periodEndingSoon', channels: ['email', 'inApp'], enabled: true },
   { id: 'NR-004', tenantId: 'T-001', trigger: 'workflowPending', channels: ['inApp'], enabled: true },
   { id: 'NR-005', tenantId: 'T-001', trigger: 'sessionRevoked', channels: ['email'], enabled: true },
   { id: 'NR-006', tenantId: 'T-001', trigger: 'memberJoined', channels: ['inApp'], enabled: false },
   { id: 'NR-007', tenantId: 'T-002', trigger: 'loanOverdue', channels: ['email', 'inApp'], enabled: true },
-  { id: 'NR-008', tenantId: 'T-002', trigger: 'cycleEndingSoon', channels: ['inApp'], enabled: true },
+  { id: 'NR-008', tenantId: 'T-002', trigger: 'periodEndingSoon', channels: ['inApp'], enabled: true },
   { id: 'NR-009', tenantId: 'T-003', trigger: 'loanOverdue', channels: ['email'], enabled: true },
   { id: 'NR-010', tenantId: 'T-005', trigger: 'applicationSubmitted', channels: ['inApp'], enabled: true },
 ];
@@ -65,7 +65,7 @@ export const notificationRules: NotificationRule[] = [
 export const notificationPreferences: NotificationPreference[] = [
   { userId: 'U-001', trigger: 'loanOverdue', email: true, push: false, inApp: true },
   { userId: 'U-001', trigger: 'applicationSubmitted', email: false, push: false, inApp: true },
-  { userId: 'U-001', trigger: 'cycleEndingSoon', email: true, push: false, inApp: true },
+  { userId: 'U-001', trigger: 'periodEndingSoon', email: true, push: false, inApp: true },
   { userId: 'U-001', trigger: 'workflowPending', email: false, push: false, inApp: true },
   { userId: 'U-001', trigger: 'sessionRevoked', email: true, push: false, inApp: true },
   { userId: 'U-001', trigger: 'memberJoined', email: false, push: false, inApp: false },

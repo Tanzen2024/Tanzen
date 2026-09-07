@@ -54,8 +54,8 @@ export function FrequencyFields({ t, value, onChange, error }: { t: T; value: Pa
     <div className="grid gap-4 sm:grid-cols-2">
       {/* Étape 1 — toujours affichée en premier, seul champ visible tant qu'aucune fréquence n'est choisie. */}
       <div className="space-y-2">
-        <Label htmlFor="tontine-frequency">{t('tontines', 'frequency')}</Label>
-        <select id="tontine-frequency" value={value.frequency ?? ''} onChange={(event) => setFrequency(event.target.value as TontineFrequency | '')} className={selectClass}>
+        <Label htmlFor="tontine-frequency">{t('tontines', 'frequency')} *</Label>
+        <select id="tontine-frequency" value={value.frequency ?? ''} onChange={(event) => setFrequency(event.target.value as TontineFrequency | '')} aria-invalid={Boolean(error)} className={selectClass}>
           <option value="">{t('tontines', 'selectFrequency')}</option>
           <option value="DAILY">{t('tontines', 'frequencyDaily')}</option>
           <option value="WEEKLY">{t('tontines', 'frequencyWeekly')}</option>

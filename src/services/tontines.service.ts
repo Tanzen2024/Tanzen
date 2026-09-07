@@ -1,33 +1,50 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
 import { tontines, type Tontine } from '@/mocks/tontines/tontines';
-import { tontineCycles, type TontineCycleStatus, type TontineCycle, type CycleMember, type CycleDraw } from '@/mocks/tontines/tontine-cycles';
+import { isValidFrequencyConfig } from '@/mocks/tontines/tontine-frequency';
 
 export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'currency' | 'purchaseMode' | 'contributionAmount' | 'item' | 'quantity' | 'unit'
   | 'frequency' | 'weekday' | 'monthlyRule' | 'monthlyDayOfMonth' | 'monthlyOrdinal' | 'monthlyWeekday'
   | 'quarterlyRule' | 'quarterlyMonth' | 'quarterlyDayOfMonth' | 'quarterlyOrdinal' | 'quarterlyWeekday'>;
 export type TontineUpdateInput = Partial<Omit<TontineInput, 'tenantId'>>;
-export type CycleInput = { tontineId: string; cycleNumber: number; startDate: string; endDate: string; expectedTotal: number };
-export type CycleMemberInput = { memberId: string; memberName: string; position: number; expectedAmount: number };
-export type DrawInput = { cycleId: string; drawNumber: number; date: string; contributionPool: number };
-export type WinnerInput = { drawId: string; winnerMemberId: string; amountReceived: number };
-
-/** Seules les transitions sourcées (UCX2-14 Ouvrir, UC40-04/UCX2-04 Clôturer) sont autorisées, plus SUSPENDED→OPEN (reprise, nécessaire pour que le statut validé SUSPENDED ne soit pas un cul-de-sac). CLOSED n'a aucune transition sortante : aucune source ne documente de réouverture d'un cycle clôturé (cf. docs/PHASE_08_DECISIONS_A_VALIDER.md). */
-const VALID_CYCLE_TRANSITIONS: Record<TontineCycleStatus, TontineCycleStatus[]> = {
-  statusDraft: ['statusOpen'],
-  statusOpen: ['statusSuspended', 'statusClosed'],
-  statusSuspended: ['statusOpen'],
-  statusClosed: [],
-};
 
 /**
  * MONEY exige un montant de cotisation strictement positif (mandat « montant de cotisation »,
  * §1/§5) ; GOODS n'en a pas besoin, quelle que soit la valeur passée (jamais utilisée pour une
  * tontine non financière, même si une ancienne valeur traîne après un changement de valueType).
  */
-function isValidContributionAmount(valueType: Tontine['valueType'], contributionAmount: number | undefined): boolean {
-  if (valueType !== 'MONEY') return true;
-  return typeof contributionAmount === 'number' && Number.isFinite(contributionAmount) && contributionAmount > 0;
+function isNonBlankString(value: string | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isStrictlyPositiveNumber(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/** Valide la configuration métier complète, y compris pour les appels directs au service. */
+function isValidTontineConfiguration(input: Pick<Tontine, 'name' | 'valueType' | 'contributionAmount' | 'item' | 'quantity' | 'unit'>): boolean {
+  if (!isNonBlankString(input.name)) return false;
+  if (input.valueType === 'MONEY') return isStrictlyPositiveNumber(input.contributionAmount);
+  return isNonBlankString(input.item) && isStrictlyPositiveNumber(input.quantity) && isNonBlankString(input.unit);
+}
+
+/** Un patch ne touchant à aucun champ de fréquence n'a pas à revalider une configuration déjà complète (ex. tontines pré-migration, cf. tontines.ts) — évite de bloquer une modification portant sur un champ non lié (mandat « Fréquence obligatoire », exigence de compatibilité avec les tontines existantes). */
+function patchTouchesFrequency(patch: TontineUpdateInput): boolean {
+  return 'frequency' in patch || 'weekday' in patch || 'monthlyRule' in patch || 'monthlyDayOfMonth' in patch || 'monthlyOrdinal' in patch || 'monthlyWeekday' in patch
+    || 'quarterlyRule' in patch || 'quarterlyMonth' in patch || 'quarterlyDayOfMonth' in patch || 'quarterlyOrdinal' in patch || 'quarterlyWeekday' in patch;
+}
+
+/** Les attributs propres à un type ne sont jamais conservés lors d'un changement de type. */
+function keepOnlyFieldsForValueType(tontine: Tontine): void {
+  if (tontine.valueType === 'MONEY') {
+    delete tontine.item;
+    delete tontine.quantity;
+    delete tontine.unit;
+    return;
+  }
+  delete tontine.currency;
+  delete tontine.purchaseMode;
+  delete tontine.contributionAmount;
 }
 
 export const tontinesService = {
@@ -35,91 +52,48 @@ export const tontinesService = {
   getTontine: (tenantId: string, tontineId: string) => mockRequest(() => getTenantScoped(tontines, (tontine) => tontine.id === tontineId, tenantId)),
   createTontine: (input: TontineInput) =>
     mockRequest(() => {
-      if (!isValidContributionAmount(input.valueType, input.contributionAmount)) return undefined;
-      const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', memberCount: 0, activeCycles: 0, totalContributions: 0, createdAt: new Date().toISOString().slice(0, 10), ...input };
+      if (!isValidTontineConfiguration(input)) return undefined;
+      if (!isValidFrequencyConfig(input)) return undefined;
+      const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', memberCount: 0, totalContributions: 0, createdAt: new Date().toISOString().slice(0, 10), ...input };
+      keepOnlyFieldsForValueType(tontine);
       tontines.push(tontine);
       return tontine;
     }),
 
-  /** Aucun champ technique (id/tenantId/status/memberCount/activeCycles/totalContributions/createdAt) n'est jamais accepté en entrée — seule la configuration métier peut être modifiée. */
+  /** Aucun champ technique (id/tenantId/status/memberCount/totalContributions/createdAt) n'est jamais accepté en entrée — seule la configuration métier peut être modifiée. */
   updateTontine: (tenantId: string, tontineId: string, patch: TontineUpdateInput) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
       if (!tontine) return undefined;
       const nextValueType = patch.valueType ?? tontine.valueType;
-      const nextContributionAmount = patch.contributionAmount !== undefined ? patch.contributionAmount : tontine.contributionAmount;
-      if (!isValidContributionAmount(nextValueType, nextContributionAmount)) return undefined;
+      const nextConfiguration = {
+        name: patch.name ?? tontine.name,
+        valueType: nextValueType,
+        contributionAmount: patch.contributionAmount ?? tontine.contributionAmount,
+        item: patch.item ?? tontine.item,
+        quantity: patch.quantity ?? tontine.quantity,
+        unit: patch.unit ?? tontine.unit,
+      };
+      if (!isValidTontineConfiguration(nextConfiguration)) return undefined;
+      if (patchTouchesFrequency(patch)) {
+        /** `'x' in patch`, jamais `patch.x ?? tontine.x` : un patch avec `frequency: undefined` explicite doit être traité comme une tentative de vider le champ, pas comme une absence de changement (sinon la validation retomberait silencieusement sur l'ancienne valeur alors qu'Object.assign, lui, écrase bien tontine.frequency avec `undefined`). */
+        const nextFrequencyConfig = {
+          frequency: 'frequency' in patch ? patch.frequency : tontine.frequency,
+          weekday: 'weekday' in patch ? patch.weekday : tontine.weekday,
+          monthlyRule: 'monthlyRule' in patch ? patch.monthlyRule : tontine.monthlyRule,
+          monthlyDayOfMonth: 'monthlyDayOfMonth' in patch ? patch.monthlyDayOfMonth : tontine.monthlyDayOfMonth,
+          monthlyOrdinal: 'monthlyOrdinal' in patch ? patch.monthlyOrdinal : tontine.monthlyOrdinal,
+          monthlyWeekday: 'monthlyWeekday' in patch ? patch.monthlyWeekday : tontine.monthlyWeekday,
+          quarterlyRule: 'quarterlyRule' in patch ? patch.quarterlyRule : tontine.quarterlyRule,
+          quarterlyMonth: 'quarterlyMonth' in patch ? patch.quarterlyMonth : tontine.quarterlyMonth,
+          quarterlyDayOfMonth: 'quarterlyDayOfMonth' in patch ? patch.quarterlyDayOfMonth : tontine.quarterlyDayOfMonth,
+          quarterlyOrdinal: 'quarterlyOrdinal' in patch ? patch.quarterlyOrdinal : tontine.quarterlyOrdinal,
+          quarterlyWeekday: 'quarterlyWeekday' in patch ? patch.quarterlyWeekday : tontine.quarterlyWeekday,
+        };
+        if (!isValidFrequencyConfig(nextFrequencyConfig)) return undefined;
+      }
       Object.assign(tontine, patch);
+      keepOnlyFieldsForValueType(tontine);
       return tontine;
-    }),
-
-  /** Tenant-scoped en deux temps (voir tenant-scope.ts) : la tontine parente doit d'abord appartenir au tenant courant, sinon aucune donnée de cycle n'est retournée — ne jamais faire confiance au seul `tontineId` de l'URL. */
-  listCyclesByTontine: (tenantId: string, tontineId: string) =>
-    mockRequest(() => {
-      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
-      if (!tontine) return [];
-      return tontineCycles.filter((cycle) => cycle.tontineId === tontine.id);
-    }),
-  getCycle: (tenantId: string, cycleId: string) => mockRequest(() => getTenantScoped(tontineCycles, (cycle) => cycle.id === cycleId, tenantId)),
-  listCyclesByMember: (tenantId: string, memberId: string) => mockRequest(() => tontineCycles.filter((cycle) => cycle.tenantId === tenantId && cycle.members.some((member) => member.memberId === memberId))),
-
-  /** cycle_number unique par tontine (UNIQUE(tenant_id, tontine_id, cycle_number)) — valide la tontine parente tenant-scope avant toute écriture. */
-  createCycle: (tenantId: string, input: CycleInput) =>
-    mockRequest(() => {
-      const tontine = getTenantScoped(tontines, (item) => item.id === input.tontineId, tenantId);
-      if (!tontine) return undefined;
-      const duplicate = tontineCycles.some((c) => c.tontineId === input.tontineId && c.cycleNumber === input.cycleNumber);
-      if (duplicate) return undefined;
-      const cycle: TontineCycle = { id: `CYC-${String(tontineCycles.length + 1).padStart(3, '0')}`, tenantId, status: 'statusDraft', totalCollected: 0, totalPaidOut: 0, members: [], contributions: [], draws: [], activities: [{ id: `CA-${Date.now()}`, type: 'Create', description: 'Cycle créé', date: new Date().toISOString().slice(0, 10) }], ...input };
-      tontineCycles.push(cycle);
-      return cycle;
-    }),
-
-  /** Persiste la transition dans la source mock canonique (même pattern que workflowService.submitAction), après validation de la garde de transition ci-dessus — un statut cible non autorisé depuis le statut courant est rejeté (retourne undefined), jamais appliqué silencieusement. */
-  updateCycleStatus: (tenantId: string, cycleId: string, nextStatus: TontineCycleStatus) =>
-    mockRequest(() => {
-      const cycle = getTenantScoped(tontineCycles, (item) => item.id === cycleId, tenantId);
-      if (!cycle) return undefined;
-      if (!VALID_CYCLE_TRANSITIONS[cycle.status].includes(nextStatus)) return undefined;
-      cycle.status = nextStatus;
-      return cycle;
-    }),
-
-  /** Valide le TontineCycle parent tenant-scope avant toute écriture — même exigence que Phase 7 (jamais d'écriture sur un cycleId non vérifié). */
-  addCycleMember: (tenantId: string, cycleId: string, input: CycleMemberInput) =>
-    mockRequest(() => {
-      const cycle = getTenantScoped(tontineCycles, (item) => item.id === cycleId, tenantId);
-      if (!cycle) return undefined;
-      const member: CycleMember = { id: `CM-${Date.now()}`, tontineCycleId: cycle.id, collectedAmount: 0, payoutAmount: 0, status: 'statusActive', hasWon: false, ...input };
-      cycle.members.push(member);
-      return member;
-    }),
-
-  createDraw: (tenantId: string, input: DrawInput) =>
-    mockRequest(() => {
-      const cycle = getTenantScoped(tontineCycles, (item) => item.id === input.cycleId, tenantId);
-      if (!cycle) return undefined;
-      const draw: CycleDraw = { id: `CD-${Date.now()}`, tontineCycleId: cycle.id, drawNumber: input.drawNumber, date: input.date, contributionPool: input.contributionPool, winnerName: '', winnerMemberId: null, amountReceived: 0, bidAmount: 0, status: 'statusScheduled', phase: 'phaseConfiguration', settlementStatus: 'settlementPending', settlementDate: null };
-      cycle.draws.push(draw);
-      return draw;
-    }),
-
-  /** UCX2-16 « Valider le bénéficiaire » : sélection manuelle du gagnant parmi les membres éligibles, jamais un algorithme — cohérent avec « le tirage est manuel ». Valide le Cycle parent tenant-scope, puis le Draw et le CycleMember à l'intérieur de ce même cycle (jamais par id global non vérifié). */
-  declareWinner: (tenantId: string, cycleId: string, input: WinnerInput) =>
-    mockRequest(() => {
-      const cycle = getTenantScoped(tontineCycles, (item) => item.id === cycleId, tenantId);
-      if (!cycle) return undefined;
-      const draw = cycle.draws.find((item) => item.id === input.drawId);
-      const member = cycle.members.find((item) => item.id === input.winnerMemberId);
-      if (!draw || !member || draw.winnerMemberId) return undefined;
-      draw.winnerMemberId = member.id;
-      draw.winnerName = member.memberName;
-      draw.amountReceived = input.amountReceived;
-      draw.status = 'statusCompleted';
-      draw.phase = 'phaseHistory';
-      draw.settlementStatus = 'settlementCompleted';
-      draw.settlementDate = new Date().toISOString().slice(0, 10);
-      member.hasWon = true;
-      return draw;
     }),
 };
