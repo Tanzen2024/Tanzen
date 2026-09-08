@@ -5,7 +5,12 @@ import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
 import { creditService } from '@/services/credit.service';
+import { transactions } from '@/mocks/finance/transactions';
 import type { Loan } from '@/mocks/finance/loans';
+
+/** ISOLATION : l'enregistrement fait un `transactions.push(...)` sur le mock module-level — on restaure le seed exact avant/après chaque cas pour qu'aucun test ne dépende de l'ordre. */
+const TRANSACTIONS_SEED = structuredClone(transactions);
+const restoreTransactionsSeed = () => transactions.splice(0, transactions.length, ...structuredClone(TRANSACTIONS_SEED));
 
 /**
  * Mandat « REMBOURSEMENT — supprimer Prêt concerné » : le formulaire de
@@ -49,11 +54,15 @@ async function openRepaymentForm(user: ReturnType<typeof userEvent.setup>) {
 let createRepaymentSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
+  restoreTransactionsSeed();
   createRepaymentSpy = vi.spyOn(creditService, 'createRepayment').mockResolvedValue({
     id: 'RP-TEST', tenantId: 'T-001', loanId: 'L-TEST', borrower: 'Fatou Ndiaye', amount: 0, paymentDate: '2026-09-01', principalPart: 0, interestPart: 0, status: 'completed',
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  restoreTransactionsSeed();
+});
 
 describe('Finance → Transactions — REMBOURSEMENT (détermination automatique de la dette)', () => {
   it('aucun sélecteur « Prêt concerné » ; « Montant à rembourser » vient de la dette résolue et est en lecture seule', async () => {

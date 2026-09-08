@@ -88,6 +88,50 @@ export const accounts: AccountRecord[] = [
   { id: 'AC-014', tenantId: 'T-001', accountNumber: 'CS-001-CX-006', title: 'Fond de solidarité', type: 'TAUX_FIXE', amount: 40_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
 ];
 
+/**
+ * RÈGLE MÉTIER PERMANENTE TANZEN — UNICITÉ DU LIBELLÉ DE CAISSE.
+ * Deux caisses d'un même tenant ne peuvent pas porter le même libellé.
+ * L'unicité porte sur le couple (`tenantId` + libellé NORMALISÉ), jamais
+ * globalement à la plateforme : « Épargne » chez le tenant A et « Épargne »
+ * chez le tenant B sont autorisés ; « Épargne » et « epargne » chez le même
+ * tenant sont un conflit.
+ *
+ * `normalizeAccountLabel` ne sert QU'AU CONTRÔLE D'UNICITÉ — le libellé
+ * original correctement saisi (`Account.title`) est conservé tel quel pour
+ * l'affichage. Normalisation : suppression des espaces de bord, réduction des
+ * espaces multiples, insensible à la casse, insensible aux accents.
+ *   «  ÉPARGNE  » ≡ « Épargne » ≡ « epargne » ≡ « Epargne »  → « epargne »
+ *
+ * Toute fonctionnalité qui crée / modifie / importe / synchronise une caisse
+ * doit passer par ce contrôle (`hasAccountLabelConflict`).
+ */
+export function normalizeAccountLabel(label: string): string {
+  return label
+    .normalize('NFD')
+    // Retire les marques diacritiques combinantes (é→e, ç→c, à→a, …).
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * `true` si `title` entre en collision de libellé normalisé avec une AUTRE
+ * caisse du même tenant. `excludeAccountId` exclut la caisse en cours de
+ * modification — elle a toujours le droit de conserver son propre libellé.
+ */
+export function hasAccountLabelConflict(
+  existing: Pick<AccountRecord, 'id' | 'tenantId' | 'title'>[],
+  tenantId: string,
+  title: string,
+  excludeAccountId?: string,
+): boolean {
+  const normalized = normalizeAccountLabel(title);
+  return existing.some(
+    (account) => account.tenantId === tenantId && account.id !== excludeAccountId && normalizeAccountLabel(account.title) === normalized,
+  );
+}
+
 type LedgerEntry = { type: 'debit' | 'credit'; amount: number; status: string; tenantId: string; fromAccount: string; toAccount: string; date: string; recordedAt?: string };
 
 /**

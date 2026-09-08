@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
@@ -6,7 +6,14 @@ import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
 import { deriveFiscalMeetings, nearestMeeting } from '@/services/meeting.service';
 import { fiscalYears } from '@/mocks/settings/fiscal-years';
+import { transactions } from '@/mocks/finance/transactions';
 import { formatDate } from '@/lib/utils';
+
+/** ISOLATION : l'enregistrement fait un `transactions.push(...)` sur le mock module-level — on restaure le seed exact avant/après chaque cas pour qu'aucun test ne dépende de l'ordre. */
+const TRANSACTIONS_SEED = structuredClone(transactions);
+const restoreTransactionsSeed = () => transactions.splice(0, transactions.length, ...structuredClone(TRANSACTIONS_SEED));
+beforeEach(restoreTransactionsSeed);
+afterEach(restoreTransactionsSeed);
 
 /**
  * Mandat « RÈGLE CENTRALE — DATES DE RÉUNION » §6/§7/§9 — le champ « Date de

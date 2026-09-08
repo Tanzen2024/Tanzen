@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { financeService } from './finance.service';
 import { fiscalMeetingId } from '@/mocks/settings/meeting-schedule';
+import { accounts, normalizeAccountLabel } from '@/mocks/finance/accounts';
 
 describe('financeService — Accounts', () => {
   it('ALLOW: listAccounts returns only accounts of the requesting tenant', async () => {
@@ -512,5 +513,63 @@ describe('financeService — createTransaction × réunion d\'exercice fiscal (m
     expect(transaction?.meetingId).toBeUndefined();
     expect(transaction?.meetingDate).toBeUndefined();
     expect(transaction?.recordedAt).toBeTruthy();
+  });
+});
+
+/**
+ * RÈGLE MÉTIER PERMANENTE — UNICITÉ DU LIBELLÉ DE CAISSE (tenant + libellé
+ * NORMALISÉ : trim, espaces réduits, sans casse, sans accent). Le contrôle est
+ * autoritaire côté service (`createAccount` / `updateAccount`), pas seulement
+ * dans le formulaire React.
+ */
+describe('financeService — unicité du libellé de caisse (règle métier normalisée)', () => {
+  it('TEST 1-5 : « X » entre en conflit avec « x », « X » majuscule, sa forme sans accent, ses variantes d’espacement — dans le même tenant', async () => {
+    const base = `Réunion Août ${Date.now()}`;
+    const first = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: base, type: 'LIBRE', amount: null, description: '' });
+    expect(first).toBeTruthy();
+    const conflicts = [
+      base,                                                     // identique
+      base.toLowerCase(),                                       // casse
+      base.toUpperCase(),                                       // casse
+      base.normalize('NFD').replace(/\p{Diacritic}/gu, ''),     // accents retirés
+      `   ${base}   `,                                          // espaces de bord
+      base.replace(/ /g, '    '),                               // espaces multiples
+    ];
+    for (const title of conflicts) {
+      expect(await financeService.createAccount('T-001', 'Coopérative Sutura', { title, type: 'LIBRE', amount: null, description: '' })).toBeNull();
+    }
+  });
+
+  it('TEST 6 : le même libellé est autorisé dans un AUTRE tenant (unicité par tenant, jamais globale)', async () => {
+    const label = `Caisse partagée ${Date.now()}`;
+    expect(await financeService.createAccount('T-001', 'Coopérative Sutura', { title: label, type: 'LIBRE', amount: null, description: '' })).toBeTruthy();
+    expect(await financeService.createAccount('T-002', 'Tontine Horizon', { title: `  ${label.toUpperCase()}  `, type: 'LIBRE', amount: null, description: '' })).toBeTruthy();
+  });
+
+  it('TEST 7 : une caisse peut être ré-enregistrée en conservant son propre libellé', async () => {
+    const created = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Garde son libellé ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    const updated = await financeService.updateAccount('T-001', created!.id, { title: created!.title, description: 'mise à jour' });
+    expect(updated?.title).toBe(created!.title);
+  });
+
+  it('TEST 8 : une caisse ne peut pas prendre le libellé normalisé d’une AUTRE caisse du même tenant', async () => {
+    const stamp = Date.now();
+    const alpha = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Caisse Alpha ${stamp}`, type: 'LIBRE', amount: null, description: '' });
+    const beta = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Caisse Beta ${stamp}`, type: 'LIBRE', amount: null, description: '' });
+    expect(await financeService.updateAccount('T-001', beta!.id, { title: `  CAISSE ALPHA ${stamp}  ` })).toBeNull();
+    const alphaAfter = await financeService.getAccount('T-001', alpha!.id);
+    expect(alphaAfter?.title).toBe(`Caisse Alpha ${stamp}`);
+  });
+
+  it('ANOMALIE DE DONNÉES CONNUE (seed) : AC-002 « Épargne » et AC-009 « Epargne » (T-001) sont un conflit selon la règle — signalé, JAMAIS corrigé/fusionné automatiquement', () => {
+    const ac002 = accounts.find((account) => account.id === 'AC-002');
+    const ac009 = accounts.find((account) => account.id === 'AC-009');
+    expect(ac002?.tenantId).toBe('T-001');
+    expect(ac009?.tenantId).toBe('T-001');
+    // Libellés distincts à l'affichage, mais équivalents après normalisation → conflit.
+    expect(ac002?.title).not.toBe(ac009?.title);
+    expect(normalizeAccountLabel(ac002!.title)).toBe(normalizeAccountLabel(ac009!.title));
+    // Le seed n'est pas réécrit : correction métier humaine requise (renommer AC-009,
+    // ex. « Épargne volontaire », ou fusionner les deux caisses si doublon réel).
   });
 });

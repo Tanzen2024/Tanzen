@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
@@ -78,22 +78,68 @@ describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (ten
     expect(within(table).getAllByRole('row')).toHaveLength(1 + 6);
   });
 
-  it('AC02/AC11/TEST « recalcul du filtre après changement de Fiscal Year »: changer d’exercice recalcule les transactions et réinitialise un adhérent devenu invalide', async () => {
+  it('§2/§3 CHAMP EXERCICE EN LECTURE SEULE : reflète l’exercice global du header, n’est pas un second sélecteur, et affiche aussi les bornes de dates', async () => {
     renderFinance('/finance/transactions');
     await screen.findByRole('table');
+    const fiscalYearField = screen.getByLabelText('Exercice') as HTMLInputElement;
+    // Un <input readOnly>, jamais un <select> permettant de changer d'exercice.
+    expect(fiscalYearField.tagName).toBe('INPUT');
+    expect(fiscalYearField).toHaveAttribute('readonly');
+    expect(screen.queryByRole('combobox', { name: 'Exercice' })).not.toBeInTheDocument();
+    expect(fiscalYearField.value).toBe('Exercice 2026');
+    // Bornes de l'exercice toujours affichées.
+    expect(screen.getByText('Date début')).toBeInTheDocument();
+    expect(screen.getByText('Date fin')).toBeInTheDocument();
+  });
+
+  it('§1 FILTRE « Libelle de caisse » : label exact, option « Toutes les caisses » + les libellés réels des caisses du tenant (jamais codés en dur)', async () => {
+    renderFinance('/finance/transactions');
+    await screen.findByRole('table');
+    const accountSelect = screen.getByLabelText('Libelle de caisse');
+    expect(within(accountSelect).getByRole('option', { name: 'Toutes les caisses' })).toBeInTheDocument();
+    // Libellés réels seedés pour T-001 (accounts.ts) — présents, non inventés.
+    for (const title of ['Trésorerie', 'Compte courant', 'Inscription', 'Fond de solidarité']) {
+      expect(within(accountSelect).getByRole('option', { name: title })).toBeInTheDocument();
+    }
+    // Aucune caisse d'un autre tenant.
+    expect(within(accountSelect).queryByRole('option', { name: 'TH-002-ÉPG' })).not.toBeInTheDocument();
+  });
+
+  it('§4/§5 SÉLECTION D’UNE CAISSE : liste, compteur ET KPI (débit/crédit/solde) ne portent plus que sur cette caisse', async () => {
+    renderFinance('/finance/transactions');
+    const table = await screen.findByRole('table');
     const user = userEvent.setup();
-    const memberSelect = screen.getByLabelText('Adhérent') as HTMLSelectElement;
-    await user.selectOptions(memberSelect, 'Fatou Ndiaye');
-    expect(memberSelect.value).not.toBe('');
+    const kpi = (label: string, target: string) => {
+      const card = screen.getByText(label).closest('article') as HTMLElement;
+      return within(card).getByText((content) => content.replace(/\s/g, '') === target);
+    };
 
-    const fiscalYearSelect = screen.getByLabelText('Exercice') as HTMLSelectElement;
-    await user.selectOptions(fiscalYearSelect, 'Exercice 2025');
+    // Toutes les caisses → 6 transactions, totaux du mandat (1 375 000 / 220 000 / -1 155 000).
+    expect(within(table).getAllByRole('row')).toHaveLength(1 + 6);
+    expect(kpi('Total débit', '1375000FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '220000FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '-1155000FCFA')).toBeInTheDocument();
 
-    // Exercice 2025 : aucune transaction seedée pour T-001 → adhérent réinitialisé, plus aucun adhérent disponible.
-    expect(memberSelect.value).toBe('');
-    expect(await screen.findByText('Aucun adhérent n’a effectué de transaction pour l’exercice sélectionné.')).toBeInTheDocument();
-    expect(await screen.findByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
-    expect(within(memberSelect).getAllByRole('option')).toHaveLength(1);
+    // Caisse « Trésorerie » (CS-001-TRÉS) : TR-002 (débit 850 000), TR-004 (crédit 120 000), TR-010 (débit 500 000).
+    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Trésorerie');
+    expect(within(table).getAllByRole('row')).toHaveLength(1 + 3);
+    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
+    expect(within(table).getByText('Fatou Ndiaye')).toBeInTheDocument();
+    // Total débit = 1 350 000, Total crédit = 120 000, Solde = -1 230 000 — uniquement Trésorerie.
+    expect(kpi('Total débit', '1350000FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '120000FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '-1230000FCFA')).toBeInTheDocument();
+  });
+
+  it('§14 CAISSE SANS TRANSACTION : la caisse reste sélectionnable, la liste est vide et les KPI valent 0', async () => {
+    renderFinance('/finance/transactions');
+    const table = await screen.findByRole('table');
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Inscription');
+    expect(within(table).queryByText('Fatou Ndiaye')).not.toBeInTheDocument();
+    expect(screen.getByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
+    const debitCard = screen.getByText('Total débit').closest('article') as HTMLElement;
+    expect(within(debitCard).getByText((c) => c.replace(/\s/g, '') === '0FCFA')).toBeInTheDocument();
   });
 
   it('FILTRES DU JOURNAL : les filtres Montant min / Montant max ont été retirés, la barre reste centrée sur les filtres métier', async () => {
@@ -108,6 +154,82 @@ describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (ten
     expect(screen.queryByLabelText('Montant max')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Montant min')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Montant max')).not.toBeInTheDocument();
+  });
+
+  const kpi = (label: string, target: string) => {
+    const card = screen.getByText(label).closest('article') as HTMLElement;
+    return within(card).getByText((content) => content.replace(/\s/g, '') === target);
+  };
+
+  it('§1 PÉRIODE PAR DÉFAUT : « Date début » / « Date fin » sont initialisées sur les bornes réelles de l’exercice sélectionné, bornées par min/max', async () => {
+    renderFinance('/finance/transactions');
+    await screen.findByRole('table');
+    const start = screen.getByLabelText('Date début') as HTMLInputElement;
+    const end = screen.getByLabelText('Date fin') as HTMLInputElement;
+    expect(start.type).toBe('date');
+    expect(start.value).toBe('2026-01-01');
+    expect(end.value).toBe('2026-12-31');
+    // §9 : impossible de sortir des limites de l'exercice.
+    expect(start).toHaveAttribute('min', '2026-01-01');
+    expect(start).toHaveAttribute('max', '2026-12-31');
+    expect(end).toHaveAttribute('min', '2026-01-01');
+    expect(end).toHaveAttribute('max', '2026-12-31');
+    // Période complète → les 6 transactions de l'exercice, totaux du mandat.
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(1 + 6);
+    expect(kpi('Total débit', '1375000FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '220000FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '-1155000FCFA')).toBeInTheDocument();
+  });
+
+  it('§2/§3/§4 PÉRIODE PARTIELLE : restreindre la période refiltre la liste ET recalcule débit / crédit / solde / nombre', async () => {
+    renderFinance('/finance/transactions');
+    const table = await screen.findByRole('table');
+    // 2026-08-01 → 2026-08-09 : TR-012 (crédit 50 000), TR-010 (débit 500 000), TR-006 (débit 25 000), TR-004 (crédit 120 000).
+    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-09' } });
+    expect(within(table).getAllByRole('row')).toHaveLength(1 + 4);
+    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
+    expect(within(table).getAllByText('Fatou Ndiaye')).toHaveLength(1);
+    expect(kpi('Total débit', '525000FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '170000FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '-355000FCFA')).toBeInTheDocument();
+  });
+
+  it('§5 CAISSE + PÉRIODE : les deux filtres se cumulent, KPI sur ce périmètre exact', async () => {
+    renderFinance('/finance/transactions');
+    const table = await screen.findByRole('table');
+    const user = userEvent.setup();
+    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-01' } });
+    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-09' } });
+    // Trésorerie (CS-001-TRÉS) sur cette période : TR-010 (débit 500 000, sortie) + TR-004 (crédit 120 000, Cheikh Diop → Trésorerie).
+    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Trésorerie');
+    expect(within(table).getAllByRole('row')).toHaveLength(1 + 2);
+    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
+    expect(kpi('Total débit', '500000FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '120000FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '-380000FCFA')).toBeInTheDocument();
+  });
+
+  it('§8/§16 PÉRIODE SANS TRANSACTION : liste vide, 0 transaction, tous les KPI à 0', async () => {
+    renderFinance('/finance/transactions');
+    const table = await screen.findByRole('table');
+    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-09-30' } });
+    expect(within(table).queryByText('Fatou Ndiaye')).not.toBeInTheDocument();
+    expect(screen.getByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
+    expect(kpi('Total débit', '0FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '0FCFA')).toBeInTheDocument();
+    expect(kpi('Solde', '0FCFA')).toBeInTheDocument();
+  });
+
+  it('§10 PÉRIODE INVALIDE (début > fin) : erreur signalée, aucune donnée renvoyée', async () => {
+    renderFinance('/finance/transactions');
+    await screen.findByRole('table');
+    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-20' } });
+    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-10' } });
+    expect(screen.getByText('La date de début doit être antérieure ou égale à la date de fin.')).toBeInTheDocument();
+    expect(kpi('Total débit', '0FCFA')).toBeInTheDocument();
+    expect(kpi('Total crédit', '0FCFA')).toBeInTheDocument();
   });
 
   it('IMPORTANT : le filtre Sous-catégorie n’apparaît que pour Catégorie = AUTRES', async () => {
@@ -129,5 +251,21 @@ describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (ten
     expect(within(subSelect).getByRole('option', { name: 'Frais' })).toBeInTheDocument();
     // 9 sous-catégories AUTRES + l'option « Toutes »
     expect(within(subSelect).getAllByRole('option')).toHaveLength(10);
+  });
+
+  it('§FILTRE / TEST 9 : « Libelle de caisse » n’affiche jamais deux options de libellé normalisé identique (anomalie AC-002 « Épargne » / AC-009 « Epargne »)', async () => {
+    renderFinance('/finance/transactions');
+    await screen.findByRole('table');
+    const accountSelect = screen.getByLabelText('Libelle de caisse');
+    const norm = (label: string) => label.normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const optionLabels = within(accountSelect)
+      .getAllByRole('option')
+      .map((option) => option.textContent ?? '')
+      .filter((label) => label !== 'Toutes les caisses')
+      .map(norm);
+    // Aucun libellé normalisé en double.
+    expect(new Set(optionLabels).size).toBe(optionLabels.length);
+    // « epargne » n'apparaît qu'une fois (AC-002, porteuse de transactions, est conservée ; AC-009 est masquée).
+    expect(optionLabels.filter((label) => label === 'epargne')).toHaveLength(1);
   });
 });

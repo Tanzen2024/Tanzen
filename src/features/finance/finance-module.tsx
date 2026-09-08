@@ -22,7 +22,7 @@ import { meetingService } from '@/services/meeting.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import { accountEntryEffect, type Account, type AccountType } from '@/mocks/finance/accounts';
+import { accountEntryEffect, normalizeAccountLabel, type Account, type AccountType } from '@/mocks/finance/accounts';
 import type { Member } from '@/mocks/organization/members';
 import type { Transaction, TransactionType } from '@/mocks/finance/transactions';
 import type { Loan } from '@/mocks/finance/loans';
@@ -142,14 +142,18 @@ function AccountCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   const [title, setTitle] = useState(''); const [type, setType] = useState<AccountType>('TAUX_FIXE'); const [amount, setAmount] = useState(''); const [description, setDescription] = useState('');
   const [errors, setErrors] = useState<{ title?: string; amount?: string }>({});
+  /** Caisses du tenant — sert au garde-fou de saisie (unicité du libellé, règle métier). La validation autoritaire reste côté service (`createAccount`). */
+  const { data: existingAccounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
   const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.createAccount>>, AccountCreateInput>({
     mutationFn: (input) => financeService.createAccount(currentTenant.id, currentTenant.name, input),
     invalidateKeys: [queryKeys.finance.accounts(currentTenant.id)],
-    onSuccess: (account) => { if (!account) { notify.error(t('finance', 'duplicateTitle')); return; } notify.success(t('finance', 'accountCreated')); navigate(`/finance/accounts/${account.id}`); },
+    onSuccess: (account) => { if (!account) { notify.error(t('finance', 'duplicateCashLabel')); return; } notify.success(t('finance', 'accountCreated')); navigate(`/finance/accounts/${account.id}`); },
   });
   const handleSave = () => {
     const nextErrors: typeof errors = {};
     if (!title.trim()) nextErrors.title = t('finance', 'fieldRequired');
+    // Règle métier : deux caisses d'un même tenant ne peuvent pas avoir le même libellé (comparaison normalisée : casse/accents/espaces).
+    else if (existingAccounts.some((account) => normalizeAccountLabel(account.title) === normalizeAccountLabel(title))) nextErrors.title = t('finance', 'duplicateCashLabel');
     if (type === 'TAUX_FIXE') { if (!amount) nextErrors.amount = t('finance', 'fieldRequired'); else if (Number(amount) <= 0) nextErrors.amount = t('finance', 'invalidAmount'); }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -176,12 +180,14 @@ function AccountCreate({ t }: { t: T }) {
 function AccountEdit({ t }: { t: T }) {
   const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
   const { data: account, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.finance.account(id), currentTenant.id], queryFn: () => financeService.getAccount(currentTenant.id, id) });
+  /** Autres caisses du tenant — garde-fou d'unicité du libellé (la caisse courante `id` s'exclut elle-même). Validation autoritaire côté service (`updateAccount`). */
+  const { data: existingAccounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
   const [form, setForm] = useState<{ title: string; type: AccountType; amount: string; description: string } | null>(null);
   const [errors, setErrors] = useState<{ title?: string; amount?: string }>({});
   const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.updateAccount>>, AccountUpdateInput>({
     mutationFn: (patch) => financeService.updateAccount(currentTenant.id, id, patch),
     invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
-    onSuccess: (updated) => { if (!updated) { notify.error(t('finance', 'duplicateTitle')); return; } notify.success(t('finance', 'accountUpdated')); navigate(`/finance/accounts/${id}`); },
+    onSuccess: (updated) => { if (!updated) { notify.error(t('finance', 'duplicateCashLabel')); return; } notify.success(t('finance', 'accountUpdated')); navigate(`/finance/accounts/${id}`); },
   });
   if (isLoading) return <Page title={t('finance', 'editAccount')} description=""><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('finance', 'editAccount')} description=""><ErrorState onRetry={refetch} /></Page>;
@@ -191,6 +197,8 @@ function AccountEdit({ t }: { t: T }) {
   const handleSave = () => {
     const nextErrors: typeof errors = {};
     if (!current.title.trim()) nextErrors.title = t('finance', 'fieldRequired');
+    // Règle métier : le nouveau libellé ne doit pas entrer en collision (normalisée) avec une AUTRE caisse du tenant — la caisse courante garde le droit à son propre libellé.
+    else if (existingAccounts.some((other) => other.id !== id && normalizeAccountLabel(other.title) === normalizeAccountLabel(current.title))) nextErrors.title = t('finance', 'duplicateCashLabel');
     if (current.type === 'TAUX_FIXE') { if (!current.amount) nextErrors.amount = t('finance', 'fieldRequired'); else if (Number(current.amount) <= 0) nextErrors.amount = t('finance', 'invalidAmount'); }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
@@ -370,11 +378,17 @@ function transactionJournalColumns(t: T, memberById: Map<string, Member>, accoun
  * Adhérent est reconstruit exclusivement à partir des `Transaction.memberId`
  * réellement présents dans ce périmètre — un adhérent sans transaction dans
  * l'exercice sélectionné n'apparaît jamais dans la liste.
+ *
+ * Deux champs supplémentaires (mandat « filtrage par exercice fiscal et par
+ * caisse ») : un reflet EN LECTURE SEULE de l'exercice du header (§2/§3, jamais
+ * un second sélecteur) et le filtre « Libelle de caisse » (§1/§4) qui restreint
+ * le périmètre (`scoped`) en amont de tout le reste — liste, compteur et KPI
+ * (Total débit / Total crédit / Solde = crédit − débit, règle inchangée).
  */
 function TransactionsList({ t }: { t: T }) {
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
-  const { selectedFiscalYear, fiscalYears, selectedFiscalYearId, selectFiscalYear, isLoading: isFiscalYearLoading } = useFiscalYear();
+  const { selectedFiscalYear, fiscalYears, isLoading: isFiscalYearLoading } = useFiscalYear();
   /** `placeholderData: keepPreviousData` — un changement d'exercice change la clé de requête ; sans ça, `isLoading` repasserait à `true` à chaque changement et ferait disparaître la carte Fiscal Year/Adhérent elle-même (plus moyen de rechanger d'exercice pendant le chargement). Les anciennes données restent affichées le temps du rechargement, jamais un écran vide entre deux exercices. */
   const { data: allTransactions = [], isLoading: isTransactionsLoading, isError, refetch } = useQuery({
     queryKey: queryKeys.finance.transactionsByFiscalYear(currentTenant.id, selectedFiscalYear?.id),
@@ -384,22 +398,114 @@ function TransactionsList({ t }: { t: T }) {
   });
   const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
   const memberById = useMemo(() => new Map<string, Member>(members.map((member) => [member.id, member])), [members]);
+  /** Caisses du tenant — requête indépendante de l'exercice (les `Account` ne portent pas de `fiscalYearId`), donc jamais rechargée sur un simple changement d'exercice : seul le sous-ensemble « pertinent pour l'exercice » est recalculé côté client (`availableAccounts`). */
+  const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
 
   const [memberId, setMemberId] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  /** Bornes du filtre « période » (§1) — chaînes ISO `YYYY-MM-DD`, comparables lexicographiquement avec `Transaction.date` (même format). Initialisées/réinitialisées aux bornes de l'exercice courant (voir l'effet ci-dessous). */
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
   const [search, setSearch] = useState(''); const [category, setCategory] = useState('all'); const [subcategory, setSubcategory] = useState('all'); const [status, setStatus] = useState('all'); const [type, setType] = useState('all');
+
+  /**
+   * §1/§8 : « Date début » / « Date fin » ne sont JAMAIS codées en dur — elles
+   * valent par défaut les bornes réelles de l'exercice sélectionné
+   * (`FiscalYear.startDate`/`endDate`, la même source que le champ Exercice en
+   * lecture seule et que la requête `listTransactionsInDateRange`). Un changement
+   * d'exercice depuis le header les remet donc automatiquement sur les bornes du
+   * nouvel exercice (§8.2/§8.3), sans conserver la période de l'ancien.
+   */
+  const fiscalYearStart = selectedFiscalYear?.startDate ?? '';
+  const fiscalYearEnd = selectedFiscalYear?.endDate ?? '';
+  useEffect(() => {
+    setPeriodStart(fiscalYearStart);
+    setPeriodEnd(fiscalYearEnd);
+  }, [fiscalYearStart, fiscalYearEnd]);
+  /** §9 : la période reste toujours bornée par l'exercice — toute saisie hors limites est corrigée à la borne la plus proche (le `min`/`max` natif de l'input couvre le clavier, ceci couvre tout le reste). */
+  const clampToFiscalYear = (value: string) => {
+    if (!value || !selectedFiscalYear) return value;
+    if (value < fiscalYearStart) return fiscalYearStart;
+    if (value > fiscalYearEnd) return fiscalYearEnd;
+    return value;
+  };
+  /** §10 : période incohérente (début > fin) — signalée sous le champ, et AUCUNE donnée n'est renvoyée (jamais une recherche incohérente). */
+  const periodInvalid = Boolean(periodStart && periodEnd && periodStart > periodEnd);
   /** Le filtre sous-catégorie n'a de sens que pour la catégorie AUTRES (mandat §24 : « dépendant de la catégorie sélectionnée ») — on le réinitialise dès qu'on quitte AUTRES. */
   useEffect(() => { if (category !== 'AUTRES' && subcategory !== 'all') setSubcategory('all'); }, [category, subcategory]);
 
-  /** Adhérents réellement porteurs d'au moins une transaction dans le périmètre courant (jamais `Account.memberIds`, AC08) — dédoublonnés via `Set`, triés par nom. */
-  const memberIdsWithTransactions = useMemo(() => new Set(allTransactions.flatMap((tr) => (tr.memberId ? [tr.memberId] : []))), [allTransactions]);
+  /**
+   * Caisses proposées dans le filtre « Libelle de caisse » (mandat §1/§7) —
+   * jamais codées en dur : `financeService.listAccounts` (tenant-scopé),
+   * restreintes aux caisses pertinentes pour l'exercice courant, c.-à-d.
+   * ouvertes au plus tard à la clôture de l'exercice OU déjà porteuses d'au
+   * moins une transaction dans son périmètre. Un changement d'exercice recompose
+   * donc cette liste. Triées par libellé.
+   */
+  const accountNumbersInScope = useMemo(() => new Set(allTransactions.flatMap((tr) => [tr.fromAccount, tr.toAccount])), [allTransactions]);
+  const availableAccounts = useMemo(() => {
+    if (!selectedFiscalYear) return [];
+    const inScope = accounts.filter((account) => account.openedOn <= selectedFiscalYear.endDate || accountNumbersInScope.has(account.accountNumber));
+    /**
+     * Règle métier d'unicité du libellé de caisse (`normalizeAccountLabel`) : le
+     * filtre ne doit JAMAIS proposer deux options de libellé normalisé identique.
+     * Depuis la mise en place du contrôle (create/update), aucun nouveau conflit
+     * ne peut apparaître ; ce dédoublonnage protège en plus des anomalies de
+     * données pré-existantes (cf. AC-002 « Épargne » / AC-009 « Epargne »). En
+     * cas de collision, on garde une seule caisse par libellé : priorité à celle
+     * qui porte des transactions dans l'exercice, puis au plus petit `id`
+     * (déterministe) — jamais de fusion ni de modification des données.
+     */
+    const byLabel = new Map<string, (typeof inScope)[number]>();
+    for (const account of inScope) {
+      const key = normalizeAccountLabel(account.title);
+      const kept = byLabel.get(key);
+      if (!kept) { byLabel.set(key, account); continue; }
+      const accountHasTx = accountNumbersInScope.has(account.accountNumber);
+      const keptHasTx = accountNumbersInScope.has(kept.accountNumber);
+      if ((accountHasTx && !keptHasTx) || (accountHasTx === keptHasTx && account.id < kept.id)) byLabel.set(key, account);
+    }
+    return Array.from(byLabel.values()).sort((a, b) => a.title.localeCompare(b.title));
+  }, [accounts, accountNumbersInScope, selectedFiscalYear]);
+  /** §7 : une caisse sélectionnée qui n'appartient plus à l'exercice courant (après changement d'exercice) retombe sur « Toutes les caisses », jamais conservée silencieusement. */
+  useEffect(() => { if (accountNumber && !availableAccounts.some((account) => account.accountNumber === accountNumber)) setAccountNumber(''); }, [availableAccounts, accountNumber]);
+
+  /**
+   * Filtre « Libelle de caisse » (mandat §4) — une transaction appartient à la
+   * caisse dès que celle-ci figure sur l'une des deux extrémités de l'écriture
+   * (`fromAccount`/`toAccount`), même prédicat que la fiche caisse
+   * (`accountLedgerEntries`). Appliqué EN AMONT de tous les autres filtres → la
+   * liste, le compteur, les KPI (Total débit / Total crédit / Solde) et la liste
+   * des adhérents disponibles en héritent tous.
+   */
+  /**
+   * §2/§3/§13/§18 : la période est un VRAI filtre de données, appliqué EN AMONT
+   * de la caisse et de l'adhérent — le même dataset borné dans le temps sert
+   * ensuite à la liste, au compteur, aux KPI et à la liste des adhérents
+   * disponibles. Champ de date métier = `Transaction.date` (celui-là même
+   * qu'utilise déjà `listTransactionsInDateRange` pour borner l'exercice, et non
+   * `meetingDate`). Bornes inclusives. Période incohérente (§10) → dataset vide.
+   */
+  const periodScoped = useMemo(() => {
+    if (periodInvalid) return [];
+    return allTransactions.filter((tr) => (!periodStart || tr.date >= periodStart) && (!periodEnd || tr.date <= periodEnd));
+  }, [allTransactions, periodStart, periodEnd, periodInvalid]);
+
+  const scoped = useMemo(
+    () => (accountNumber ? periodScoped.filter((tr) => tr.fromAccount === accountNumber || tr.toAccount === accountNumber) : periodScoped),
+    [periodScoped, accountNumber],
+  );
+
+  /** Adhérents réellement porteurs d'au moins une transaction dans le périmètre courant (tenant + exercice + période + caisse ; jamais `Account.memberIds`, AC08) — dédoublonnés via `Set`, triés par nom. */
+  const memberIdsWithTransactions = useMemo(() => new Set(scoped.flatMap((tr) => (tr.memberId ? [tr.memberId] : []))), [scoped]);
   const availableMembers = useMemo(
     () => Array.from(memberIdsWithTransactions).map((id) => memberById.get(id)).filter((member): member is Member => Boolean(member)).sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`)),
     [memberIdsWithTransactions, memberById],
   );
-  /** Changement d'exercice (ou de tenant) → un adhérent sélectionné qui n'a plus de transaction dans le nouveau périmètre est désélectionné (mandat §4), jamais laissé sélectionné silencieusement. */
+  /** Changement d'exercice / de caisse (ou de tenant) → un adhérent sélectionné qui n'a plus de transaction dans le nouveau périmètre est désélectionné (mandat §4/§6), jamais laissé sélectionné silencieusement. */
   useEffect(() => { if (memberId && !memberIdsWithTransactions.has(memberId)) setMemberId(''); }, [memberIdsWithTransactions, memberId]);
 
-  const eligible = memberId ? allTransactions.filter((tr) => tr.memberId === memberId) : allTransactions;
+  const eligible = memberId ? scoped.filter((tr) => tr.memberId === memberId) : scoped;
   const filtered = eligible.filter((tr) => {
     const matchesSearch = `${tr.reference} ${tr.description} ${tr.fromAccount} ${tr.toAccount}`.toLowerCase().includes(search.toLowerCase());
     const matchesCategory = category === 'all' || tr.category === category;
@@ -408,7 +514,7 @@ function TransactionsList({ t }: { t: T }) {
     const matchesType = type === 'all' || tr.type === type;
     return matchesSearch && matchesCategory && matchesSubcategory && matchesStatus && matchesType;
   });
-  /** KPI recalculés sur `filtered` (mandat §11) — respectent donc déjà tenant + exercice + adhérent + les filtres secondaires actifs. */
+  /** KPI recalculés sur `filtered` (mandat §4/§11/§12) — respectent donc déjà tenant + exercice + période + caisse + adhérent + les filtres secondaires actifs. Règle métier inchangée : Solde = Total crédit − Total débit (sens = `Transaction.type`). */
   const totalDebit = filtered.filter((tr) => tr.type === 'debit').reduce((sum, tr) => sum + tr.amount, 0);
   const totalCredit = filtered.filter((tr) => tr.type === 'credit').reduce((sum, tr) => sum + tr.amount, 0);
 
@@ -422,21 +528,28 @@ function TransactionsList({ t }: { t: T }) {
   if (fiscalYears.length === 0) return <Page title={t('finance', 'transactionsTitle')} description={t('finance', 'transactionsDescription')}><EmptyState icon={CalendarClock} title={t('finance', 'noFiscalYearConfigured')} /></Page>;
 
   /**
-   * La carte Fiscal Year/Adhérent (mandat §3-§4 : filtre principal, doit
-   * rester manipulable) reste toujours montée dès que les exercices sont
-   * chargés — seule la zone KPI/DataTable en dessous bascule entre skeleton/
-   * erreur/contenu selon `isTableLoading`/`isError`. Avant ce découpage, tout
-   * changement d'exercice masquait le sélecteur lui-même pendant le
-   * rechargement (plus aucun moyen de rechanger d'exercice).
+   * La carte de filtres (Exercice lecture seule · Libelle de caisse · Adhérent ·
+   * dates d'exercice) reste toujours montée dès que les exercices sont chargés —
+   * seule la zone KPI/DataTable en dessous bascule entre skeleton/erreur/contenu
+   * selon `isTableLoading`/`isError`. L'exercice courant provient du contexte
+   * global `useFiscalYear()` (sélecteur du header) ; il est ici purement
+   * affiché, comme ses bornes de dates.
    */
   return <Page title={t('finance', 'transactionsTitle')} description={t('finance', 'transactionsDescription')} actions={<PermissionGate permission="transactions.create"><Button onClick={() => navigate('/finance/transactions/create')}><Plus size={16} />{t('finance', 'addTransaction')}</Button></PermissionGate>}>
     <Card>
-      <CardContent className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+      <CardContent className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-1.5">
           <Label htmlFor="tr-fiscal-year">{t('finance', 'fiscalYear')}</Label>
-          <select id="tr-fiscal-year" value={selectedFiscalYearId ?? ''} onChange={(event) => selectFiscalYear(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-            {fiscalYears.map((year) => <option key={year.id} value={year.id}>{year.label}</option>)}
+          {/* §2/§3 : simple reflet, EN LECTURE SEULE, de l'exercice choisi dans le sélecteur global du header (`useFiscalYear()`) — jamais un second moyen de changer d'exercice. */}
+          <Input id="tr-fiscal-year" value={selectedFiscalYear?.label ?? ''} readOnly tabIndex={-1} aria-readonly="true" className="cursor-default bg-muted text-muted-foreground" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="tr-account">{t('finance', 'cashLabel')}</Label>
+          <select id="tr-account" value={accountNumber} onChange={(event) => setAccountNumber(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+            <option value="">{t('finance', 'allCashboxes')}</option>
+            {availableAccounts.map((account) => <option key={account.id} value={account.accountNumber}>{account.title}</option>)}
           </select>
+          {availableAccounts.length === 0 && <p className="text-[11px] text-muted-foreground">{t('finance', 'noCashboxForFiscalYear')}</p>}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="tr-member">{t('finance', 'adherent')}</Label>
@@ -446,8 +559,22 @@ function TransactionsList({ t }: { t: T }) {
           </select>
           {availableMembers.length === 0 && <p className="text-[11px] text-muted-foreground">{t('finance', 'noMembersWithTransactions')}</p>}
         </div>
-        {selectedFiscalYear && <Info label={t('finance', 'startDate')} value={<DateDisplay value={selectedFiscalYear.startDate} />} icon={CalendarClock} />}
-        {selectedFiscalYear && <Info label={t('finance', 'endDate')} value={<DateDisplay value={selectedFiscalYear.endDate} />} icon={CalendarClock} />}
+        {/*
+          * §1/§2/§15 : « Date début » / « Date fin » sont de VRAIS filtres de
+          * période, modifiables — pas un simple affichage. Par défaut = bornes de
+          * l'exercice sélectionné (jamais codées en dur) ; `min`/`max` = ces mêmes
+          * bornes (§9) ; toute modification refiltre immédiatement liste, compteur
+          * et KPI (§11). Seul le champ Exercice reste en lecture seule.
+          */}
+        <div className="space-y-1.5">
+          <Label htmlFor="tr-period-start">{t('finance', 'startDate')}</Label>
+          <Input id="tr-period-start" type="date" value={periodStart} min={fiscalYearStart} max={fiscalYearEnd} disabled={!selectedFiscalYear} aria-invalid={periodInvalid} onChange={(event) => setPeriodStart(clampToFiscalYear(event.target.value))} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="tr-period-end">{t('finance', 'endDate')}</Label>
+          <Input id="tr-period-end" type="date" value={periodEnd} min={fiscalYearStart} max={fiscalYearEnd} disabled={!selectedFiscalYear} aria-invalid={periodInvalid} onChange={(event) => setPeriodEnd(clampToFiscalYear(event.target.value))} />
+          <FieldError message={periodInvalid ? t('finance', 'periodStartAfterEnd') : undefined} />
+        </div>
       </CardContent>
     </Card>
 
@@ -460,7 +587,7 @@ function TransactionsList({ t }: { t: T }) {
 
       <div className="mt-5 space-y-3">
         <FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchTransaction')} filters={<><select value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t('finance', 'category')} className={selectClass}><option value="all">{t('finance', 'allCategories')}</option>{TRANSACTION_CATEGORIES.map((c) => <option key={c} value={c}>{t('finance', categoryLabelKey(c))}</option>)}</select>{category === 'AUTRES' && <select value={subcategory} onChange={(e) => setSubcategory(e.target.value)} aria-label={t('finance', 'subcategory')} className={selectClass}><option value="all">{t('finance', 'allSubcategories')}</option>{AUTRES_SUBCATEGORIES.map((s) => <option key={s} value={s}>{t('finance', subcategoryLabelKey(s))}</option>)}</select>}<select value={status} onChange={(e) => setStatus(e.target.value)} aria-label={t('finance', 'status')} className={selectClass}><option value="all">{t('finance', 'allStatuses')}</option><option value="completed">{t('finance', 'completed')}</option><option value="pending">{t('finance', 'pending')}</option><option value="failed">{t('finance', 'failed')}</option><option value="cancelled">{t('finance', 'cancelled')}</option></select><select value={type} onChange={(e) => setType(e.target.value)} aria-label={t('finance', 'type')} className={selectClass}><option value="all">{t('finance', 'allTypes')}</option><option value="debit">{t('finance', 'debit')}</option><option value="credit">{t('finance', 'credit')}</option></select></>} />
-        <div className="text-xs text-muted-foreground">{formatNumber(filtered.length)} / {formatNumber(allTransactions.length)} · {t('finance', 'transactionCountLabel')}</div>
+        <div className="text-xs text-muted-foreground">{formatNumber(filtered.length)} / {formatNumber(scoped.length)} · {t('finance', 'transactionCountLabel')}</div>
         <DataTable columns={columns} rows={filtered} onRowClick={(row) => navigate(`/finance/transactions/${row.id}`)} empty={<EmptyState icon={ReceiptText} title={t('finance', 'noTransactionsForCriteria')} />} />
       </div>
     </>}

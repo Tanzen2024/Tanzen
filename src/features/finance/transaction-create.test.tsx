@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
+import { transactions } from '@/mocks/finance/transactions';
 
 /**
  * Mandat « CLASSIFICATION DES TRANSACTIONS » : le bouton « + Ajouter une
@@ -15,9 +16,19 @@ import { FinanceModule } from './finance-module';
  * (rôle admin). Politiques T-001 seedées : AC-001 (Trésorerie) garant +
  * approbation requis ; AC-009 (Épargne volontaire) prêt autorisé sans garant.
  *
- * Les tests partagent l'état du tableau `transactions` (mock module-level) :
- * un test écrit une ligne, un test suivant vérifie qu'elle est au journal.
+ * ISOLATION : `createTransaction` fait un `transactions.push(...)` sur le mock
+ * module-level. Chaque test qui enregistre une transaction est donc
+ * potentiellement visible des suivants. On restaure le tableau au seed exact
+ * (contenu ET références profondes) avant/après chaque cas — aucun test ne
+ * dépend plus de l'ordre : chacun repart du même état, seul ou en groupe.
  */
+const TRANSACTIONS_SEED = structuredClone(transactions);
+function restoreTransactionsSeed() {
+  transactions.splice(0, transactions.length, ...structuredClone(TRANSACTIONS_SEED));
+}
+beforeEach(restoreTransactionsSeed);
+afterEach(restoreTransactionsSeed);
+
 function renderFinance(route: string) {
   return renderWithProviders(
     <Routes><Route path="/finance/*" element={<FinanceModule />} /></Routes>,
@@ -27,6 +38,20 @@ function renderFinance(route: string) {
 
 const SAVINGS_MARKER = 'Épargne test — journal central';
 const LOAN_MARKER = 'Prêt test — politique Trésorerie';
+
+/** Enregistre une transaction d'épargne conforme depuis le formulaire générique et attend la redirection vers sa fiche. Rend chaque cas autonome (aucune dépendance à un test précédent). */
+async function submitSavings(user: ReturnType<typeof userEvent.setup>, marker: string) {
+  renderFinance('/finance/transactions/create');
+  await screen.findByRole('option', { name: /CS-001-ÉPG/ });
+  await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-ÉPG');
+  await user.selectOptions(screen.getByLabelText(/Catégorie/), 'EPARGNE');
+  await screen.findByRole('option', { name: 'Fatou Ndiaye' });
+  await user.selectOptions(screen.getByLabelText(/Adhérent/), 'Fatou Ndiaye');
+  await user.type(screen.getByLabelText('Montant *'), '25000');
+  await user.type(screen.getByLabelText(/Commentaire/), marker);
+  await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+  await screen.findByText(marker);
+}
 
 describe('Finance → Transactions — saisie (journal central)', () => {
   it('le journal expose « Ajouter une transaction » et exactement les 7 colonnes du mandat (dont « Catégorie », jamais « Opération »)', async () => {
@@ -159,10 +184,15 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     expect(screen.getAllByText('Épargne').length).toBeGreaterThan(0);
   });
 
-  it('les transactions enregistrées apparaissent dans le journal consolidé', async () => {
+  it('une transaction enregistrée apparaît dans le journal consolidé', async () => {
+    const user = userEvent.setup();
+    const marker = `Épargne journal ${Date.now()}`;
+    // Cas autonome : on crée la transaction ici même (helper partagé), puis on
+    // vérifie qu'elle est bien listée dans le journal — sans dépendre d'un test
+    // précédent ni de l'ordre d'exécution.
+    await submitSavings(user, marker);
     renderFinance('/finance/transactions');
     const table = await screen.findByRole('table');
-    expect(await within(table).findByText(SAVINGS_MARKER)).toBeInTheDocument();
-    expect(within(table).getByText(new RegExp(LOAN_MARKER))).toBeInTheDocument();
+    expect(await within(table).findByText(marker)).toBeInTheDocument();
   });
 });

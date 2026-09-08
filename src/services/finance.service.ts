@@ -1,6 +1,6 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { accounts, resolveAccount, type Account, type AccountRecord, type AccountType } from '@/mocks/finance/accounts';
+import { accounts, hasAccountLabelConflict, resolveAccount, type Account, type AccountRecord, type AccountType } from '@/mocks/finance/accounts';
 import { transactions, type Transaction, type TransactionType } from '@/mocks/finance/transactions';
 import { isClassificationValid, isTransactionCategory, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { contributions, contributionsByMonth } from '@/mocks/finance/contributions';
@@ -72,9 +72,15 @@ function normalizeAmount(type: AccountType, amount: number | null): number | nul
   return amount;
 }
 
+/**
+ * Contrôle d'unicité du libellé de caisse (règle métier `hasAccountLabelConflict`,
+ * `@/mocks/finance/accounts`) — dernier rempart côté « backend » : refuse la
+ * création/modification même si le garde-fou du formulaire React est contourné.
+ * Unicité sur (`tenantId` + libellé NORMALISÉ : trim, espaces réduits, sans
+ * casse, sans accent). `excludeAccountId` laisse une caisse garder son libellé.
+ */
 function isDuplicateTitle(tenantId: string, title: string, excludeAccountId?: string): boolean {
-  const normalized = title.trim().toLowerCase();
-  return accounts.some((account) => account.tenantId === tenantId && account.id !== excludeAccountId && account.title.trim().toLowerCase() === normalized);
+  return hasAccountLabelConflict(accounts, tenantId, title, excludeAccountId);
 }
 
 /** Projette une caisse stockée vers l'`Account` complet (solde + dernier mouvement calculés depuis le journal courant). Source unique : `resolveAccount`. */
