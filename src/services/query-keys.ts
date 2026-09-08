@@ -48,6 +48,7 @@ export const queryKeys = {
   finance: {
     accounts: (tenantId: string) => ['finance', 'accounts', tenantId] as const,
     account: (id: string) => ['finance', 'accounts', 'detail', id] as const,
+    accountMemberships: (tenantId: string) => ['finance', 'account-memberships', tenantId] as const,
     transactions: (tenantId: string) => ['finance', 'transactions', tenantId] as const,
     transactionsByFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'transactions', 'by-fiscal-year', tenantId, fiscalYearId] as const,
     transaction: (id: string) => ['finance', 'transactions', 'detail', id] as const,

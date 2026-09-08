@@ -1,6 +1,7 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
 import { accounts, hasAccountLabelConflict, resolveAccount, type Account, type AccountRecord, type AccountType } from '@/mocks/finance/accounts';
+import { accountMemberships } from '@/mocks/finance/account-memberships';
 import { transactions, type Transaction, type TransactionType } from '@/mocks/finance/transactions';
 import { isClassificationValid, isTransactionCategory, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { contributions, contributionsByMonth } from '@/mocks/finance/contributions';
@@ -83,9 +84,29 @@ function isDuplicateTitle(tenantId: string, title: string, excludeAccountId?: st
   return hasAccountLabelConflict(accounts, tenantId, title, excludeAccountId);
 }
 
-/** Projette une caisse stockée vers l'`Account` complet (solde + dernier mouvement calculés depuis le journal courant). Source unique : `resolveAccount`. */
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** IDs des membres dont l'adhésion à cette caisse est ACTIVE (non clôturée) — source du cache `Account.memberIds`. */
+function activeMemberIdsOf(tenantId: string, accountId: string): string[] {
+  return [
+    ...new Set(
+      accountMemberships
+        .filter((m) => m.tenantId === tenantId && m.accountId === accountId && m.endDate === null)
+        .map((m) => m.memberId),
+    ),
+  ];
+}
+
+/**
+ * Projette une caisse stockée vers l'`Account` complet : solde + dernier
+ * mouvement calculés depuis le journal (`resolveAccount`), et `memberIds` projeté
+ * depuis `AccountMembership` (adhésions actives) — le champ stocké devient un
+ * simple cache, jamais faisant autorité.
+ */
 function withComputedBalance(account: AccountRecord): Account {
-  return resolveAccount(account, transactions);
+  return { ...resolveAccount(account, transactions), memberIds: activeMemberIdsOf(account.tenantId, account.id) };
 }
 
 export const financeService = {
@@ -176,31 +197,64 @@ export const financeService = {
       return { deleted: true, deactivated: false } as const;
     }),
 
-  /** Adhérents affectés à une caisse — filtre en plus par tenant courant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
+  /** Adhérents actuellement adhérents d'une caisse — dérivé de `AccountMembership` (adhésions actives), filtré tenant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
   listAccountMembers: (tenantId: string, accountId: string) =>
     mockRequest(() => {
       const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
       if (!account) return [];
-      return members.filter((member) => member.tenantId === tenantId && account.memberIds.includes(member.id));
+      const active = new Set(activeMemberIdsOf(tenantId, accountId));
+      return members.filter((member) => member.tenantId === tenantId && active.has(member.id));
     }),
 
+  /** Toutes les adhésions du tenant (actives et clôturées) — source de vérité datée pour le moteur de position. */
+  listAccountMemberships: (tenantId: string) =>
+    mockRequest(() => accountMemberships.filter((membership) => membership.tenantId === tenantId)),
+
+  /** Affecte des membres à une caisse — ouvre une `AccountMembership` (à ce jour) pour chaque membre éligible qui n'en a pas déjà une active. `Account.memberIds` (cache) se recalcule à la projection. */
   addAccountMembers: (tenantId: string, accountId: string, memberIds: string[]) =>
     mockRequest(() => {
       const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
       if (!account) return undefined;
-      const eligibleIds = new Set(members.filter((member) => member.tenantId === tenantId && memberIds.includes(member.id)).map((member) => member.id));
-      const merged = new Set(account.memberIds);
-      eligibleIds.forEach((id) => merged.add(id));
-      account.memberIds = [...merged];
+      const eligibleIds = members
+        .filter((member) => member.tenantId === tenantId && memberIds.includes(member.id))
+        .map((member) => member.id);
+      const day = todayISO();
+      for (const memberId of eligibleIds) {
+        const alreadyActive = accountMemberships.some(
+          (m) => m.tenantId === tenantId && m.accountId === accountId && m.memberId === memberId && m.endDate === null,
+        );
+        if (alreadyActive) continue;
+        accountMemberships.push({
+          id: `AM-${String(accountMemberships.length + 1).padStart(3, '0')}`,
+          tenantId,
+          accountId,
+          memberId,
+          startDate: day,
+          endDate: null,
+          status: 'active',
+        });
+      }
       return withComputedBalance(account);
     }),
 
+  /** Retire des membres d'une caisse — CLÔT leur adhésion active (`endDate` = aujourd'hui), jamais de suppression : l'historique reste reconstructible. */
   removeAccountMembers: (tenantId: string, accountId: string, memberIds: string[]) =>
     mockRequest(() => {
       const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
       if (!account) return undefined;
       const toRemove = new Set(memberIds);
-      account.memberIds = account.memberIds.filter((id) => !toRemove.has(id));
+      const day = todayISO();
+      for (const membership of accountMemberships) {
+        if (
+          membership.tenantId === tenantId &&
+          membership.accountId === accountId &&
+          membership.endDate === null &&
+          toRemove.has(membership.memberId)
+        ) {
+          membership.endDate = day;
+          membership.status = 'ended';
+        }
+      }
       return withComputedBalance(account);
     }),
 

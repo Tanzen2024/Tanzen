@@ -207,6 +207,88 @@ describe('financeService — account member assignment (adhésions à la caisse)
   });
 });
 
+/**
+ * Phase 1 du moteur de position : l'adhésion caisse ↔ membre est désormais une
+ * entité DATÉE (`AccountMembership`). `addAccountMembers` ouvre une adhésion,
+ * `removeAccountMembers` la CLÔT (jamais de suppression), `Account.memberIds` est
+ * un cache projeté des adhésions actives.
+ */
+describe('financeService — AccountMembership (adhésion datée)', () => {
+  it('addAccountMembers ouvre une adhésion datée (startDate = aujourd’hui, endDate null, status active)', async () => {
+    const account = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Adhésion ouverte ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addAccountMembers('T-001', account!.id, ['M-001']);
+    const memberships = await financeService.listAccountMemberships('T-001');
+    const created = memberships.find((m) => m.accountId === account!.id && m.memberId === 'M-001');
+    expect(created).toBeTruthy();
+    expect(created!.endDate).toBeNull();
+    expect(created!.status).toBe('active');
+    expect(created!.startDate).toBe(new Date().toISOString().slice(0, 10));
+  });
+
+  it('removeAccountMembers CLÔT l’adhésion (endDate + status ended), sans la supprimer', async () => {
+    const account = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Adhésion clôturée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addAccountMembers('T-001', account!.id, ['M-001']);
+    await financeService.removeAccountMembers('T-001', account!.id, ['M-001']);
+
+    const memberships = await financeService.listAccountMemberships('T-001');
+    const closed = memberships.filter((m) => m.accountId === account!.id && m.memberId === 'M-001');
+    expect(closed).toHaveLength(1); // toujours présente
+    expect(closed[0].endDate).toBe(new Date().toISOString().slice(0, 10));
+    expect(closed[0].status).toBe('ended');
+
+    // le cache Account.memberIds ne reflète plus que les adhésions actives
+    const refreshed = await financeService.getAccount('T-001', account!.id);
+    expect(refreshed!.memberIds).toEqual([]);
+  });
+
+  it('ré-ajouter un membre dont l’adhésion était clôturée ouvre une NOUVELLE adhésion', async () => {
+    const account = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Ré-adhésion ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addAccountMembers('T-001', account!.id, ['M-001']);
+    await financeService.removeAccountMembers('T-001', account!.id, ['M-001']);
+    await financeService.addAccountMembers('T-001', account!.id, ['M-001']);
+
+    const memberships = (await financeService.listAccountMemberships('T-001')).filter((m) => m.accountId === account!.id && m.memberId === 'M-001');
+    expect(memberships).toHaveLength(2);
+    expect(memberships.filter((m) => m.endDate === null)).toHaveLength(1);
+  });
+
+  it('SEED : Fatou (M-001) est adhérente active de Trésorerie, Épargne et Secours (AC-011, sans transaction)', async () => {
+    const [tresorerie, epargne, secours] = await Promise.all([
+      financeService.listAccountMembers('T-001', 'AC-001'),
+      financeService.listAccountMembers('T-001', 'AC-002'),
+      financeService.listAccountMembers('T-001', 'AC-011'),
+    ]);
+    expect(tresorerie.map((m) => m.id)).toContain('M-001');
+    expect(epargne.map((m) => m.id)).toContain('M-001');
+    // Adhésion ≠ transaction : Secours n'a aucune écriture, Fatou y est pourtant adhérente.
+    expect(secours.map((m) => m.id)).toEqual(['M-001']);
+  });
+
+  it('SEED : Cheikh (M-006), adhésion Épargne clôturée au 30/06/2026, n’apparaît plus dans les adhérents actifs d’Épargne', async () => {
+    const epargne = await financeService.listAccountMembers('T-001', 'AC-002');
+    expect(epargne.map((m) => m.id)).not.toContain('M-006');
+    // mais il reste adhérent actif de Trésorerie
+    const tresorerie = await financeService.listAccountMembers('T-001', 'AC-001');
+    expect(tresorerie.map((m) => m.id)).toContain('M-006');
+    // et l'adhésion clôturée reste tracée
+    const memberships = await financeService.listAccountMemberships('T-001');
+    const ended = memberships.find((m) => m.accountId === 'AC-002' && m.memberId === 'M-006');
+    expect(ended?.endDate).toBe('2026-06-30');
+    expect(ended?.status).toBe('ended');
+  });
+
+  it('SEED : Account.memberIds (cache projeté) reflète les adhésions actives', async () => {
+    const account = await financeService.getAccount('T-001', 'AC-001');
+    expect([...account!.memberIds].sort()).toEqual(['M-001', 'M-006']);
+  });
+
+  it('ISOLATION : listAccountMemberships est tenant-scoped (T-001 ne voit pas les adhésions de T-002)', async () => {
+    const t001 = await financeService.listAccountMemberships('T-001');
+    expect(t001.every((m) => m.tenantId === 'T-001')).toBe(true);
+    expect(t001.some((m) => m.accountId === 'AC-004')).toBe(false); // AC-004 = T-002
+  });
+});
+
 describe('financeService — createAccount validation', () => {
   it('DENY: rejects an account without a title', async () => {
     const account = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: '   ', type: 'LIBRE', amount: null, description: '' });
