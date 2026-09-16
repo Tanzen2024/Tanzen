@@ -51,8 +51,11 @@ export const permissionCatalog: Permission[] = [
   'dashboard.read',
   'tenants.read', 'tenants.create', 'tenants.update',
   'plans.read', 'subscriptions.read', 'payments.read', 'billing.read', 'platformAudit.read',
-  'members.read', 'members.create', 'members.update', 'members.delete',
+  /** `members.approve` (mandat « Moteur générique de workflow de validation ») — distincte de `members.update` (soumettre) : étape d'approbation de la demande de modification WD-007. Suit `roleTemplates` ci-dessous : exclue de role-manager (filtre `.approve`), incluse dans role-admin (catalogue complet). */
+  'members.read', 'members.create', 'members.update', 'members.delete', 'members.approve',
   'governance.read', 'governance.create', 'governance.approve', 'governance.update', 'governance.delete',
+  /** `boardPositions.manage` (mandat « Fonctions / mandats ») — gère le RÉFÉRENTIEL de fonctions (créer/modifier/activer/désactiver), distincte de `governance.create` qui reste la permission pour attribuer un MANDAT (choisir une fonction existante). Un utilisateur avec seulement `governance.create` peut ajouter un mandat mais pas créer de nouvelle fonction. */
+  'boardPositions.manage',
   'accounts.read', 'accounts.create', 'accounts.update', 'accounts.delete', 'accounts.manage',
   'transactions.read', 'transactions.export', 'transactions.create', 'transactions.update', 'transactions.cancel',
   'contributions.read',

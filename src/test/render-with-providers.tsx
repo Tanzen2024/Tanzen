@@ -13,7 +13,7 @@ import { FiscalYearProvider } from '@/contexts/fiscal-year-context';
  * (QueryClientProvider > LocaleProvider > ThemeProvider > TenantProvider >
  * PermissionProvider > FiscalYearProvider), avec un `QueryClient` neuf par
  * appel pour éviter toute fuite d'état entre tests, et un `MemoryRouter`
- * pour les composants qui dépendent de `react-router-dom` (TenantSwitcher,
+ * pour les composants qui dépendent de `react-router-dom` (TenantBreadcrumb,
  * FiscalYearSelector, PlatformScopeGuard).
  */
 export function renderWithProviders(ui: ReactElement, { route = '/' }: { route?: string } = {}) {

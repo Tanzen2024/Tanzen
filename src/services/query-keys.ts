@@ -30,8 +30,8 @@ export const queryKeys = {
   governance: {
     meetings: (tenantId: string) => ['governance', 'meetings', tenantId] as const,
     meeting: (id: string) => ['governance', 'meetings', 'detail', id] as const,
-    votes: (tenantId: string) => ['governance', 'votes', tenantId] as const,
     board: (tenantId: string) => ['governance', 'board', tenantId] as const,
+    mandateFunctions: (tenantId: string) => ['governance', 'mandate-functions', tenantId] as const,
     attendances: (meetingId: string) => ['governance', 'attendances', meetingId] as const,
     quorumSnapshot: (meetingId: string) => ['governance', 'quorum-snapshot', meetingId] as const,
     assemblyDecisions: (meetingId: string) => ['governance', 'assembly-decisions', meetingId] as const,
@@ -49,6 +49,18 @@ export const queryKeys = {
     accounts: (tenantId: string) => ['finance', 'accounts', tenantId] as const,
     account: (id: string) => ['finance', 'accounts', 'detail', id] as const,
     accountMemberships: (tenantId: string) => ['finance', 'account-memberships', tenantId] as const,
+    /** Moteur de position — `scopeKey` provient de `@/lib/finance`. */
+    position: {
+      balance: (tenantId: string, scopeKey: string, asOfDate: string) => ['finance', 'position', 'balance', tenantId, scopeKey, asOfDate] as const,
+      flows: (tenantId: string, scopeKey: string, from: string, to: string) => ['finance', 'position', 'flows', tenantId, scopeKey, from, to] as const,
+      /** Étape 6 — clôtures/reports d'un exercice, pour invalidation après `closeFiscalYear`/`carryForward`. */
+      closingEntries: (tenantId: string, fiscalYearId: string) => ['finance', 'position', 'closing-entries', tenantId, fiscalYearId] as const,
+      openingEntries: (tenantId: string, fiscalYearId: string) => ['finance', 'position', 'opening-entries', tenantId, fiscalYearId] as const,
+      carryForwardIntegrity: (tenantId: string, fromFiscalYearId: string, toFiscalYearId: string) =>
+        ['finance', 'position', 'carry-forward-integrity', tenantId, fromFiscalYearId, toFiscalYearId] as const,
+      /** Étape 7 — position d'un membre (`scopeKey` = `member:<id>` ou `member:<id>:account:<id>`). */
+      memberPosition: (tenantId: string, scopeKey: string, asOfDate: string) => ['finance', 'position', 'member', tenantId, scopeKey, asOfDate] as const,
+    },
     transactions: (tenantId: string) => ['finance', 'transactions', tenantId] as const,
     transactionsByFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'transactions', 'by-fiscal-year', tenantId, fiscalYearId] as const,
     transaction: (id: string) => ['finance', 'transactions', 'detail', id] as const,
@@ -119,5 +131,8 @@ export const queryKeys = {
     loginPolicy: (tenantId: string) => ['settings', 'login-policy', tenantId] as const,
     modules: (tenantId: string) => ['settings', 'modules', tenantId] as const,
     integrations: (tenantId: string) => ['settings', 'integrations', tenantId] as const,
+    validationWorkflows: (tenantId: string) => ['settings', 'validation-workflows', tenantId] as const,
+    validationWorkflow: (id: string) => ['settings', 'validation-workflows', 'detail', id] as const,
+    validationWorkflowVersions: (tenantId: string, code: string) => ['settings', 'validation-workflows', 'versions', tenantId, code] as const,
   },
 } as const;

@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -19,14 +18,14 @@ import { useTheme } from '@/contexts/theme-context';
 import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { organizationService } from '@/services/organization.service';
-import { settingsService, type CreateFiscalYearInput } from '@/services/settings.service';
+import { settingsService } from '@/services/settings.service';
 import { deriveFiscalMeetings } from '@/services/meeting.service';
 import { queryKeys } from '@/services/query-keys';
 import { supportedLocales } from '@/i18n';
 import type { FiscalYear, FiscalYearStatus } from '@/mocks/settings/fiscal-years';
 import { isValidMeetingScheduleConfig, formatMeetingScheduleDescription, meetingFrequencyLabel, meetingRuleLabel, type MeetingScheduleConfig } from '@/mocks/settings/meeting-schedule';
 import { MeetingScheduleFields } from './meeting-schedule-fields';
-import { fiscalYearTransferCategories, type TransferabilityDecision } from '@/mocks/settings/fiscal-year-transfer-categories';
+import { FiscalYearCreateDialog } from './fiscal-year-create-dialog';
 import type { DateFormat, NumberFormatStyle } from '@/mocks/settings/localization-settings';
 import type { NotificationChannel, NotificationChannelType, NotificationRule, NotificationRuleTrigger } from '@/mocks/settings/notification-settings';
 import type { ModuleConfig, ModuleKey } from '@/mocks/settings/modules';
@@ -35,14 +34,12 @@ import type { MfaMethod } from '@/mocks/access/users';
 import type { Integration, IntegrationCategory, IntegrationStatus } from '@/mocks/settings/integrations';
 import type { TableColumn, StatusTone } from '@/types/ui';
 import { formatDate } from '@/lib/utils';
+import { ValidationWorkflowsList, ValidationWorkflowCreate, ValidationWorkflowDetail, ValidationWorkflowEdit } from './settings-validation-workflows';
 
 type T = (section: 'settings' | 'nav' | 'system', key: string, values?: Record<string, string>) => string;
 
 const FY_STATUS_TONE: Record<FiscalYearStatus, StatusTone> = { open: 'success', closed: 'default', upcoming: 'info' };
 const FY_STATUS_KEY: Record<FiscalYearStatus, string> = { open: 'statusOpen', closed: 'statusClosed', upcoming: 'statusUpcoming' };
-/** Axe de transférabilité affiché à l'utilisateur (mandat "REOPEN APPROVAL + TRANSFER SELECTION CORRECTION") — distinct de l'axe D-FY-02 (`TransferClassification`), volontairement non affiché ici pour ne plus mélanger les deux questions. */
-const TRANSFERABILITY_TONE: Record<TransferabilityDecision, StatusTone> = { TRANSFERABLE: 'success', NOT_TRANSFERABLE: 'default', PARTIAL: 'info', UNDETERMINED: 'warning' };
-const TRANSFERABILITY_KEY: Record<TransferabilityDecision, string> = { TRANSFERABLE: 'transferabilityTransferable', NOT_TRANSFERABLE: 'transferabilityNotTransferable', PARTIAL: 'transferabilityPartial', UNDETERMINED: 'transferabilityUndetermined' };
 const CHANNEL_KEY: Record<NotificationChannelType, string> = { email: 'channelEmail', sms: 'channelSms', push: 'channelPush', inApp: 'channelInApp' };
 const TRIGGER_KEY: Record<NotificationRuleTrigger, string> = { loanOverdue: 'triggerLoanOverdue', applicationSubmitted: 'triggerApplicationSubmitted', periodEndingSoon: 'triggerPeriodEndingSoon', workflowPending: 'triggerWorkflowPending', sessionRevoked: 'triggerSessionRevoked', memberJoined: 'triggerMemberJoined' };
 const MODULE_LABEL_KEY: Record<ModuleKey, string> = { dashboard: 'moduleDashboard', organization: 'moduleOrganization', finance: 'moduleFinance', credit: 'moduleCredit', tontines: 'moduleTontines', operations: 'moduleOperations', accessSecurity: 'moduleAccessSecurity', audit: 'moduleAudit', settings: 'moduleSettings' };
@@ -126,8 +123,6 @@ function SettingsLocalization({ t }: { t: T }) {
 
 // ----------------------------------------------------------------------- Fiscal years
 
-const EMPTY_CREATE_FORM = { label: '', startDate: '', endDate: '' };
-
 function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const { currentTenant } = useTenant();
   const { can } = usePermissions();
@@ -139,43 +134,46 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const [closeTarget, setCloseTarget] = useState(false);
   const [openTarget, setOpenTarget] = useState<FiscalYear | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [createStep, setCreateStep] = useState<1 | 2>(1);
-  const [createForm, setCreateForm] = useState(EMPTY_CREATE_FORM);
-  const [createError, setCreateError] = useState<string | undefined>();
-  const [transferSelections, setTransferSelections] = useState<Set<string>>(new Set());
   const [reopenTarget, setReopenTarget] = useState<FiscalYear | null>(null);
   const [reopenJustification, setReopenJustification] = useState('');
   const [reopenError, setReopenError] = useState<string | undefined>();
-  /** Calendrier des réunions (mandat « RÈGLE CENTRALE — DATES DE RÉUNION » §2/§3) — configuration optionnelle à la création. */
-  const [createMeetingSchedule, setCreateMeetingSchedule] = useState<Partial<MeetingScheduleConfig>>({});
   /** Détail « Calendrier des réunions » d'un exercice (§11) — lecture + configuration si l'exercice n'est pas clôturé. */
   const [calendarTarget, setCalendarTarget] = useState<FiscalYear | null>(null);
   const [calendarDraft, setCalendarDraft] = useState<Partial<MeetingScheduleConfig>>({});
-  const resetCreateWizard = () => { setCreateOpen(false); setCreateStep(1); setCreateForm(EMPTY_CREATE_FORM); setCreateError(undefined); setTransferSelections(new Set()); setCreateMeetingSchedule({}); };
-  const toggleTransferCategory = (categoryId: string) => setTransferSelections((current) => {
-    const next = new Set(current);
-    if (next.has(categoryId)) next.delete(categoryId); else next.add(categoryId);
-    return next;
-  });
-  useEffect(() => { setCloseTarget(false); setOpenTarget(null); resetCreateWizard(); setReopenTarget(null); setReopenError(undefined); setCalendarTarget(null); }, [currentTenant.id]);
+  /** Prorogation (mandat §6) — modifie uniquement `endDate`, jamais un indicateur de clôture. */
+  const [extendTarget, setExtendTarget] = useState<FiscalYear | null>(null);
+  const [extendEndDate, setExtendEndDate] = useState('');
+  const [extendError, setExtendError] = useState<string | undefined>();
+  useEffect(() => { setCloseTarget(false); setOpenTarget(null); setCreateOpen(false); setReopenTarget(null); setReopenError(undefined); setCalendarTarget(null); setExtendTarget(null); setExtendError(undefined); }, [currentTenant.id]);
   const closeMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.closeCurrentFiscalYear>>, void>({
     mutationFn: () => settingsService.closeCurrentFiscalYear(currentTenant.id),
     invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
-    onSuccess: () => { notify.success(t('settings', 'fiscalYearClosed')); setCloseTarget(false); },
+    onSuccess: (result) => {
+      if (!result.ok) { notify.error(t('settings', result.reason === 'FINANCE_CLOSING_FAILED' ? 'closeFiscalYearFinanceFailed' : 'fiscalYearInvalid')); return; }
+      const pendingTotal = result.pendingOperations.applications + result.pendingOperations.distributions + result.pendingOperations.transactions;
+      notify.success(pendingTotal > 0 ? t('settings', 'fiscalYearClosedWithPending', { count: String(pendingTotal) }) : t('settings', 'fiscalYearClosed'));
+      setCloseTarget(false);
+    },
+  });
+  const extendMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.extendFiscalYearEndDate>>, { fiscalYearId: string; newEndDate: string }>({
+    mutationFn: ({ fiscalYearId, newEndDate }) => settingsService.extendFiscalYearEndDate(currentTenant.id, fiscalYearId, newEndDate),
+    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result.ok) {
+        const key = result.reason === 'CLOSED' ? 'extendFiscalYearClosed' : result.reason === 'OVERLAPS_NEXT_YEAR' ? 'extendFiscalYearOverlap' : 'extendFiscalYearInvalid';
+        setExtendError(t('settings', key));
+        return;
+      }
+      notify.success(t('settings', 'extendFiscalYearSuccess'));
+      setExtendTarget(null);
+      setExtendEndDate('');
+      setExtendError(undefined);
+    },
   });
   const openMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.openFiscalYear>>, string>({
     mutationFn: (fiscalYearId) => settingsService.openFiscalYear(currentTenant.id, fiscalYearId),
     invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
     onSuccess: () => { notify.success(t('settings', 'fiscalYearOpened')); setOpenTarget(null); },
-  });
-  const createMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.createFiscalYear>>, CreateFiscalYearInput>({
-    mutationFn: (input) => settingsService.createFiscalYear(currentTenant.id, input),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id)],
-    onSuccess: (year) => {
-      if (!year) { setCreateError(t('settings', 'fiscalYearInvalid')); setCreateStep(1); return; }
-      notify.success(t('settings', 'fiscalYearCreated', { label: year.label }));
-      resetCreateWizard();
-    },
   });
   /** §24-BIS : soumet une DEMANDE de réouverture (WorkflowRequest, WD-005) — ne rouvre plus directement l'exercice. Le passage effectif CLOSED→OPEN n'intervient qu'après approbation, dans Operations > Workflows (settingsService.applyFiscalYearReopenDecision). */
   const reopenRequestMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.requestFiscalYearReopen>>, { fiscalYearId: string; justification: string }>({
@@ -201,31 +199,27 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   });
   const openCalendar = (year: FiscalYear) => { setCalendarTarget(year); setCalendarDraft(year.meetingSchedule ?? {}); };
   const saveCalendar = () => { if (calendarTarget && isValidMeetingScheduleConfig(calendarDraft)) meetingScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: calendarDraft }); };
-  /** Étape 1 → 2 : ne crée rien encore, valide seulement les champs (mandat §15 « Continuer »). */
-  const handleContinueToTransferStep = () => {
-    if (!createForm.label.trim() || !createForm.startDate || !createForm.endDate) { setCreateError(t('settings', 'fieldRequired')); return; }
-    if (new Date(createForm.endDate) <= new Date(createForm.startDate)) { setCreateError(t('settings', 'fiscalYearInvalidPeriod')); return; }
-    setCreateError(undefined);
-    setCreateStep(2);
-  };
-  /** Étape 2 : création réelle (§12 « Créer l'exercice ») — seules les catégories cochées sont transmises ; aucune ne déclenche de copie de données (les catégories transférables sont déjà permanentes, cf. fiscalYearTransferCategories). */
-  const handleCreate = () => createMutation.mutate({
-    ...createForm,
-    transferSelections: Array.from(transferSelections),
-    // §2/§4 — transmis uniquement si la configuration de récurrence est complète ; sinon l'exercice est créé sans calendrier (configurable ensuite).
-    meetingSchedule: isValidMeetingScheduleConfig(createMeetingSchedule) ? createMeetingSchedule : undefined,
-  });
   const handleReopenRequest = () => {
     if (!reopenTarget) return;
     if (!reopenJustification.trim()) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
     setReopenError(undefined);
     reopenRequestMutation.mutate({ fiscalYearId: reopenTarget.id, justification: reopenJustification });
   };
+  const openExtend = (year: FiscalYear) => { setExtendTarget(year); setExtendEndDate(year.endDate); setExtendError(undefined); };
+  const handleExtend = () => {
+    if (!extendTarget) return;
+    if (!extendEndDate) { setExtendError(t('settings', 'fieldRequired')); return; }
+    extendMutation.mutate({ fiscalYearId: extendTarget.id, newEndDate: extendEndDate });
+  };
   const columns: TableColumn<FiscalYear>[] = [
     { key: 'label', header: t('settings', 'fiscalYear'), render: (row) => <span className="font-semibold">{row.label}</span> },
     { key: 'startDate', header: t('settings', 'startDate'), render: (row) => formatDate(row.startDate) },
     { key: 'endDate', header: t('settings', 'endDate'), render: (row) => formatDate(row.endDate) },
-    { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1"><StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} />{pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}</div> },
+    { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1">
+      <StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} />
+      {pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}
+      {row.status === 'closed' && row.closedAt && <p className="text-[11px] text-muted-foreground">{t('settings', 'closedAtBy', { date: formatDate(row.closedAt, locale), actor: row.closedBy ?? '—' })}</p>}
+    </div> },
     { key: 'meetingSchedule', header: t('settings', 'meetingCalendar'), render: (row) => (
       <span className="text-xs text-muted-foreground">{row.meetingSchedule ? formatMeetingScheduleDescription(row.meetingSchedule, locale) : t('settings', 'noMeetingSchedule')}</span>
     ) },
@@ -233,6 +227,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       const pendingRequest = pendingReopenByYearId.get(row.id);
       return <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={() => openCalendar(row)}><CalendarDays size={14} />{t('settings', 'viewMeetingCalendar')}</Button>
+        {row.status !== 'closed' && <PermissionGate permission="fiscalYears.manage"><Button variant="ghost" size="sm" onClick={() => openExtend(row)}>{t('settings', 'extendFiscalYear')}</Button></PermissionGate>}
         {row.status === 'upcoming' && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => setOpenTarget(row)}>{t('settings', 'openFiscalYear')}</Button></PermissionGate>}
         {row.status === 'closed' && pendingRequest && <Button variant="outline" size="sm" onClick={() => navigate(`/operations/workflows/${pendingRequest.id}`)}><Eye size={14} />{t('settings', 'viewReopenRequest')}</Button>}
         {row.status === 'closed' && !pendingRequest && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => { setReopenTarget(row); setReopenJustification(''); setReopenError(undefined); }}><RotateCcw size={14} />{t('settings', 'requestReopenFiscalYear')}</Button></PermissionGate>}
@@ -247,59 +242,20 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     <Card><CardHeader><CardTitle className="text-sm">{t('settings', 'history')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={years} empty={<EmptyState icon={Landmark} title={t('settings', 'noFiscalYears')} />} /></CardContent></Card>
     {closeTarget && <ConfirmDialog open title={t('settings', 'closeFiscalYear')} description={t('settings', 'closeFiscalYearConfirm')} confirmLabel={t('settings', 'closeFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => closeMutation.mutate()} onCancel={() => setCloseTarget(false)} />}
     {openTarget && <ConfirmDialog open title={t('settings', 'openFiscalYear')} description={t('settings', 'openFiscalYearConfirm')} confirmLabel={t('settings', 'openFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => openMutation.mutate(openTarget.id)} onCancel={() => setOpenTarget(null)} />}
-    {createOpen && createStep === 1 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep1Title')} description={t('settings', 'createFiscalYearDescription')} confirmLabel={t('settings', 'continueAction')} cancelLabel={t('settings', 'cancel')} onConfirm={handleContinueToTransferStep} onCancel={resetCreateWizard}>
-      <div className="mt-4 max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-left">
-        {current && <p className="text-xs text-muted-foreground">{t('settings', 'previousFiscalYear', { label: current.label })}</p>}
-        <div className="space-y-1"><Label htmlFor="fy-create-label">{t('settings', 'fiscalYear')}</Label><Input id="fy-create-label" value={createForm.label} onChange={(event) => setCreateForm((value) => ({ ...value, label: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1"><Label htmlFor="fy-create-start">{t('settings', 'startDate')}</Label><Input id="fy-create-start" type="date" value={createForm.startDate} onChange={(event) => setCreateForm((value) => ({ ...value, startDate: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
-          <div className="space-y-1"><Label htmlFor="fy-create-end">{t('settings', 'endDate')}</Label><Input id="fy-create-end" type="date" value={createForm.endDate} onChange={(event) => setCreateForm((value) => ({ ...value, endDate: event.target.value }))} aria-invalid={Boolean(createError)} /></div>
-        </div>
-        <FieldError message={createError} />
-        <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
-          <p className="text-sm font-medium">{t('settings', 'meetingScheduleOptional')}</p>
-          <p className="text-[11px] text-muted-foreground">{t('settings', 'meetingScheduleCreateHint')}</p>
-          <MeetingScheduleFields locale={locale} value={createMeetingSchedule} onChange={setCreateMeetingSchedule} idPrefix="fy-create-meeting" />
-        </div>
-      </div>
-    </ConfirmDialog>}
-    {createOpen && createStep === 2 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep2Title')} description={t('settings', 'transferStepDescription', { source: current?.label ?? '—', target: createForm.label })} confirmLabel={t('settings', 'createFiscalYearAction')} cancelLabel={t('settings', 'back')} onConfirm={handleCreate} onCancel={() => setCreateStep(1)}>
-      {/* Un seul conteneur défilant pour la liste ET le résumé — évite que le résumé (dont la hauteur varie avec la sélection) ne pousse les boutons hors de l'écran (bug constaté et corrigé). */}
-      <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto pr-1 text-left">
-        {fiscalYearTransferCategories.map((category) => {
-          const checked = transferSelections.has(category.id);
-          return (
-            <div key={category.id} className={`flex items-start gap-3 rounded-lg border p-3 ${category.transferable ? 'border-border' : 'border-dashed border-border/70 bg-muted/30'}`}>
-              {category.transferable
-                ? <Checkbox id={`transfer-${category.id}`} checked={checked} onCheckedChange={() => toggleTransferCategory(category.id)} className="mt-0.5" />
-                : <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><Lock size={12} /></span>}
-              <label htmlFor={category.transferable ? `transfer-${category.id}` : undefined} className={`min-w-0 flex-1 ${category.transferable ? 'cursor-pointer' : ''}`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-medium">{t('settings', category.labelKey)}</p>
-                  <StatusBadge label={t('settings', TRANSFERABILITY_KEY[category.transferability])} tone={TRANSFERABILITY_TONE[category.transferability]} />
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">{t('settings', category.transferabilityReasonKey)}</p>
-              </label>
-            </div>
-          );
-        })}
-        <div data-testid="transfer-summary" className="space-y-1.5 rounded-lg border border-dashed border-border p-3 text-xs leading-5">
-          <p className="font-semibold text-foreground">{t('settings', 'transferSummarySelected')}</p>
-          {fiscalYearTransferCategories.filter((category) => category.transferable && transferSelections.has(category.id)).length === 0
-            ? <p className="text-muted-foreground">{t('settings', 'transferSummaryNone')}</p>
-            : fiscalYearTransferCategories.filter((category) => category.transferable && transferSelections.has(category.id)).map((category) => <p key={category.id} className="text-emerald-600">✓ {t('settings', category.labelKey)}</p>)}
-          <p className="mt-2 font-semibold text-foreground">{t('settings', 'transferSummaryNotSelected')}</p>
-          {fiscalYearTransferCategories.filter((category) => !category.transferable || !transferSelections.has(category.id)).map((category) => <p key={category.id} className="text-muted-foreground">— {t('settings', category.labelKey)}</p>)}
-        </div>
-      </div>
-      <FieldError message={createError} />
-    </ConfirmDialog>}
+    <FiscalYearCreateDialog open={createOpen} onOpenChange={setCreateOpen} tenantId={currentTenant.id} years={years} />
     {reopenTarget && <ConfirmDialog open title={t('settings', 'requestReopenFiscalYear')} description={t('settings', 'requestReopenFiscalYearDescription', { label: reopenTarget.label })} confirmLabel={t('settings', 'submitReopenRequest')} cancelLabel={t('settings', 'cancel')} onConfirm={handleReopenRequest} onCancel={() => { setReopenTarget(null); setReopenJustification(''); setReopenError(undefined); }}>
       <div className="mt-4 space-y-1 text-left">
         <Label htmlFor="fy-reopen-justification">{t('settings', 'reopenJustificationLabel')}</Label>
         <Textarea id="fy-reopen-justification" value={reopenJustification} onChange={(event) => setReopenJustification(event.target.value)} aria-invalid={Boolean(reopenError)} />
         <FieldError message={reopenError} />
         <p className="text-xs text-muted-foreground">{t('settings', 'reopenApprovalNotice')}</p>
+      </div>
+    </ConfirmDialog>}
+    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: extendTarget.label, current: formatDate(extendTarget.endDate, locale) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
+      <div className="mt-4 space-y-1 text-left">
+        <Label htmlFor="fy-extend-end-date">{t('settings', 'newEndDate')}</Label>
+        <Input id="fy-extend-end-date" type="date" value={extendEndDate} onChange={(event) => setExtendEndDate(event.target.value)} aria-invalid={Boolean(extendError)} />
+        <FieldError message={extendError} />
       </div>
     </ConfirmDialog>}
     {calendarTarget && (() => {
@@ -559,6 +515,10 @@ export function SettingsModule() {
       <Route path="security-policies" element={<SettingsSecurityPolicies t={t} />} />
       <Route path="modules" element={<SettingsModules t={t} />} />
       <Route path="integrations" element={<SettingsIntegrations t={t} locale={typedLocale} />} />
+      <Route path="validation-workflows" element={<ValidationWorkflowsList t={t} />} />
+      <Route path="validation-workflows/new" element={<ValidationWorkflowCreate t={t} />} />
+      <Route path="validation-workflows/:id" element={<ValidationWorkflowDetail t={t} />} />
+      <Route path="validation-workflows/:id/edit" element={<ValidationWorkflowEdit t={t} />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

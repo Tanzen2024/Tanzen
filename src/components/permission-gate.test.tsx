@@ -5,7 +5,7 @@ import { screen } from '@testing-library/react';
  * `role-admin` (l'utilisateur mocké par défaut) détient TOUTES les
  * permissions du catalogue — impossible d'observer un cas "refusé" sans
  * simuler un utilisateur à permissions restreintes (`role-viewer`, lecture
- * seule). Même technique d'isolation de module que pour `TenantSwitcher`.
+ * seule). Même technique d'isolation de module que pour `TenantBreadcrumb`.
  */
 async function renderGateAs(roleId: 'role-admin' | 'role-viewer', permission: string) {
   vi.resetModules();

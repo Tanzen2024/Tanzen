@@ -56,6 +56,15 @@ export type Transaction = {
   fiscalYearId?: string;
   /** Date/heure d'enregistrement de la transaction dans le système (ISO). Posé par `financeService.createTransaction`. Fallback d'affichage : `date`. */
   recordedAt?: string;
+  /**
+   * Relation vers `Loan.id` (mandat « Finalisation Finance/Tontines ») — posée
+   * après coup par `creditService.createLoanTransaction`/`createRepaymentTransaction`
+   * une fois le `Transaction` créé et le `Loan` réel connu, jamais au moment du
+   * INSERT initial (`financeService.createTransaction` ignore ce champ : il ne
+   * sait rien des prêts, aucune dépendance introduite dans l'autre sens).
+   * `undefined` pour toute transaction sans rapport avec un prêt.
+   */
+  loanId?: string;
 };
 
 /**

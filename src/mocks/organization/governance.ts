@@ -60,13 +60,33 @@ export type Meeting = { id: string; tenantId: string; title: string; date: strin
  * `assemblyDecisionId` n'est fabriqué pour ces 4 votes : aucune source ne
  * démontre à quelle AssemblyDecision ils correspondraient. Toute nouvelle
  * création via le flux AssemblyDecision→Vote (`decision-vote.service.ts`)
- * renseigne systématiquement `meetingId`. La fonctionnalité "Votes"
- * générique préexistante (`organizationService.createVote`/`updateVoteResult`,
- * onglet Governance > Votes) reste inchangée et continue de créer des votes
- * autonomes (`meetingId: null`) — jamais concernée par les décisions Phase 4C-4.
+ * renseigne systématiquement `meetingId`. L'ancien onglet autonome "Governance >
+ * Votes" (`organizationService.createVote`/`updateVoteResult`, votes avec
+ * `meetingId: null`) a été supprimé — voir suppression ciblée du menu
+ * Gouvernance/Votes. `Vote`/`votes` restent utilisés par le flux
+ * AssemblyDecision→Vote ci-dessus, seule source de nouveaux `Vote` désormais.
  */
 export type Vote = { id: string; tenantId: string; subject: string; date: string; yes: number; no: number; abstain: number; result: VoteResult; meetingId: string | null; assemblyDecisionId: string | null };
-export type BoardMember = { id: string; tenantId: string; memberId: string; memberName: string; position: string; mandateStart: string; mandateEnd: string; status: MandateStatus };
+/**
+ * `position` (déjà `string` libre avant le mandat « Fonctions / mandats ») :
+ * le seed historique y stocke une clé i18n (`'president'`, etc., résolue par
+ * `t('organization', row.position)` à l'affichage) — inchangé, ne pas
+ * migrer, `t()` retourne la clé telle quelle si elle n'existe pas (fallback
+ * documenté dans `locale-context.tsx`). Les NOUVEAUX mandats (créés via le
+ * référentiel `MandateFunction`) y stockent désormais le NOM littéral de la
+ * fonction (ex. "Président") plutôt qu'une clé — le même `t()` l'affiche tel
+ * quel puisqu'aucune clé de ce nom n'existe, sans changement de rendu
+ * nécessaire. Dans les deux cas, `position` reste le libellé CAPTURÉ à la
+ * création du mandat, jamais réécrit rétroactivement si la fonction est
+ * renommée dans le référentiel ensuite (besoin §12/§13).
+ *
+ * `positionFunctionId` (nouveau, optionnel) : référence VIVANTE vers
+ * `MandateFunction` (`mocks/organization/mandate-functions.ts`), utilisée
+ * uniquement pour résoudre l'usage réel d'une fonction — jamais pour
+ * réafficher/reconstruire `position`, qui reste la seule source d'affichage
+ * historique.
+ */
+export type BoardMember = { id: string; tenantId: string; memberId: string; memberName: string; position: string; positionFunctionId?: string; mandateStart: string; mandateEnd: string; status: MandateStatus };
 
 export const meetings: Meeting[] = [
   // MT-001 (2026-08-25, T-001) est possiblement le même événement réel que l'ex-AS-003 « Conseil Q3 » (même date/tenant/participants=9) mais location et agenda diffèrent réellement entre les deux sources — fusion non effectuée (aucune preuve suffisante, cf. rapport de correction §13 GAP-01) ; les deux réunions restent distinctes pour ne perdre le contenu réel d'aucune des deux.
@@ -93,10 +113,12 @@ export const votes: Vote[] = [
   { id: 'V-005', tenantId: 'T-001', subject: 'Renouvellement du bureau', date: '2025-06-20', yes: 105, no: 3, abstain: 2, result: 'adopted', meetingId: 'MT-010', assemblyDecisionId: null },
 ];
 
+// `positionFunctionId` rétro-lié aux `MandateFunction` migrées (mandat « Fonctions / mandats », MF-001..004) — lien
+// additif seul, `position` (clé i18n historique) reste inchangé, aucun mandat existant n'est altéré.
 export const boardMembers: BoardMember[] = [
-  { id: 'BM-001', tenantId: 'T-001', memberId: 'M-001', memberName: 'Fatou Ndiaye', position: 'president', mandateStart: '2023-01-15', mandateEnd: '2027-01-15', status: 'ongoing' },
-  { id: 'BM-002', tenantId: 'T-001', memberId: 'M-002', memberName: 'Mamadou Sow', position: 'treasurer', mandateStart: '2023-03-01', mandateEnd: '2027-03-01', status: 'ongoing' },
-  { id: 'BM-003', tenantId: 'T-001', memberId: 'M-003', memberName: 'Aïssatou Bâ', position: 'secretary', mandateStart: '2024-01-10', mandateEnd: '2026-01-10', status: 'expired' },
-  { id: 'BM-004', tenantId: 'T-001', memberId: 'M-006', memberName: 'Cheikh Diop', position: 'boardMember', mandateStart: '2023-01-15', mandateEnd: '2027-01-15', status: 'ongoing' },
-  { id: 'BM-005', tenantId: 'T-001', memberId: 'M-007', memberName: 'Khadija Mbaye', position: 'boardMember', mandateStart: '2026-09-01', mandateEnd: '2028-09-01', status: 'upcoming' },
+  { id: 'BM-001', tenantId: 'T-001', memberId: 'M-001', memberName: 'Fatou Ndiaye', position: 'president', positionFunctionId: 'MF-001', mandateStart: '2023-01-15', mandateEnd: '2027-01-15', status: 'ongoing' },
+  { id: 'BM-002', tenantId: 'T-001', memberId: 'M-002', memberName: 'Mamadou Sow', position: 'treasurer', positionFunctionId: 'MF-002', mandateStart: '2023-03-01', mandateEnd: '2027-03-01', status: 'ongoing' },
+  { id: 'BM-003', tenantId: 'T-001', memberId: 'M-003', memberName: 'Aïssatou Bâ', position: 'secretary', positionFunctionId: 'MF-003', mandateStart: '2024-01-10', mandateEnd: '2026-01-10', status: 'expired' },
+  { id: 'BM-004', tenantId: 'T-001', memberId: 'M-006', memberName: 'Cheikh Diop', position: 'boardMember', positionFunctionId: 'MF-004', mandateStart: '2023-01-15', mandateEnd: '2027-01-15', status: 'ongoing' },
+  { id: 'BM-005', tenantId: 'T-001', memberId: 'M-007', memberName: 'Khadija Mbaye', position: 'boardMember', positionFunctionId: 'MF-004', mandateStart: '2026-09-01', mandateEnd: '2028-09-01', status: 'upcoming' },
 ];

@@ -1,4 +1,5 @@
 import type { WorkflowDomain } from './workflow-definitions';
+import type { ChangeSetItem } from '@/lib/workflow/change-set';
 
 export type WorkflowStatus = 'pending' | 'inProgress' | 'approved' | 'rejected' | 'returned' | 'cancelled';
 export type WorkflowStepStatus = 'pending' | 'approved' | 'rejected' | 'returned' | 'skipped';
@@ -19,10 +20,34 @@ export type WorkflowRequest = {
   tenantId: string;
   workflowDefinitionId: string;
   domain: WorkflowDomain;
-  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation';
+  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation' | 'member';
   entityId: string;
   entityLabel: string;
   amount?: number;
+  /**
+   * ChangeSet (besoin §10) — champs proposés par une demande de MODIFICATION
+   * d'une entité déjà enregistrée, calculé par `computeChangeSet` au moment
+   * de la création de la demande. Absent pour les `WorkflowRequest` qui
+   * n'approuvent pas une modification de champs (Crédit/Gouvernance/
+   * Distribution/Fiscal Year reopen — ces domaines approuvent une ACTION sur
+   * une entité déjà figée, pas un patch de champs), présent uniquement pour
+   * les nouveaux domaines qui interceptent une mise à jour (ex. `member`).
+   */
+  changeSet?: ChangeSetItem[];
+  /**
+   * Verrou optimiste (besoin §11) — `version` de l'entité au moment de la
+   * demande. À l'application du changeset, comparé à la version courante de
+   * l'entité : une divergence pose `versionConflict` plutôt que d'écraser
+   * silencieusement une modification concurrente.
+   */
+  entitySnapshotVersion?: number;
+  /** Empêche une application automatique après détection d'un conflit de version (§11) — jamais retiré automatiquement, seule une nouvelle demande (resoumission) repart d'un état propre. */
+  versionConflict?: true;
+  /**
+   * Versionnement de la DÉFINITION (besoin §17) — capturé à la création,
+   * jamais réévalué rétroactivement si la définition évolue ensuite.
+   */
+  workflowDefinitionVersion?: number;
   /**
    * Champ générique optionnel — justification libre fournie par le
    * demandeur, visible par l'approbateur dans l'écran de détail existant
@@ -46,6 +71,16 @@ export type WorkflowRequest = {
    * de réouverture d'exercice fiscal (voir `settingsService.decideFiscalYearReopen`).
    */
   requestedByUserId?: string;
+  /**
+   * Avertissements NON BLOQUANTS calculés à la création de la demande (mandat
+   * « Évolution du cycle de vie des exercices fiscaux » §14) — champ générique
+   * (comme `justification`), réutilisable par tout domaine, pas de nom
+   * spécifique Fiscal Year. Aujourd'hui rempli uniquement par
+   * `settingsService.requestFiscalYearReopen` (codes : `NEXT_YEAR_ACTIVE`,
+   * `CARRY_FORWARD_APPLIED` — voir son commentaire). N'empêche jamais la
+   * demande ni sa décision : affiché tel quel à l'approbateur (`WorkflowDetail`).
+   */
+  warnings?: string[];
   requestedAt: string;
   status: WorkflowStatus;
   currentStepOrder: number;

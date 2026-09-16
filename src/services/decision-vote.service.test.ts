@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { decisionVoteService } from './decision-vote.service';
 import { assemblyDecisionService } from './assembly-decision.service';
 import { generalAssemblyService } from './general-assembly.service';
-import { organizationService } from './organization.service';
 
 async function createGA(tenantId: string, title: string, date = '2026-12-25') {
   const ga = await generalAssemblyService.createGeneralAssembly(tenantId, { title, assemblyDate: date, description: null });
@@ -138,13 +137,5 @@ describe('decisionVoteService — LIST — tenant isolation', () => {
     const decisionT2 = await createDecision('T-002', gaT2.id, 'Decision Isolation T2');
     const votesT2 = await decisionVoteService.listVotesByDecision('T-002', decisionT2.id);
     expect(votesT2.find((vote) => vote.id === voteT1!.id)).toBeUndefined();
-  });
-});
-
-describe('Meeting.type — no impact on standalone Governance > Votes feature (organizationService.createVote)', () => {
-  it('ALLOW: the pre-existing standalone Vote feature is untouched by D-4C4-WEB-07/08 — meetingId stays null', async () => {
-    const vote = await organizationService.createVote('T-001', { subject: 'Vote autonome', date: '2026-12-01' });
-    expect(vote.meetingId).toBeNull();
-    expect(vote.assemblyDecisionId).toBeNull();
   });
 });

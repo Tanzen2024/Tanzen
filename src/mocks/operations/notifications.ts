@@ -1,6 +1,7 @@
 export type NotificationType = 'workflow' | 'loan' | 'membership' | 'contribution' | 'tontine' | 'announcement' | 'system';
 export type NotificationPriority = 'high' | 'medium' | 'low';
-export type NotificationSource = 'credit' | 'tontines' | 'governance' | 'finance' | 'system';
+/** `'organization'` ajouté (mandat « Moteur générique de workflow de validation ») pour les notifications liées à une demande de modification de Membre. */
+export type NotificationSource = 'credit' | 'tontines' | 'governance' | 'finance' | 'system' | 'organization';
 
 export type Notification = {
   id: string;

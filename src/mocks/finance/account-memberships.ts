@@ -109,3 +109,33 @@ export function isMemberOfAccountAsOf(
 ): boolean {
   return membershipsAsOf(memberships, memberId, asOfDate).some((m) => m.accountId === accountId);
 }
+
+/**
+ * Adhésions d'un membre qui CHEVAUCHENT au moins un jour de la fenêtre inclusive
+ * `[from, to]` : commencées au plus tard le `to`, non clôturées avant le `from`.
+ * Sert au calcul des flux sur période — une caisse quittée en cours de période y
+ * figure quand même (ses mouvements de la période, tant que l'adhésion était
+ * active le jour de chaque transaction, restent comptés — cf. `flows`).
+ */
+export function membershipsOverlapping(
+  memberships: AccountMembership[],
+  memberId: string,
+  from: string,
+  to: string,
+): AccountMembership[] {
+  return memberships.filter(
+    (m) => m.memberId === memberId && m.startDate <= to && (m.endDate === null || from <= m.endDate),
+  );
+}
+
+/** Caisses (objets) dont le membre a été adhérent à un moment de `[from, to]`. */
+export function accountsOfMemberDuring<T extends Pick<AccountRecord, 'id'>>(
+  memberships: AccountMembership[],
+  accounts: T[],
+  memberId: string,
+  from: string,
+  to: string,
+): T[] {
+  const ids = new Set(membershipsOverlapping(memberships, memberId, from, to).map((m) => m.accountId));
+  return accounts.filter((account) => ids.has(account.id));
+}

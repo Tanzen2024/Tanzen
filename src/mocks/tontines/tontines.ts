@@ -12,9 +12,25 @@ export type Tontine = {
   name: string;
   /** Seule notion de classification de la nature de la Tontine (décision métier explicite). Le champ historique `type` (cooperative/tontine/association/mutuelle) a été supprimé — il n'exprimait pas une notion de valeur, seulement une structure organisationnelle dupliquant déjà Tenant.type, jamais utilisée métier au-delà d'un affichage. */
   valueType: ValueType;
-  /** Devise de référence, pertinente uniquement pour MONEY (code ISO 4217, cf. `constants/currencies.ts`). Même statut déclaratif que `item`/`quantity` ci-dessous : jamais imposée aux Contributions créées ultérieurement, seulement préremplie. */
+  /**
+   * Devise de référence, pertinente uniquement pour MONEY (code ISO 4217,
+   * cf. `constants/currencies.ts`) — jamais imposée aux Contributions créées
+   * ultérieurement, seulement préremplie. Reste `string` optionnel dans le
+   * modèle (rétrocompatibilité, tontines GOODS) mais `tontinesService.createTontine`
+   * la rend obligatoire pour toute nouvelle tontine MONEY : héritée
+   * automatiquement de Paramètres > Organisation à la création (mandat
+   * « devise automatique »), jamais choisie dans le formulaire ni modifiée
+   * rétroactivement si la devise de l'organisation change ensuite.
+   */
   currency?: string;
-  /** Mode d'achat, pertinent uniquement pour MONEY (§13-15 mandat refonte) — configuration pure, ne déclenche aucune transaction/contribution/paiement automatique (aucun workflow d'achat n'est sourcé, volontairement non inventé). Défaut WITHOUT_PURCHASE. */
+  /**
+   * « Avec achat » dans l'UI (mandat « Avec achat »), pertinent uniquement pour MONEY.
+   * `WITH_PURCHASE` déclenche la résolution automatique de `purchaseAccountId`
+   * (caisse « Achat tontine » du tenant) à la création/modification — une pure
+   * ASSOCIATION, jamais une transaction/contribution/paiement automatique
+   * (aucune transaction n'est postée tant qu'un achat n'est pas réellement
+   * effectué, cf. `purchaseAccountId`). Défaut WITHOUT_PURCHASE.
+   */
   purchaseMode?: PurchaseMode;
   /**
    * Montant de cotisation configuré pour la Tontine (mandat « montant de
@@ -40,6 +56,39 @@ export type Tontine = {
   memberCount: number;
   totalContributions: number;
   createdAt: string;
+  /**
+   * Caisse Finance (`Account.id`, même tenant) recevant les cotisations et
+   * finançant les réceptions de cette tontine (mandat « Finalisation Finance/
+   * Tontines » — intégration Tontine ↔ Finance). Absent dans le modèle avant ce
+   * mandat : aucune tontine n'était rattachée à une caisse, les deux domaines
+   * fonctionnaient en parallèle sans jamais s'alimenter (cf. audit TANZEN).
+   * Optionnel et volontairement RÉTROCOMPATIBLE : une tontine sans `accountId`
+   * continue de fonctionner exactement comme avant (aucune transaction Finance
+   * générée) — voir `tontine-turns.service.ts`, `postContributionToFinance`/
+   * `postReceptionToFinance`. Pertinent uniquement pour `valueType: 'MONEY'`
+   * (une tontine GOODS n'a pas de flux monétaire à faire transiter par un
+   * compte, cohérent avec l'absence de « disponible » financier déjà actée
+   * pour ce cas ailleurs dans le modèle).
+   */
+  accountId?: string;
+  /**
+   * Caisse Finance dédiée aux ACHATS de cette tontine (mandat « Avec achat »)
+   * — DISTINCT de `accountId` ci-dessus, jamais le même concept :
+   * - `accountId` = caisse générale liée qui reçoit les COTISATIONS et
+   *   finance les RÉCEPTIONS (mandat « intégration Tontine ↔ Finance »,
+   *   inchangé par ce mandat) ;
+   * - `purchaseAccountId` = caisse qui ne reçoit QUE les montants d'ACHAT
+   *   (`ReceptionOperation.purchaseAmount`), jamais les cotisations ni les
+   *   montants de réception « net ».
+   * Toujours calculé automatiquement par `tontinesService` (jamais saisi par
+   * l'utilisateur) : `undefined` si `purchaseMode !== 'WITH_PURCHASE'`, sinon
+   * résolu par le libellé « Achat tontine » du tenant courant
+   * (`resolvePurchaseAccountId`). Sa seule présence ne déclenche AUCUNE
+   * transaction — voir `tontine-turns.service.ts`, où seul un achat
+   * RÉELLEMENT effectué (`recordReception` avec `purchaseAmount > 0`) poste
+   * une Transaction, jamais la création/modification de la Tontine elle-même.
+   */
+  purchaseAccountId?: string;
 } & { frequency: FrequencyConfig['frequency'] } & Partial<Omit<FrequencyConfig, 'frequency'>>;
 
 export const tontines: Tontine[] = [

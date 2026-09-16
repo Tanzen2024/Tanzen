@@ -8,6 +8,8 @@ import { contributions, contributionsByMonth } from '@/mocks/finance/contributio
 import { distributions, type Distribution } from '@/mocks/finance/distributions';
 import { members } from '@/mocks/organization/members';
 import { meetingService } from './meeting.service';
+import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
+import { currentUser } from '@/mocks/rbac.mocks';
 
 /**
  * Formulaire simplifié « Nouvelle caisse » (mandat CAISSE §2/§3) : ni tenant
@@ -109,6 +111,68 @@ function withComputedBalance(account: AccountRecord): Account {
   return { ...resolveAccount(account, transactions), memberIds: activeMemberIdsOf(account.tenantId, account.id) };
 }
 
+/**
+ * Logique PURE (aucun `mockRequest`, aucun délai) de `createTransaction` —
+ * extraite pour être réutilisable de façon strictement SYNCHRONE par d'autres
+ * services dont les propres fonctions sont elles-mêmes des factories
+ * synchrones enveloppées par `mockRequest` (ex. `tontineTurnsService.
+ * recordContributionPayment`/`recordReception`, mandat « intégration Tontine
+ * ↔ Finance »). ATTENTION technique documentée : `mockRequest()` ne coerce
+ * `undefined → null` QUE pour une factory synchrone — une factory `async`
+ * retourne une Promise (jamais littéralement `undefined`) au moment où
+ * `mockRequest` teste `result === undefined`, ce qui casserait silencieusement
+ * cette coercion pour TOUTES les fonctions déjà existantes qui en dépendent.
+ * Appeler cette fonction directement (jamais `await financeService.
+ * createTransaction(...)`) est donc la seule façon, pour un appelant
+ * synchrone, de rester dans le même contrat `undefined`/`null` que tout le
+ * reste du projet.
+ */
+export function insertTransaction(tenantId: string, input: TransactionInput): Transaction | undefined {
+  const amount = Number(input.amount);
+  if (!input.accountNumber || !Number.isFinite(amount) || amount <= 0) return undefined;
+  // Validations de classification (mandat §22) : catégorie officielle, et
+  // combinaison catégorie/sous-catégorie cohérente (AUTRES ⇔ sous-catégorie
+  // valide ; EPARGNE/PRET/REMBOURSEMENT ⇒ aucune sous-catégorie). Empêche
+  // aussi qu'un client force une sous-catégorie appartenant à une autre
+  // catégorie (ex. `EPARGNE` + `FRAIS`).
+  if (!isTransactionCategory(input.category)) return undefined;
+  if (!isClassificationValid(input.category, input.subcategory ?? null)) return undefined;
+  // Isolation §12 : une réunion sélectionnée DOIT appartenir à l'exercice fiscal
+  // ET au tenant de l'opération (l'id `MTG-<fiscalYearId>-…` encode les deux).
+  if (input.meetingId) {
+    if (!input.fiscalYearId) return undefined;
+    if (!meetingService.validateMeetingBelongsToExercise(input.meetingId, input.fiscalYearId, tenantId)) return undefined;
+  }
+  const subcategory = input.category === 'AUTRES' ? input.subcategory ?? undefined : undefined;
+  const now = new Date();
+  const seq = transactions.length + 1;
+  const memberName = input.memberId ? input.memberName?.trim() || undefined : undefined;
+  const transaction: Transaction = {
+    id: `TR-${String(seq).padStart(3, '0')}`,
+    tenantId,
+    reference: `REF-${now.getFullYear()}-${String(seq).padStart(4, '0')}`,
+    date: now.toISOString().slice(0, 10),
+    amount,
+    type: input.type,
+    category: input.category,
+    subcategory,
+    status: 'completed',
+    // Même convention que le seed / `transactionAccountLabel` : pour un crédit
+    // les fonds vont vers le compte, pour un débit ils en sortent.
+    fromAccount: input.type === 'credit' ? (memberName ?? input.accountNumber) : input.accountNumber,
+    toAccount: input.type === 'credit' ? input.accountNumber : (memberName ?? input.accountNumber),
+    description: input.description.trim(),
+    memberId: input.memberId || undefined,
+    meetingId: input.meetingId || undefined,
+    // `meetingDate` affichée = date résolue depuis `meetingId` (jamais une saisie libre).
+    meetingDate: input.meetingId ? meetingService.resolveMeetingDate(input.meetingId) ?? input.meetingDate ?? undefined : undefined,
+    fiscalYearId: input.fiscalYearId || undefined,
+    recordedAt: now.toISOString(),
+  };
+  transactions.push(transaction);
+  return transaction;
+}
+
 export const financeService = {
   listAccounts: (tenantId: string) => mockRequest(() => accounts.filter((account) => account.tenantId === tenantId).map(withComputedBalance)),
   getAccount: (tenantId: string, accountId: string) =>
@@ -195,6 +259,44 @@ export const financeService = {
       const index = accounts.findIndex((item) => item.id === accountId);
       accounts.splice(index, 1);
       return { deleted: true, deactivated: false } as const;
+    }),
+
+  /**
+   * RÉACTIVATION (mandat « Évolution du cycle de vie des exercices fiscaux »
+   * §33/§36 — audit des objets clôturables) : seul objet, hors exercice
+   * fiscal, où la réouverture transverse a été jugée justifiée — une caisse
+   * `inactive` (désactivée par `deleteAccount` faute de pouvoir la supprimer,
+   * cf. ci-dessus) ne perd aucune donnée financière, réactiver n'est qu'un
+   * flip de statut sans risque d'incohérence comptable. Refuse si la caisse
+   * n'existe pas ou n'est pas `inactive` (pas de no-op silencieux sur une
+   * caisse déjà `active`). Auditée directement dans `auditEvents` (canonique,
+   * `src/mocks/audit/audit-events.ts`) — aucun second système d'audit créé.
+   */
+  reactivateAccount: (tenantId: string, accountId: string) =>
+    mockRequest(() => {
+      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
+      if (!account || account.status !== 'inactive') return undefined;
+      account.status = 'active';
+      const event: AuditEvent = {
+        id: `AUD-FIN-${Date.now()}-${auditEvents.length}`,
+        tenantId,
+        timestamp: new Date().toISOString(),
+        actorId: currentUser.id,
+        actorName: currentUser.name,
+        module: 'finance',
+        action: 'finance.account.reactivated',
+        eventType: 'action',
+        resourceType: 'account',
+        resourceId: account.id,
+        resourceLabel: account.title,
+        status: 'success',
+        sensitive: false,
+        correlationId: account.id,
+        before: { status: 'inactive' },
+        after: { status: 'active' },
+      };
+      auditEvents.push(event);
+      return withComputedBalance(account);
     }),
 
   /** Adhérents actuellement adhérents d'une caisse — dérivé de `AccountMembership` (adhésions actives), filtré tenant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
@@ -287,52 +389,7 @@ export const financeService = {
    * c'est un dérivé de `recordedAt`, pas une saisie. `meetingDate` porte, elle,
    * la date métier de la réunion.
    */
-  createTransaction: (tenantId: string, input: TransactionInput) =>
-    mockRequest(() => {
-      const amount = Number(input.amount);
-      if (!input.accountNumber || !Number.isFinite(amount) || amount <= 0) return undefined;
-      // Validations de classification (mandat §22) : catégorie officielle, et
-      // combinaison catégorie/sous-catégorie cohérente (AUTRES ⇔ sous-catégorie
-      // valide ; EPARGNE/PRET/REMBOURSEMENT ⇒ aucune sous-catégorie). Empêche
-      // aussi qu'un client force une sous-catégorie appartenant à une autre
-      // catégorie (ex. `EPARGNE` + `FRAIS`).
-      if (!isTransactionCategory(input.category)) return undefined;
-      if (!isClassificationValid(input.category, input.subcategory ?? null)) return undefined;
-      // Isolation §12 : une réunion sélectionnée DOIT appartenir à l'exercice fiscal
-      // ET au tenant de l'opération (l'id `MTG-<fiscalYearId>-…` encode les deux).
-      if (input.meetingId) {
-        if (!input.fiscalYearId) return undefined;
-        if (!meetingService.validateMeetingBelongsToExercise(input.meetingId, input.fiscalYearId, tenantId)) return undefined;
-      }
-      const subcategory = input.category === 'AUTRES' ? input.subcategory ?? undefined : undefined;
-      const now = new Date();
-      const seq = transactions.length + 1;
-      const memberName = input.memberId ? input.memberName?.trim() || undefined : undefined;
-      const transaction: Transaction = {
-        id: `TR-${String(seq).padStart(3, '0')}`,
-        tenantId,
-        reference: `REF-${now.getFullYear()}-${String(seq).padStart(4, '0')}`,
-        date: now.toISOString().slice(0, 10),
-        amount,
-        type: input.type,
-        category: input.category,
-        subcategory,
-        status: 'completed',
-        // Même convention que le seed / `transactionAccountLabel` : pour un crédit
-        // les fonds vont vers le compte, pour un débit ils en sortent.
-        fromAccount: input.type === 'credit' ? (memberName ?? input.accountNumber) : input.accountNumber,
-        toAccount: input.type === 'credit' ? input.accountNumber : (memberName ?? input.accountNumber),
-        description: input.description.trim(),
-        memberId: input.memberId || undefined,
-        meetingId: input.meetingId || undefined,
-        // `meetingDate` affichée = date résolue depuis `meetingId` (jamais une saisie libre).
-        meetingDate: input.meetingId ? meetingService.resolveMeetingDate(input.meetingId) ?? input.meetingDate ?? undefined : undefined,
-        fiscalYearId: input.fiscalYearId || undefined,
-        recordedAt: now.toISOString(),
-      };
-      transactions.push(transaction);
-      return transaction;
-    }),
+  createTransaction: (tenantId: string, input: TransactionInput) => mockRequest(() => insertTransaction(tenantId, input)),
 
   /**
    * `recordedAt`/`date` (la « Date transaction » d'audit) ne figurent PAS dans

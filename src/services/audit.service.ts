@@ -37,4 +37,37 @@ async function listEvents(tenantId: string): Promise<AuditEvent[]> {
 export const auditService = {
   list: (tenantId: string) => listEvents(tenantId),
   get: async (tenantId: string, eventId: string) => (await listEvents(tenantId)).find((event) => event.id === eventId),
+  /**
+   * Point d'entrée d'ÉCRITURE générique — absent jusqu'ici (mandat « Moteur
+   * générique de workflow de validation », besoin §23) : chaque domaine
+   * (Crédit, Fiscal Year…) réimplémentait son propre `record<Domain>Audit`
+   * qui poussait directement dans `auditEvents`. Cette fonction fait la même
+   * chose, exposée une seule fois pour que le nouveau moteur (et tout futur
+   * appelant) n'ait plus besoin de dupliquer ce helper. Les `record<Domain>Audit`
+   * existants ne sont PAS migrés vers cette fonction dans ce mandat — risque
+   * de régression hors périmètre, laissé en nettoyage futur.
+   */
+  record: (entry: { tenantId: string; actorId: string; actorName: string; module: AuditEvent['module']; action: string; eventType?: AuditEvent['eventType']; resourceType: string; resourceId: string; resourceLabel: string; status?: AuditEvent['status']; sensitive?: boolean; before?: Record<string, string | number>; after?: Record<string, string | number>; context?: Record<string, string | number> }): AuditEvent => {
+    const event: AuditEvent = {
+      id: `AUD-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      tenantId: entry.tenantId,
+      timestamp: new Date().toISOString(),
+      actorId: entry.actorId,
+      actorName: entry.actorName,
+      module: entry.module,
+      action: entry.action,
+      eventType: entry.eventType ?? 'action',
+      resourceType: entry.resourceType,
+      resourceId: entry.resourceId,
+      resourceLabel: entry.resourceLabel,
+      status: entry.status ?? 'success',
+      sensitive: entry.sensitive ?? false,
+      correlationId: entry.resourceId,
+      ...(entry.before ? { before: entry.before } : {}),
+      ...(entry.after ? { after: entry.after } : {}),
+      ...(entry.context ? { context: entry.context } : {}),
+    };
+    auditEvents.push(event);
+    return event;
+  },
 };

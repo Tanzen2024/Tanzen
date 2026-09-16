@@ -5,6 +5,7 @@ import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
 import { creditService } from '@/services/credit.service';
+import { financeService } from '@/services/finance.service';
 import { transactions } from '@/mocks/finance/transactions';
 import type { Loan } from '@/mocks/finance/loans';
 
@@ -51,12 +52,28 @@ async function openRepaymentForm(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(memberSelect, 'M-001');
 }
 
-let createRepaymentSpy: ReturnType<typeof vi.spyOn>;
+let createRepaymentTransactionSpy: ReturnType<typeof vi.spyOn>;
 
+/**
+ * Mandat « Finalisation Finance/Tontines » §14/§15 : le formulaire appelle
+ * désormais `creditService.createRepaymentTransaction` (chemin atomique —
+ * Transaction + Repayment en une seule opération validée), plus l'ancien
+ * couple `createTransaction` puis `createRepayment` en deux appels séparés.
+ * Le mock délègue la création de la Transaction au vrai `financeService`
+ * (pour obtenir un identifiant réel et une page de détail affichable) tout en
+ * stubant le `Loan`/`Repayment` — les prêts de test (`L-90x`) n'existent que
+ * dans `listLoansByMember`, jamais dans le tableau `loans` réel.
+ */
 beforeEach(() => {
   restoreTransactionsSeed();
-  createRepaymentSpy = vi.spyOn(creditService, 'createRepayment').mockResolvedValue({
-    id: 'RP-TEST', tenantId: 'T-001', loanId: 'L-TEST', borrower: 'Fatou Ndiaye', amount: 0, paymentDate: '2026-09-01', principalPart: 0, interestPart: 0, status: 'completed',
+  createRepaymentTransactionSpy = vi.spyOn(creditService, 'createRepaymentTransaction').mockImplementation(async (tenantId, input) => {
+    const transaction = await financeService.createTransaction(tenantId, input.transactionInput);
+    if (!transaction) return undefined;
+    return {
+      loan: makeLoan({ id: input.loanId }),
+      repayment: { id: 'RP-TEST', tenantId, loanId: input.loanId, borrower: 'Fatou Ndiaye', amount: input.principalPart + input.interestPart, paymentDate: input.paymentDate, principalPart: input.principalPart, interestPart: input.interestPart, status: 'completed' as const },
+      transaction,
+    };
   });
 });
 afterEach(() => {
@@ -96,7 +113,7 @@ describe('Finance → Transactions — REMBOURSEMENT (détermination automatique
     expect(screen.getAllByText('Totalement réglé').length).toBeGreaterThan(0);
   });
 
-  it('enregistre le remboursement : crée la transaction ET appelle createRepayment sur le prêt résolu', async () => {
+  it('enregistre le remboursement : crée la transaction ET appelle createRepaymentTransaction sur le prêt résolu (chemin atomique)', async () => {
     vi.spyOn(creditService, 'listLoansByMember').mockResolvedValue([makeLoan({ id: 'L-904', outstanding: 200_000 })]);
     const user = userEvent.setup();
     await openRepaymentForm(user);
@@ -105,7 +122,7 @@ describe('Finance → Transactions — REMBOURSEMENT (détermination automatique
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
     expect(await screen.findByText(/Remboursement test AGO/)).toBeInTheDocument();
-    expect(createRepaymentSpy).toHaveBeenCalledWith('T-001', expect.objectContaining({ loanId: 'L-904', principalPart: 120_000, interestPart: 0, status: 'completed' }));
+    expect(createRepaymentTransactionSpy).toHaveBeenCalledWith('T-001', expect.objectContaining({ loanId: 'L-904', principalPart: 120_000, interestPart: 0 }));
   });
 
   it('adhérent sans dette active → « Aucune dette en cours » et enregistrement bloqué', async () => {
@@ -116,7 +133,7 @@ describe('Finance → Transactions — REMBOURSEMENT (détermination automatique
     expect(await screen.findByText('Aucune dette en cours pour cet adhérent.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Montant versé *')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
-    expect(createRepaymentSpy).not.toHaveBeenCalled();
+    expect(createRepaymentTransactionSpy).not.toHaveBeenCalled();
     expect(screen.getByText('Aucune dette en cours pour cet adhérent.')).toBeInTheDocument();
   });
 
@@ -128,6 +145,6 @@ describe('Finance → Transactions — REMBOURSEMENT (détermination automatique
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
     expect(await screen.findByText(/ne peut pas dépasser le montant à rembourser/)).toBeInTheDocument();
-    expect(createRepaymentSpy).not.toHaveBeenCalled();
+    expect(createRepaymentTransactionSpy).not.toHaveBeenCalled();
   });
 });

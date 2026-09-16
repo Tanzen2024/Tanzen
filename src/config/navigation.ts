@@ -4,7 +4,6 @@ import {
   Bell,
   Building2,
   CalendarDays,
-  ClipboardCheck,
   FileClock,
   FileText,
   Fingerprint,
@@ -15,7 +14,6 @@ import {
   ListChecks,
   LockKeyhole,
   ReceiptText,
-  Scale,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -37,16 +35,20 @@ export type NavigationNode = {
 
 export const navigationTree: NavigationNode[] = [
   { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+  /**
+   * Mandat « Restructuration finale de la navigation » (2026-09-16) : « Gouvernance »
+   * disparaît comme NIVEAU DE NAVIGATION — Members / Board & Mandates / Meetings
+   * deviennent des enfants directs d'Organization, au même niveau hiérarchique.
+   * Uniquement un déplacement dans le sidebar : les URLs (`/organization/governance/...`),
+   * les routes, permissions, workflows et audits du domaine Gouvernance restent
+   * inchangés (voir `organization-module.tsx`/`organization.service.ts`), ce nœud ne
+   * fait que les référencer à une profondeur différente.
+   */
   {
     label: 'Organization', path: '/organization', icon: Building2, children: [
       { label: 'Members', path: '/organization/members', icon: Users },
-      {
-        label: 'Governance', path: '/organization/governance', icon: Scale, children: [
-          { label: 'Meetings', path: '/organization/governance/meetings', icon: CalendarDays },
-          { label: 'Votes', path: '/organization/governance/votes', icon: ClipboardCheck },
-          { label: 'Board & Mandates', path: '/organization/governance/board-mandates', icon: UserCog },
-        ],
-      },
+      { label: 'Board & Mandates', path: '/organization/governance/board-mandates', icon: UserCog },
+      { label: 'Meetings', path: '/organization/governance/meetings', icon: CalendarDays },
     ],
   },
   /**
@@ -58,14 +60,19 @@ export const navigationTree: NavigationNode[] = [
    * mais des TYPES D'OPÉRATION : leurs écrans et routes ont été supprimés. Seule
    * `/finance/credit/loan-rules` subsiste comme route (éditeur de politique de
    * prêt), atteignable depuis la page Comptes — jamais depuis le menu.
+   *
+   * Mandat « Restructuration finale de la navigation » (2026-09-16) : Tontines
+   * rejoint ce groupe comme troisième domaine financier — déplacement de nœud
+   * uniquement, l'URL `/tontines` et toute la logique métier Tontines restent
+   * inchangées.
    */
   {
     label: 'Finance', path: '/finance', icon: Landmark, children: [
       { label: 'Accounts', path: '/finance/accounts', icon: WalletCards },
       { label: 'Transactions', path: '/finance/transactions', icon: ReceiptText },
+      { label: 'Tontines', path: '/tontines', icon: Sparkles },
     ],
   },
-  { label: 'Tontines', path: '/tontines', icon: Sparkles },
   {
     label: 'Operations', path: '/operations', icon: Workflow, children: [
       { label: 'Workflows', path: '/operations/workflows', icon: Workflow, badge: '4' },
@@ -100,6 +107,7 @@ export const navigationTree: NavigationNode[] = [
       { label: 'Security Policies', path: '/settings/security-policies', icon: ShieldCheck },
       { label: 'Modules', path: '/settings/modules', icon: ListChecks },
       { label: 'Integrations', path: '/settings/integrations', icon: SlidersHorizontal },
+      { label: 'Validation Workflows', path: '/settings/validation-workflows', icon: Workflow },
     ],
   },
 ];

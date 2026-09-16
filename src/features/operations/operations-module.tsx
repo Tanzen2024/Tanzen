@@ -36,9 +36,11 @@ type T = (section: 'operations' | 'nav', key: string, values?: Record<string, st
 
 const REQUEST_STATUS_TONE: Record<WorkflowStatus, StatusTone> = { pending: 'warning', inProgress: 'info', approved: 'success', rejected: 'error', returned: 'warning', cancelled: 'default' };
 const REQUEST_STATUS_KEY: Record<WorkflowStatus, string> = { pending: 'statusPending', inProgress: 'statusInProgress', approved: 'statusApproved', rejected: 'statusRejected', returned: 'statusReturned', cancelled: 'statusCancelled' };
-const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings' };
-const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon };
-const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', beneficiaryPermutation: 'entityBeneficiaryPermutation' };
+const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings', organization: 'domainOrganization' };
+const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon, organization: UserCog };
+const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', beneficiaryPermutation: 'entityBeneficiaryPermutation', member: 'entityMember' };
+/** Libellés des champs d'un ChangeSet Membre (besoin §20, tableau avant/après) — réutilise le vocabulaire déjà établi par `organization-module.tsx` (`PersonalTab`) plutôt que d'en inventer un second, sous forme de clés `operations` locales (le `T` de ce module reste borné à `'operations' | 'nav'`, pas d'accès direct à la section `organization`). */
+const MEMBER_CHANGE_FIELD_KEY: Record<string, string> = { firstName: 'changeFieldFirstName', lastName: 'changeFieldLastName', gender: 'changeFieldGender', email: 'changeFieldEmail', phone: 'changeFieldPhone', occupation: 'changeFieldOccupation', nationality: 'changeFieldNationality', address: 'changeFieldAddress', status: 'changeFieldStatus', matricule: 'changeFieldMatricule' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
@@ -133,7 +135,7 @@ function WorkflowsHub({ t }: { t: T }) {
       </TabsList>
       <TabsContent value="definitions"><DefinitionsTab t={t} definitions={definitions} /></TabsContent>
       <TabsContent value="requests" className="space-y-4">
-        <FilterBar search={search} onSearchChange={setSearch} placeholder={t('operations', 'requestId')} filters={<><select aria-label={t('operations', 'filterByDomain')} value={domain} onChange={(e) => setDomain(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'domain')}</option><option value="credit">{t('operations', 'domainCredit')}</option><option value="tontines">{t('operations', 'domainTontines')}</option><option value="governance">{t('operations', 'domainGovernance')}</option><option value="finance">{t('operations', 'domainFinance')}</option><option value="settings">{t('operations', 'domainSettings')}</option></select><select aria-label={t('operations', 'filterByStatus')} value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'status')}</option><option value="pending">{t('operations', 'statusPending')}</option><option value="inProgress">{t('operations', 'statusInProgress')}</option><option value="approved">{t('operations', 'statusApproved')}</option><option value="rejected">{t('operations', 'statusRejected')}</option><option value="returned">{t('operations', 'statusReturned')}</option></select></>} />
+        <FilterBar search={search} onSearchChange={setSearch} placeholder={t('operations', 'requestId')} filters={<><select aria-label={t('operations', 'filterByDomain')} value={domain} onChange={(e) => setDomain(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'domain')}</option><option value="credit">{t('operations', 'domainCredit')}</option><option value="tontines">{t('operations', 'domainTontines')}</option><option value="governance">{t('operations', 'domainGovernance')}</option><option value="finance">{t('operations', 'domainFinance')}</option><option value="settings">{t('operations', 'domainSettings')}</option><option value="organization">{t('operations', 'domainOrganization')}</option></select><select aria-label={t('operations', 'filterByStatus')} value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'status')}</option><option value="pending">{t('operations', 'statusPending')}</option><option value="inProgress">{t('operations', 'statusInProgress')}</option><option value="approved">{t('operations', 'statusApproved')}</option><option value="rejected">{t('operations', 'statusRejected')}</option><option value="returned">{t('operations', 'statusReturned')}</option></select></>} />
         <RequestsTable t={t} rows={filteredRequests} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={ClipboardList} title={t('operations', 'noRequests')} />} />
       </TabsContent>
       <TabsContent value="myApprovals"><RequestsTable t={t} rows={myApprovals} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={CheckCircle2} title={t('operations', 'noApprovals')} />} /></TabsContent>
@@ -150,6 +152,21 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const [comment, setComment] = useState('');
 
   const isFiscalYearReopen = Boolean(request && request.domain === 'settings' && request.entityType === 'fiscalYear');
+  /** Mandat « Moteur générique de workflow de validation » — même pattern que `isFiscalYearReopen` ci-dessus, second domaine à contrôler l'auto-approbation explicitement (`organizationService.decideMemberUpdate`). */
+  const isMemberUpdate = Boolean(request && request.domain === 'organization' && request.entityType === 'member');
+  /** Mandat « Finalisation Finance/Tontines » — une demande de crédit intégralement approuvée (WD-001, 2 étapes) peut être décaissée : action distincte, jamais automatique (§12 « le décaissement doit devenir une vraie opération métier »). */
+  const isApprovedCreditApplication = Boolean(request && request.domain === 'credit' && request.entityType === 'application' && request.status === 'approved');
+  const disburseMutation = useMutation({
+    mutationFn: () => creditService.disburseLoan(currentTenant.id, request!.entityId),
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('operations', 'disbursementFailed')); return; }
+      notify.success(t('operations', 'loanDisbursed'));
+      queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.credit.loans(currentTenant.id) });
+      queryClient.invalidateQueries({ queryKey: ['finance', 'transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['finance', 'accounts'] });
+    },
+  });
   /** Mandat §9 « photos partout où l'identité du bénéficiaire est affichée, y compris en validation de permutation » — écran générique, donc lecture activée seulement pour ce domaine/entityType précis (même garde que `isFiscalYearReopen` ci-dessus). */
   const isBeneficiaryPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'beneficiaryPermutation');
   const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineTurnsService.getBeneficiaryPermutationPreview(currentTenant.id, requestId), enabled: isBeneficiaryPermutation });
@@ -167,6 +184,10 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
        */
       if (isFiscalYearReopen && (action === 'approve' || action === 'reject')) {
         return settingsService.decideFiscalYearReopen(currentTenant.id, requestId, action, user.id, user.name, comment || undefined);
+      }
+      /** Même principe que la branche Fiscal Year ci-dessus — `decideMemberUpdate` bloque l'auto-approbation avant toute mutation (§22 du besoin), le moteur générique reste agnostique. */
+      if (isMemberUpdate && (action === 'approve' || action === 'reject')) {
+        return organizationService.decideMemberUpdate(currentTenant.id, requestId, action, user.id, user.name, comment || undefined);
       }
       const result = action === 'cancel' ? await workflowService.cancelRequest(currentTenant.id, requestId, user.name, comment || undefined) : await workflowService.submitAction(currentTenant.id, requestId, action, user.name, comment || undefined, user.id);
       /**
@@ -187,10 +208,20 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
        * du mandat), contrairement à la branche Fiscal Year ci-dessus.
        */
       if (result) tontineTurnsService.applyBeneficiaryPermutationDecision(currentTenant.id, result);
+      /**
+       * Même point d'intégration générique, troisième domaine (mandat « Finalisation
+       * Finance/Tontines » — prêts) — `applyLoanApplicationDecision` fait progresser
+       * `Application.stage` en miroir de l'avancement des 2 étapes de WD-001 ; no-op
+       * pour tout autre domaine/entityType. Le décaissement lui-même reste une action
+       * explicite séparée (bouton « Décaisser » ci-dessous), jamais automatique ici.
+       */
+      if (result) creditService.applyLoanApplicationDecision(currentTenant.id, result);
+      /** Même point d'intégration générique, quatrième domaine (mandat « Moteur générique de workflow de validation ») — no-op pour tout autre domaine/entityType et pour toute action qui ne fait pas passer le statut à `approved`. */
+      if (result) await organizationService.applyMemberUpdateDecision(currentTenant.id, result);
       return result;
     },
     onSuccess: (result, action) => {
-      if (!result && isFiscalYearReopen && (action === 'approve' || action === 'reject')) {
+      if (!result && (isFiscalYearReopen || isMemberUpdate) && (action === 'approve' || action === 'reject')) {
         notify.error(t('operations', 'cannotActOwnRequest'));
         setPendingAction(null); setComment('');
         return;
@@ -198,6 +229,12 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.operations.workflowRequest(requestId) });
       queryClient.invalidateQueries({ queryKey: ['operations'] });
       if (result?.domain === 'settings' && result.entityType === 'fiscalYear') queryClient.invalidateQueries({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id) });
+      if (result?.domain === 'credit' && result.entityType === 'application') queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
+      if (result?.domain === 'organization' && result.entityType === 'member') {
+        queryClient.invalidateQueries({ queryKey: queryKeys.members.list(currentTenant.id) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.members.detail(result.entityId) });
+        queryClient.invalidateQueries({ queryKey: ['operations', 'member-pending-approval', result.entityId, currentTenant.id] });
+      }
       /**
        * Bug réel trouvé à l'audit (relecture fraîche) : `allBeneficiaries` (agrégat) était
        * bien invalidé, mais jamais les clés `['tontines','occurrence-beneficiaries',
@@ -251,8 +288,23 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt, locale)} icon={ClipboardList} />
           {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatFCFA(request.amount, locale)} icon={Landmark} />}
           {request.justification && <Info label={t('operations', 'justification')} value={request.justification} icon={FileText} />}
+          {request.warnings && request.warnings.length > 0 && <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
+            <p className="mb-1 font-semibold">{t('operations', 'reopenWarningsLabel')}</p>
+            <ul className="list-inside list-disc space-y-0.5">
+              {request.warnings.map((code) => <li key={code}>{t('operations', code === 'CARRY_FORWARD_APPLIED' ? 'reopenWarningCarryForwardApplied' : 'reopenWarningNextYearActive')}</li>)}
+            </ul>
+          </div>}
           <StatusBadge label={t('operations', REQUEST_STATUS_KEY[request.status])} tone={REQUEST_STATUS_TONE[request.status]} />
         </CardContent></Card>
+        {request.versionConflict && <div className="rounded-lg border border-dashed border-red-400/60 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-400">{t('operations', 'versionConflictWarning')}</div>}
+        {/* ChangeSet avant/après (besoin §20) — générique, rendu pour toute demande qui en porte un (aujourd'hui uniquement `member`+`update`, WD-007). */}
+        {request.changeSet && request.changeSet.length > 0 && (
+          <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'proposedChanges')}</CardTitle></CardHeader><CardContent className="p-5">
+            <table className="w-full text-sm"><thead><tr className="border-b border-border text-left text-xs text-muted-foreground"><th className="pb-2 font-medium">{t('operations', 'changeField')}</th><th className="pb-2 font-medium">{t('operations', 'changeBefore')}</th><th className="pb-2 font-medium">{t('operations', 'changeAfter')}</th></tr></thead>
+              <tbody>{request.changeSet.map((item) => <tr key={item.field} className="border-b border-border/50 last:border-0"><td className="py-2 pr-3 font-medium">{t('operations', MEMBER_CHANGE_FIELD_KEY[item.field] ?? item.field)}</td><td className="py-2 pr-3 text-muted-foreground">{String(item.before ?? '—') || '—'}</td><td className="py-2 font-medium text-foreground">{String(item.after ?? '—') || '—'}</td></tr>)}</tbody>
+            </table>
+          </CardContent></Card>
+        )}
         {canAct && currentStep && (() => {
           /**
            * D-FY-08 (VALIDÉE, Option B) — indication UI, PAS le contrôle réel :
@@ -262,7 +314,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
            * (`settingsService.decideFiscalYearReopen`) — masquer les boutons
            * ici n'est qu'un confort, jamais la seule protection.
            */
-          const isSelfRequest = isFiscalYearReopen && Boolean(request.requestedByUserId) && request.requestedByUserId === user.id;
+          const isSelfRequest = (isFiscalYearReopen || isMemberUpdate) && Boolean(request.requestedByUserId) && request.requestedByUserId === user.id;
           return (
           <Card><CardHeader><CardTitle className="text-sm">{currentStep.name}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
             <p className="text-xs text-muted-foreground">{t('operations', 'requiredPermission')}: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{currentStep.approverPermission}</code></p>
@@ -278,6 +330,14 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           </CardContent></Card>
           );
         })()}
+        {isApprovedCreditApplication && (
+          <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'disbursement')}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
+            <p className="text-xs text-muted-foreground">{t('operations', 'requiredPermission')}: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">loans.create</code></p>
+            <PermissionGate permission="loans.create" fallback={<p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'noPermission')}</p>}>
+              <Button onClick={() => disburseMutation.mutate()} disabled={disburseMutation.isPending}><CreditCard size={15} />{disburseMutation.isPending ? t('operations', 'saving') : t('operations', 'disburse')}</Button>
+            </PermissionGate>
+          </CardContent></Card>
+        )}
       </div>
     </div>
     {pendingAction && <ConfirmDialog open title={confirmLabels[pendingAction].title} description={t('operations', 'commentPlaceholder')} confirmLabel={confirmLabels[pendingAction].confirm} cancelLabel={t('operations', 'cancel')} onConfirm={() => mutation.mutate(pendingAction)} onCancel={() => { setPendingAction(null); setComment(''); }}>

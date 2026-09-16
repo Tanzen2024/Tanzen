@@ -146,6 +146,35 @@ describe('financeService — deleteAccount', () => {
   });
 });
 
+/**
+ * Mandat « Évolution du cycle de vie des exercices fiscaux » §33/§36 (audit des
+ * objets clôturables) — seul objet, hors exercice fiscal, où une réouverture
+ * transverse a été jugée justifiée : une caisse désactivée ne perd aucune
+ * donnée financière, la réactivation n'est qu'un flip de statut.
+ */
+describe('financeService — reactivateAccount', () => {
+  it('ALLOW: reactivates an inactive account (AC-008, seeded inactive)', async () => {
+    const before = await financeService.getAccount('T-004', 'AC-008');
+    expect(before?.status).toBe('inactive');
+    const result = await financeService.reactivateAccount('T-004', 'AC-008');
+    expect(result?.status).toBe('active');
+    const after = await financeService.getAccount('T-004', 'AC-008');
+    expect(after?.status).toBe('active');
+  });
+
+  it('DENY: refuses an already-active account (no silent no-op)', async () => {
+    const [account] = await financeService.listAccounts('T-002');
+    expect(account.status).toBe('active');
+    const result = await financeService.reactivateAccount('T-002', account.id);
+    expect(result).toBeNull(); // mockRequest coerces undefined -> null (see api-client.ts)
+  });
+
+  it('DENY: refuses an account belonging to another tenant', async () => {
+    const result = await financeService.reactivateAccount('T-001', 'AC-008'); // AC-008 belongs to T-004
+    expect(result).toBeNull();
+  });
+});
+
 describe('financeService — account member assignment (adhésions à la caisse)', () => {
   it('ALLOW: adds a single member to an account', async () => {
     const created = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Caisse membre unique ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });

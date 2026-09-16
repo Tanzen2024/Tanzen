@@ -86,6 +86,13 @@ export const accounts: AccountRecord[] = [
   { id: 'AC-012', tenantId: 'T-001', accountNumber: 'CS-001-CX-004', title: 'Transport', type: 'TAUX_FIXE', amount: 5_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
   { id: 'AC-013', tenantId: 'T-001', accountNumber: 'CS-001-CX-005', title: 'Achat argent', type: 'LIBRE', amount: null, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
   { id: 'AC-014', tenantId: 'T-001', accountNumber: 'CS-001-CX-006', title: 'Fond de solidarité', type: 'TAUX_FIXE', amount: 40_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
+
+  // Caisses « Achat tontine » (mandat « Avec achat ») — une par tenant, identifiée par libellé
+  // normalisé (cf. `normalizeAccountLabel`/`resolvePurchaseAccountId` dans `tontines.service.ts`).
+  // Seule la caisse RÉELLEMENT nommée « Achat tontine » du tenant courant reçoit les montants
+  // d'achat — jamais les cotisations (cf. doc du champ `Tontine.purchaseAccountId`).
+  { id: 'AC-015', tenantId: 'T-001', accountNumber: 'CS-001-CX-008', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
+  { id: 'AC-016', tenantId: 'T-002', accountNumber: 'TH-002-CX-001', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Tontine Horizon', status: 'active', openedOn: '2026-08-01', memberIds: [] },
 ];
 
 /**

@@ -41,7 +41,7 @@
  * `requestBeneficiaryPermutation`/le workflow WD-006 existant, jamais ce
  * formulaire.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ClipboardList, Download, Lock, Pencil, Plus, RefreshCw, Trash2, UserPlus, UsersRound, X } from 'lucide-react';
@@ -257,6 +257,11 @@ export function TontineOperationsManage({ t, embedded }: { t: T; embedded?: bool
    */
   const [addOpen, setAddOpen] = useState(false);
   const [addAdhesionId, setAddAdhesionId] = useState('');
+  /** Mandat « Finalisation Finance/Tontines » — ordre de passage suggéré (rotation par ordre d'adhésion), calculé uniquement pendant que ce dialogue est ouvert : jamais assigné automatiquement, seulement pré-rempli ; l'utilisateur reste libre de choisir un autre adhérent éligible. */
+  const { data: suggestion } = useQuery({ queryKey: ['tontines', 'suggest-beneficiary', occurrenceId, currentTenant.id], queryFn: () => tontineTurnsService.suggestNextBeneficiary(currentTenant.id, occurrenceId), enabled: addOpen && Boolean(occurrenceId) });
+  useEffect(() => {
+    if (addOpen && suggestion && !suggestion.cycleComplete && !addAdhesionId) setAddAdhesionId(suggestion.adhesionId);
+  }, [addOpen, suggestion]); // eslint-disable-line react-hooks/exhaustive-deps
   const [addNetValue, setAddNetValue] = useState('');
   const [addPurchaseValue, setAddPurchaseValue] = useState('');
   const [addAdhesionError, setAddAdhesionError] = useState<string | undefined>();
@@ -439,6 +444,8 @@ export function TontineOperationsManage({ t, embedded }: { t: T; embedded?: bool
             {eligibleAdhesions.map((adhesion) => <option key={adhesion.id} value={adhesion.id}>{adhesion.memberName}</option>)}
           </select>
           <FieldError message={addAdhesionError} />
+          {suggestion && !suggestion.cycleComplete && <p className="text-[11px] text-muted-foreground">{t('tontines', 'suggestedBeneficiary')}: <span className="font-medium text-foreground">{suggestion.memberName}</span></p>}
+          {suggestion?.cycleComplete && <p className="text-[11px] text-amber-700 dark:text-amber-300">{t('tontines', 'cycleComplete')}</p>}
         </div>
         <div className="space-y-2"><Label htmlFor="ops-add-net-value">{t('tontines', 'netToReceive')} *</Label><Input id="ops-add-net-value" type="number" inputMode="decimal" value={addNetValue} onChange={(event) => setAddNetValue(event.target.value)} aria-invalid={Boolean(addNetError)} /><FieldError message={addNetError} /></div>
         {isWithPurchase && <div className="space-y-2"><Label htmlFor="ops-add-purchase-value">{t('tontines', 'purchaseAmountLabel')} *</Label><Input id="ops-add-purchase-value" type="number" inputMode="decimal" value={addPurchaseValue} onChange={(event) => setAddPurchaseValue(event.target.value)} aria-invalid={Boolean(addPurchaseError)} /><FieldError message={addPurchaseError} /></div>}

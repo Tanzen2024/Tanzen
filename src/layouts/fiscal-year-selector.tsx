@@ -1,8 +1,11 @@
 import { useRef, useState } from 'react';
-import { CalendarDays, Check, ChevronDown } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, Plus } from 'lucide-react';
 import { useFiscalYear } from '@/contexts/fiscal-year-context';
 import { useLocale } from '@/contexts/locale-context';
+import { useTenant } from '@/contexts/tenant-context';
+import { usePermissions } from '@/contexts/permission-context';
 import { useClickOutside } from '@/hooks/use-click-outside';
+import { FiscalYearCreateDialog } from '@/features/settings/fiscal-year-create-dialog';
 import type { FiscalYearStatus } from '@/mocks/settings/fiscal-years';
 
 const STATUS_DOT: Record<FiscalYearStatus, string> = { open: 'bg-emerald-500', closed: 'bg-slate-400', upcoming: 'bg-blue-500' };
@@ -17,10 +20,14 @@ const STATUS_DOT: Record<FiscalYearStatus, string> = { open: 'bg-emerald-500', c
  */
 export function FiscalYearSelector({ compact = false }: { compact?: boolean }) {
   const { t } = useLocale();
+  const { currentTenant } = useTenant();
+  const { can } = usePermissions();
   const { fiscalYears, selectedFiscalYear, selectFiscalYear, canRead, isLoading } = useFiscalYear();
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useClickOutside([ref], () => setOpen(false), open);
+  const canCreate = can('fiscalYears.manage');
 
   if (!canRead || isLoading || !selectedFiscalYear) return null;
 
@@ -58,8 +65,20 @@ export function FiscalYearSelector({ compact = false }: { compact?: boolean }) {
               {year.id === selectedFiscalYear.id && <Check size={14} className="shrink-0 text-primary" />}
             </button>
           ))}
+          {canCreate && <>
+            <div className="my-1 h-px bg-border" />
+            <button
+              type="button"
+              onClick={() => { setOpen(false); setCreateOpen(true); }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-primary hover:bg-muted"
+            >
+              <Plus size={14} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{t('shell', 'createFiscalYearQuickAction')}</span>
+            </button>
+          </>}
         </div>
       )}
+      {canCreate && <FiscalYearCreateDialog open={createOpen} onOpenChange={setCreateOpen} tenantId={currentTenant.id} years={fiscalYears} />}
     </div>
   );
 }

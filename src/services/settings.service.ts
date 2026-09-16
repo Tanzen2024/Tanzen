@@ -7,6 +7,12 @@ import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { workflowService } from './workflow.service';
+import { financePositionService } from './finance-position.service';
+import { applications } from '@/mocks/finance/applications';
+import { distributions } from '@/mocks/finance/distributions';
+import { transactions } from '@/mocks/finance/transactions';
+import { openingEntries } from '@/mocks/finance/opening-entries';
+import { closingEntries } from '@/mocks/finance/closing-entries';
 import { notificationChannels, notificationRules, notificationPreferences, type NotificationRuleTrigger } from '@/mocks/settings/notification-settings';
 import { passwordPolicies, sessionPolicies, mfaPolicies, loginPolicies, type PasswordPolicy, type SessionPolicy, type MfaPolicy, type LoginPolicy } from '@/mocks/settings/security-policies';
 import { moduleConfigs, type ModuleKey } from '@/mocks/settings/modules';
@@ -38,6 +44,15 @@ export type CreateFiscalYearInput = {
    */
   meetingSchedule?: MeetingScheduleConfig;
 };
+
+export type CloseCurrentFiscalYearOutcome =
+  | { ok: true; year: FiscalYear; pendingOperations: { applications: number; distributions: number; transactions: number } }
+  | { ok: false; reason: 'NO_CURRENT_YEAR' }
+  | { ok: false; reason: 'FINANCE_CLOSING_FAILED' };
+
+export type ExtendFiscalYearEndDateOutcome =
+  | { ok: true; year: FiscalYear }
+  | { ok: false; reason: 'NOT_FOUND' | 'CLOSED' | 'NOT_AN_EXTENSION' | 'OVERLAPS_NEXT_YEAR' };
 
 /**
  * D-FY-06 (VALIDÉE, Option C) : point d'entrée UNIQUE des écritures d'audit
@@ -73,6 +88,37 @@ function recordFiscalYearAudit(params: { tenantId: string; action: string; year:
     ...(params.context ? { context: params.context } : {}),
   };
   auditEvents.push(event);
+}
+
+/**
+ * Avertissements NON BLOQUANTS pour une demande de réouverture (mandat §14) —
+ * codes machine-readable, traduits côté UI (comme `FY_STATUS_KEY`), jamais du
+ * texte figé ici :
+ *   - `NEXT_YEAR_ACTIVE` : un exercice suivant existe déjà (`open` ou
+ *     `closed`) — rouvrir celui-ci n'y touche pas directement, mais l'ordre
+ *     chronologique mérite d'être signalé à l'approbateur (mandat §14.4/§16).
+ *   - `CARRY_FORWARD_APPLIED` : un report à nouveau (`OpeningEntry
+ *     CARRY_FORWARD`) a déjà été appliqué depuis cet exercice vers le suivant
+ *     — un recalcul de clôture après réouverture (`recomputeClosingEntry`)
+ *     désynchroniserait `closing(N)`/`opening(N+1)` tant que le report n'est
+ *     pas rejoué (`verifyCarryForwardIntegrity` existe déjà pour le détecter).
+ */
+function computeReopenWarnings(tenantId: string, year: FiscalYear): string[] {
+  const warnings: string[] = [];
+  const nextYear = fiscalYears
+    .filter((item) => item.tenantId === tenantId && item.id !== year.id && item.startDate > year.endDate)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+  if (!nextYear) return warnings;
+  warnings.push('NEXT_YEAR_ACTIVE');
+  const alreadyCarried = openingEntries.some(
+    (entry) =>
+      entry.tenantId === tenantId &&
+      entry.fiscalYearId === nextYear.id &&
+      entry.status === 'FINAL' &&
+      closingEntries.some((closing) => closing.id === entry.sourceClosingEntryId && closing.fiscalYearId === year.id),
+  );
+  if (alreadyCarried) warnings.push('CARRY_FORWARD_APPLIED');
+  return warnings;
 }
 
 export const settingsService = {
@@ -121,7 +167,10 @@ export const settingsService = {
       const duplicate = tenantYears.some((item) => item.label === label || (item.startDate === input.startDate && item.endDate === input.endDate));
       if (duplicate) return undefined;
       const meetingSchedule = isValidMeetingScheduleConfig(input.meetingSchedule) ? input.meetingSchedule : undefined;
-      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}`, tenantId, label, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), meetingSchedule };
+      // Suffixe aléatoire (même correctif que `workflowService.createRequest`) : `Date.now()` seul
+      // colliderait entre deux créations survenant dans la même milliseconde (`VITE_MOCK_API_DELAY=0`
+      // en tests rend ce cas réel, pas seulement théorique).
+      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, label, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), closedAt: null, closedBy: null, meetingSchedule };
       fiscalYears.push(year);
       recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(','), meetingFrequency: meetingSchedule?.frequency ?? '' }, sensitive: false });
       return year;
@@ -145,16 +194,95 @@ export const settingsService = {
       return year;
     }),
 
-  /** Clôture uniquement l'exercice courant (open, isCurrent) — n'ouvre jamais automatiquement le suivant, aucune règle de succession inventée. */
-  closeCurrentFiscalYear: (tenantId: string) =>
+  /**
+   * CLÔTURE VALIDÉE (mandat « Évolution du cycle de vie des exercices fiscaux »
+   * §8/§9) — clôture uniquement l'exercice courant (open, isCurrent), en deux
+   * temps, sans mutation tant que le premier échoue. N'ouvre jamais
+   * automatiquement le suivant (inchangé, aucune règle de succession inventée).
+   *
+   *   1. CLÔTURE FINANCIÈRE — appelle `financePositionService.closeFiscalYear`
+   *      (séquencement déjà recommandé par son propre commentaire) : un
+   *      exercice ne doit jamais passer `status: 'closed'` sans que ses
+   *      `ClosingEntry FINAL` existent. `ALREADY_CLOSED` (la clôture
+   *      financière a déjà été faite séparément, via l'écran Finance) est
+   *      traité comme un précondition déjà satisfaite, PAS un échec —
+   *      idempotent, ne bloque jamais une clôture gouvernance qui suit une
+   *      clôture financière déjà réalisée.
+   *   2. FLIP DE STATUT — `status: 'closed'`, `isCurrent: false`, pose du
+   *      cache d'affichage `closedAt`/`closedBy` (voir le champ sur
+   *      `FiscalYear`), puis audit `fiscalYears.close` (inchangé).
+   *
+   * Les opérations en attente sur la période de l'exercice (`Application`
+   * `stageSubmitted`/`stageReview`, `Distribution`/`Transaction` `pending`)
+   * sont SIGNALÉES (retournées dans `pendingOperations`) mais NE BLOQUENT PAS
+   * la clôture — un blocage dur serait une règle métier inventée (aucune
+   * décision PO en ce sens) et casserait un scénario déjà couvert par les
+   * tests existants (une distribution `pending` peut légitimement rester
+   * ouverte au moment de la clôture gouvernance). `Loan.status === 'pending'`
+   * n'est volontairement pas vérifié : cette valeur du type n'est jamais
+   * assignée par `credit.service.ts` (un `Loan` n'existe qu'à partir du
+   * décaissement, toujours `status: 'active'`) — un contrôle sur une valeur
+   * qui ne peut jamais survenir ne serait pas une validation réelle.
+   */
+  closeCurrentFiscalYear: async (tenantId: string): Promise<CloseCurrentFiscalYearOutcome> => {
+    const year = fiscalYears.find((item) => item.tenantId === tenantId && item.isCurrent);
+    if (!year || year.status !== 'open') return { ok: false, reason: 'NO_CURRENT_YEAR' };
+
+    const financeOutcome = await financePositionService.closeFiscalYear(tenantId, year.id);
+    if (!financeOutcome || (!financeOutcome.ok && financeOutcome.reason !== 'ALREADY_CLOSED')) {
+      return { ok: false, reason: 'FINANCE_CLOSING_FAILED' };
+    }
+
+    const inPeriod = (date: string) => date >= year.startDate && date <= year.endDate;
+    const pendingOperations = {
+      applications: applications.filter((item) => item.tenantId === tenantId && inPeriod(item.submittedDate) && (item.stage === 'stageSubmitted' || item.stage === 'stageReview')).length,
+      distributions: distributions.filter((item) => item.tenantId === tenantId && inPeriod(item.date) && item.status === 'pending').length,
+      transactions: transactions.filter((item) => item.tenantId === tenantId && inPeriod(item.date) && item.status === 'pending').length,
+    };
+
+    const fromStatus = year.status;
+    year.status = 'closed';
+    year.isCurrent = false;
+    year.closedAt = new Date().toISOString();
+    year.closedBy = currentUser.name;
+    const hasPending = pendingOperations.applications + pendingOperations.distributions + pendingOperations.transactions > 0;
+    recordFiscalYearAudit({
+      tenantId,
+      action: 'fiscalYears.close',
+      year,
+      before: { status: fromStatus, isCurrent: 1 },
+      after: { status: year.status, isCurrent: 0 },
+      context: hasPending ? { pendingApplications: pendingOperations.applications, pendingDistributions: pendingOperations.distributions, pendingTransactions: pendingOperations.transactions } : undefined,
+      sensitive: true,
+    });
+    return { ok: true, year, pendingOperations };
+  },
+
+  /**
+   * PROROGATION (mandat §6) — seule écriture de `endDate` après création.
+   * Distincte de la clôture : `endDate` reste la date de fin PRÉVUE, jamais un
+   * indicateur de clôture (mandat §24) — `status`/`closedAt` restent les
+   * seules sources de vérité du cycle de vie. `newEndDate` doit être une
+   * extension (strictement postérieure à `endDate` actuelle) et ne doit pas
+   * chevaucher le prochain exercice déjà existant du tenant — aucune règle de
+   * chevauchement plus large n'est inventée (même prudence que `createFiscalYear`,
+   * `TECHNICAL DETAIL REQUIRED` documenté par `docs/P1_GLOBAL_FISCAL_YEAR_DECISION_GATE_CLOSURE.md`).
+   * Refusée si l'exercice est `closed` (verrouillé, même règle que `meetingSchedule`).
+   */
+  extendFiscalYearEndDate: (tenantId: string, fiscalYearId: string, newEndDate: string): Promise<ExtendFiscalYearEndDateOutcome> =>
     mockRequest(() => {
-      const year = fiscalYears.find((item) => item.tenantId === tenantId && item.isCurrent);
-      if (!year || year.status !== 'open') return undefined;
-      const fromStatus = year.status;
-      year.status = 'closed';
-      year.isCurrent = false;
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.close', year, before: { status: fromStatus, isCurrent: 1 }, after: { status: year.status, isCurrent: 0 }, sensitive: true });
-      return year;
+      const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
+      if (!year) return { ok: false, reason: 'NOT_FOUND' };
+      if (year.status === 'closed') return { ok: false, reason: 'CLOSED' };
+      if (new Date(newEndDate) <= new Date(year.endDate)) return { ok: false, reason: 'NOT_AN_EXTENSION' };
+      const nextYear = fiscalYears
+        .filter((item) => item.tenantId === tenantId && item.id !== year.id && item.startDate > year.endDate)
+        .sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+      if (nextYear && newEndDate >= nextYear.startDate) return { ok: false, reason: 'OVERLAPS_NEXT_YEAR' };
+      const before = year.endDate;
+      year.endDate = newEndDate;
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.extend', year, before: { endDate: before }, after: { endDate: year.endDate }, sensitive: false });
+      return { ok: true, year };
     }),
   /** Ouvre un exercice `upcoming` explicitement choisi — l'administrateur décide, jamais une cascade automatique de statut. `isCurrent` reste néanmoins un invariant à un seul exercice par tenant (jamais deux exercices courants simultanés), donc l'ancien exercice courant perd `isCurrent` ici — son `status` n'est pas touché (D-FY-03, VALIDÉE). */
   openFiscalYear: (tenantId: string, fiscalYearId: string) =>
@@ -179,6 +307,15 @@ export const settingsService = {
    * qu'après approbation effective, via `applyFiscalYearReopenDecision`
    * (appelée depuis `WorkflowDetail`, `src/features/operations/operations-module.tsx`).
    * Un seul refus/doublon possible à la fois par exercice (garde `alreadyPending`).
+   *
+   * `computeReopenWarnings` (mandat §14.4/§14.7) calcule des avertissements
+   * NON BLOQUANTS — jamais un refus de la demande — attachés à la
+   * `WorkflowRequest` (`warnings`, champ générique) pour être visibles du
+   * demandeur ET de l'approbateur. Aucun blocage dur n'est inventé ici :
+   * aucune décision PO n'existe en ce sens (cf. recherche documentaire), et un
+   * blocage dur casserait des scénarios de correction déjà légitimes dans ce
+   * codebase (`recomputeClosingEntry`/`verifyCarryForwardIntegrity` existent
+   * précisément pour corriger ce genre de situation après coup).
    */
   requestFiscalYearReopen: async (tenantId: string, fiscalYearId: string, justification: string) => {
     const trimmed = justification.trim();
@@ -187,9 +324,10 @@ export const settingsService = {
     if (!year || year.status !== 'closed') return null;
     const alreadyPending = workflowRequests.some((request) => request.tenantId === tenantId && request.domain === 'settings' && request.entityType === 'fiscalYear' && request.entityId === fiscalYearId && (request.status === 'pending' || request.status === 'inProgress'));
     if (alreadyPending) return null;
-    const request = await workflowService.createRequest(tenantId, 'WD-005', { entityId: year.id, entityLabel: year.label, requestedBy: currentUser.name, requestedByUserId: currentUser.id, justification: trimmed });
+    const warnings = computeReopenWarnings(tenantId, year);
+    const request = await workflowService.createRequest(tenantId, 'WD-005', { entityId: year.id, entityLabel: year.label, requestedBy: currentUser.name, requestedByUserId: currentUser.id, justification: trimmed, warnings });
     if (!request) return null;
-    recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopenRequested', year, context: { requestId: request.id, justification: trimmed }, sensitive: true });
+    recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopenRequested', year, context: { requestId: request.id, justification: trimmed, warningCount: warnings.length }, sensitive: true });
     return request;
   },
 
@@ -259,6 +397,10 @@ export const settingsService = {
     if (!year) return;
     if (request.status === 'approved' && year.status === 'closed') {
       year.status = 'open';
+      // Cache d'affichage remis à `null` (pas l'audit — cf. le champ sur `FiscalYear` : l'historique
+      // de la clôture précédente reste intégralement dans `audit_logs`, mandat §25/§26).
+      year.closedAt = null;
+      year.closedBy = null;
       recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopened', year, before: { status: 'closed' }, after: { status: 'open' }, context: { requestId: request.id }, sensitive: true });
     }
     // 'rejected'/'returned'/'cancelled' : FiscalYear reste inchangé (toujours 'closed') — la décision elle-même

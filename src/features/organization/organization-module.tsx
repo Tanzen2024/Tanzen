@@ -8,10 +8,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
+import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage, PermissionRoute } from '@/routes';
 import { organizationService, type MemberInput } from '@/services/organization.service';
+import { workflowService } from '@/services/workflow.service';
 import { financeService } from '@/services/finance.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
@@ -26,14 +29,14 @@ import { notify } from '@/lib/notify';
 import type { Member } from '@/mocks/organization/members';
 import type { Contribution } from '@/mocks/finance/contributions';
 import type { Loan } from '@/mocks/finance/loans';
-import type { Meeting, MeetingStatus, MeetingType, Vote, BoardMember, VoteResult } from '@/mocks/organization/governance';
+import type { Meeting, MeetingStatus, MeetingType, Vote, BoardMember } from '@/mocks/organization/governance';
 import type { Attendance, AttendanceStatus } from '@/mocks/organization/attendances';
 import type { QuorumThresholdType } from '@/mocks/organization/quorum-snapshots';
 import type { AssemblyDecision, AssemblyDecisionStatus } from '@/mocks/organization/assembly-decisions';
 import type { VoteOption } from '@/mocks/organization/vote-options';
 import type { MemberVote } from '@/mocks/organization/member-votes';
-import type { MeetingInput, BoardMemberInput, VoteInput } from '@/services/organization.service';
-import type { PositionRole } from '@/mocks/organization/members';
+import type { MeetingInput, BoardMemberInput, MandateFunctionInput } from '@/services/organization.service';
+import type { MandateFunction } from '@/mocks/organization/mandate-functions';
 import { Textarea } from '@/components/ui/textarea';
 import type { TableColumn } from '@/types/ui';
 import { formatDate, formatNumber } from '@/lib/utils';
@@ -227,6 +230,8 @@ function MemberDetail({ t }: { t: T }) {
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { data: member, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.members.detail(id), currentTenant.id], queryFn: () => organizationService.getMember(currentTenant.id, id) });
+  /** Besoin §44 — une demande de modification en attente doit être visible sur la fiche, pas seulement dans Operations. */
+  const { data: pendingUpdateRequest } = useQuery({ queryKey: ['operations', 'member-pending-approval', id, currentTenant.id], queryFn: () => workflowService.hasPendingApproval(currentTenant.id, 'member', id), enabled: Boolean(id) });
   const statusMutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
     mutationFn: (patch) => organizationService.updateMember(currentTenant.id, id, patch),
     invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(id)],
@@ -251,7 +256,7 @@ function MemberDetail({ t }: { t: T }) {
     <div id="member-print-area" className="grid gap-5 lg:grid-cols-[280px_1fr]">
       {/* PageHeader (titre/référence) est un frère de ce conteneur, donc masqué par les règles d'impression scopées — dupliqué ici, visible uniquement à l'impression (`print:block`), pour que la fiche imprimée reste complète sans toucher au composant partagé PageHeader. */}
       <div className="hidden print:block lg:col-span-2"><h1 className="text-xl font-semibold">{fullName}</h1><p className="text-sm text-muted-foreground">{member.id} · {member.tenantName}</p></div>
-      <Card className="h-fit"><CardContent className="flex flex-col items-center p-6 text-center"><MemberAvatar member={member} size="lg" /><h2 className="mt-4 text-lg font-semibold">{fullName}</h2><p className="mt-1 text-sm text-muted-foreground">{member.occupation}</p><div className="mt-4"><StatusBadge label={t('organization', member.status)} tone={statusTone[member.status]} /></div><div className="mt-5 w-full space-y-3 border-t border-border pt-5 text-left"><Info label={t('organization', 'email')} value={member.email} icon={Mail} /><Info label={t('organization', 'phone')} value={member.phone} icon={Mail} /><Info label={t('organization', 'tenants')} value={member.tenantName} icon={Building2} /></div></CardContent></Card><MemberTabs t={t} member={member} /></div>
+      <Card className="h-fit"><CardContent className="flex flex-col items-center p-6 text-center"><MemberAvatar member={member} size="lg" /><h2 className="mt-4 text-lg font-semibold">{fullName}</h2><p className="mt-1 text-sm text-muted-foreground">{member.occupation}</p><div className="mt-4 flex flex-wrap justify-center gap-2"><StatusBadge label={t('organization', member.status)} tone={statusTone[member.status]} />{pendingUpdateRequest && <button type="button" onClick={() => navigate(`/operations/workflows/${pendingUpdateRequest.id}`)}><StatusBadge label={t('organization', 'pendingModification')} tone="warning" /></button>}</div><div className="mt-5 w-full space-y-3 border-t border-border pt-5 text-left"><Info label={t('organization', 'email')} value={member.email} icon={Mail} /><Info label={t('organization', 'phone')} value={member.phone} icon={Mail} /><Info label={t('organization', 'tenants')} value={member.tenantName} icon={Building2} /></div></CardContent></Card><MemberTabs t={t} member={member} /></div>
     {confirmStatus && <ConfirmDialog open title={t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')} description={t('organization', isSuspended ? 'reactivateMemberConfirm' : 'suspendMemberConfirm')} confirmLabel={t('organization', isSuspended ? 'reactivateMember' : 'suspendMember')} cancelLabel={t('organization', 'cancel')} onConfirm={() => statusMutation.mutate({ status: nextStatus })} onCancel={() => setConfirmStatus(false)} />}
     {confirmDelete && <ConfirmDialog open title={t('organization', 'deleteMember')} description={t('organization', 'deleteMemberConfirm')} confirmLabel={t('organization', 'deleteMember')} cancelLabel={t('organization', 'cancel')} onConfirm={() => deleteMutation.mutate()} onCancel={() => setConfirmDelete(false)} />}
   </OrganizationPage>;
@@ -267,19 +272,28 @@ function MemberEdit({ t }: { t: T }) {
 }
 
 function MemberEditForm({ t, member }: { t: T; member: Member }) {
-  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
   const [values, setValues] = useState<MemberFormValues>({ firstName: member.firstName, lastName: member.lastName, matricule: member.matricule, gender: member.gender, email: member.email, phone: member.phone, joinedAt: member.joinedAt, occupation: member.occupation, nationality: member.nationality, address: member.address, photoUrl: member.photoUrl, tenantId: member.tenantId, status: member.status });
   const [errors, setErrors] = useState<MemberFormErrors>({});
   const [isChecking, setIsChecking] = useState(false);
-  const mutation = useMockMutation<Member | undefined, Partial<MemberInput>>({
-    mutationFn: (patch) => organizationService.updateMember(currentTenant.id, member.id, patch),
-    invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(member.id)],
+  /** Besoin §41/§43 — savoir AVANT soumission si une validation est requise, pour libeller le bouton correctement ("Soumettre pour validation" vs "Enregistrer"). */
+  const { data: updateWorkflow } = useQuery({ queryKey: ['operations', 'workflow-definition-for', 'member', 'update'], queryFn: () => workflowService.getWorkflowFor('member', 'update') });
+  /** Besoin §34 — une deuxième demande concurrente sur ce membre est interdite : le formulaire reste consultable mais bloque la soumission. */
+  const { data: pendingUpdateRequest } = useQuery({ queryKey: ['operations', 'member-pending-approval', member.id, currentTenant.id], queryFn: () => workflowService.hasPendingApproval(currentTenant.id, 'member', member.id) });
+  const requiresApproval = Boolean(updateWorkflow);
+  type RequestMemberUpdateOutcome = Awaited<ReturnType<typeof organizationService.requestMemberUpdate>>;
+  const mutation = useMockMutation<RequestMemberUpdateOutcome, Partial<MemberInput>>({
+    mutationFn: (patch) => organizationService.requestMemberUpdate(currentTenant.id, member.id, patch, user.id, user.name),
+    invalidateKeys: [queryKeys.members.list(currentTenant.id), queryKeys.members.detail(member.id), queryKeys.operations.workflowRequests(currentTenant.id), ['operations', 'member-pending-approval', member.id, currentTenant.id]],
     onSuccess: (result) => {
       if (!result) { setErrors({ general: t('organization', 'memberCreateFailed') }); return; }
-      notify.success(t('organization', 'memberUpdated')); navigate(`/organization/members/${member.id}`);
+      if ('blocked' in result) { setErrors({ general: t('organization', 'alreadyPendingModification') }); return; }
+      notify.success(t('organization', result.applied ? 'memberUpdated' : 'memberUpdateSubmitted'));
+      navigate(`/organization/members/${member.id}`);
     },
   });
   const handleSave = async () => {
+    if (pendingUpdateRequest) { setErrors({ general: t('organization', 'alreadyPendingModification') }); return; }
     const nextErrors = validateMember(values, t);
     if (Object.keys(nextErrors).length > 0) { setErrors(nextErrors); return; }
     setIsChecking(true);
@@ -290,7 +304,11 @@ function MemberEditForm({ t, member }: { t: T; member: Member }) {
     mutation.mutate(buildMemberInput(values, member.tenantName));
   };
   const isBusy = mutation.isPending || isChecking;
-  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="space-y-5"><MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} /><div className="flex justify-end gap-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={isBusy} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', 'save')}</Button></div></div></OrganizationPage>;
+  return <OrganizationPage title={t('organization', 'editMember')} description={`${member.firstName} ${member.lastName}`} actions={<BackButton label={t('organization', 'backToMembers')} />}><div className="space-y-5">
+    {pendingUpdateRequest && <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">{t('organization', 'alreadyPendingModification')}</div>}
+    <MemberFormFields values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} t={t} />
+    <div className="flex justify-end gap-2"><Button variant="outline" disabled={isBusy} onClick={() => navigate(`/organization/members/${member.id}`)}>{t('organization', 'cancel')}</Button><Button disabled={isBusy || Boolean(pendingUpdateRequest)} onClick={handleSave}>{isBusy ? t('organization', 'saving') : t('organization', requiresApproval ? 'submitForValidation' : 'save')}</Button></div>
+  </div></OrganizationPage>;
 }
 
 function MemberTabs({ t, member }: { t: T; member: Member }) {
@@ -363,16 +381,14 @@ function DocumentsTab({ t, member }: { t: T; member: Member }) { const columns: 
 function GovernanceOverview({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   const meetingsQuery = useQuery({ queryKey: queryKeys.governance.meetings(currentTenant.id), queryFn: () => organizationService.listMeetings(currentTenant.id) });
-  const votesQuery = useQuery({ queryKey: queryKeys.governance.votes(currentTenant.id), queryFn: () => organizationService.listVotes(currentTenant.id) });
   const boardQuery = useQuery({ queryKey: queryKeys.governance.board(currentTenant.id), queryFn: () => organizationService.listBoardMembers(currentTenant.id) });
-  const meetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? [];
-  if (meetingsQuery.isLoading || votesQuery.isLoading || boardQuery.isLoading) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><CardSkeleton count={4} /></OrganizationPage>;
-  if (meetingsQuery.isError || votesQuery.isError || boardQuery.isError) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><ErrorState onRetry={() => { meetingsQuery.refetch(); votesQuery.refetch(); boardQuery.refetch(); }} /></OrganizationPage>;
+  const meetings = meetingsQuery.data ?? []; const boardMembers = boardQuery.data ?? [];
+  if (meetingsQuery.isLoading || boardQuery.isLoading) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><CardSkeleton count={3} /></OrganizationPage>;
+  if (meetingsQuery.isError || boardQuery.isError) return <OrganizationPage title={t('organization', 'governanceTitle')} description={t('organization', 'governanceDescription')}><ErrorState onRetry={() => { meetingsQuery.refetch(); boardQuery.refetch(); }} /></OrganizationPage>;
   const generalAssemblyCount = meetings.filter((meeting) => meeting.type === 'GENERAL_ASSEMBLY').length;
   const cards = [
     { key: 'meetings', icon: CalendarDays, count: meetings.length, path: '/organization/governance/meetings' },
     { key: 'generalAssemblies', icon: ShieldCheck, count: generalAssemblyCount, path: '/organization/governance/meetings?type=GENERAL_ASSEMBLY' },
-    { key: 'votes', icon: ClipboardCheck, count: votes.length, path: '/organization/governance/votes' },
     { key: 'boardMandates', icon: UserCog, count: boardMembers.length, path: '/organization/governance/board-mandates' },
   ];
   const upcoming = meetings.filter((meeting) => meeting.status === 'PLANNED').sort((a, b) => a.date.localeCompare(b.date));
@@ -380,8 +396,6 @@ function GovernanceOverview({ t }: { t: T }) {
 }
 
 function GovernanceTableShell({ title, description, action, icon: Icon, t, onCreate, children }: { title: string; description: string; action: string; icon: typeof CalendarDays; t: T; onCreate: () => void; children: ReactNode }) { const navigate = useNavigate(); return <OrganizationPage title={title} description={description} actions={<PermissionGate permission="governance.create"><Button onClick={onCreate}><Plus size={16} />{action}</Button></PermissionGate>}><div className="flex items-center gap-2 border-b border-border pb-3 text-sm text-muted-foreground"><button type="button" onClick={() => navigate('/organization/governance')} className="hover:text-foreground">{t('organization', 'governanceTitle')}</button><ChevronRight size={14} /><Icon size={14} className="text-primary" /><span className="font-medium text-foreground">{title}</span></div>{children}</OrganizationPage>; }
-
-const BOARD_POSITIONS: PositionRole[] = ['president', 'treasurer', 'secretary', 'boardMember'];
 
 /** D-4C3-TECH-01 : même vocabulaire/tons que GeneralAssemblyStatus (déjà en place dans ce projet). */
 function meetingStatusTone(status: MeetingStatus): 'info' | 'warning' | 'success' | 'error' {
@@ -394,27 +408,29 @@ function meetingStatusKey(status: MeetingStatus): string {
   return status === 'PLANNED' ? 'statusPlanned' : status === 'ONGOING' ? 'statusOngoingMeeting' : status === 'COMPLETED' ? 'statusCompletedMeeting' : 'statusCancelledMeeting';
 }
 
-function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'votes' | 'boardMandates' }) {
+function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'boardMandates' }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   const [searchParams] = useSearchParams();
   const meetingsQuery = useQuery({ queryKey: queryKeys.governance.meetings(currentTenant.id), queryFn: () => organizationService.listMeetings(currentTenant.id), enabled: kind === 'meetings' });
-  const votesQuery = useQuery({ queryKey: queryKeys.governance.votes(currentTenant.id), queryFn: () => organizationService.listVotes(currentTenant.id), enabled: kind === 'votes' });
   const boardQuery = useQuery({ queryKey: queryKeys.governance.board(currentTenant.id), queryFn: () => organizationService.listBoardMembers(currentTenant.id), enabled: kind === 'boardMandates' });
   const membersQuery = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id), enabled: kind === 'boardMandates' });
-  const allMeetings = meetingsQuery.data ?? []; const votes = votesQuery.data ?? []; const boardMembers = boardQuery.data ?? []; const members = membersQuery.data ?? [];
-  const activeQuery = kind === 'meetings' ? meetingsQuery : kind === 'votes' ? votesQuery : boardQuery;
+  /** Mandat « Fonctions / mandats » — référentiel dynamique remplaçant l'ancienne liste `BOARD_POSITIONS` codée en dur. */
+  const functionsQuery = useQuery({ queryKey: queryKeys.governance.mandateFunctions(currentTenant.id), queryFn: () => organizationService.listMandateFunctions(currentTenant.id), enabled: kind === 'boardMandates' });
+  const allMeetings = meetingsQuery.data ?? []; const boardMembers = boardQuery.data ?? []; const members = membersQuery.data ?? []; const mandateFunctions = functionsQuery.data ?? [];
+  const activeQuery = kind === 'meetings' ? meetingsQuery : boardQuery;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [meetingTypeFilter, setMeetingTypeFilter] = useState<'all' | MeetingType>((searchParams.get('type') as MeetingType | null) ?? 'all');
   const meetings = meetingTypeFilter === 'all' ? allMeetings : allMeetings.filter((meeting) => meeting.type === meetingTypeFilter);
   const [meetingForm, setMeetingForm] = useState({ title: '', date: '', location: '', participants: 0, agenda: '', type: 'REGULAR' as MeetingType, description: '' });
-  const [boardForm, setBoardForm] = useState({ memberId: '', position: 'president' as PositionRole, mandateStart: '', mandateEnd: '' });
-  const [voteForm, setVoteForm] = useState({ subject: '', date: '' });
+  const [boardForm, setBoardForm] = useState({ memberId: '', positionFunctionId: '', mandateStart: '', mandateEnd: '' });
   const [minutesTarget, setMinutesTarget] = useState<Meeting | null>(null);
   const [minutesText, setMinutesText] = useState('');
   const [mandateTarget, setMandateTarget] = useState<BoardMember | null>(null);
-  const [resultTarget, setResultTarget] = useState<Vote | null>(null);
-  const [resultForm, setResultForm] = useState({ yes: 0, no: 0, abstain: 0, result: 'adopted' as VoteResult });
+  const [createFunctionOpen, setCreateFunctionOpen] = useState(false);
+  const [editFunctionTarget, setEditFunctionTarget] = useState<MandateFunction | null>(null);
+  const [deactivateFunctionTarget, setDeactivateFunctionTarget] = useState<MandateFunction | null>(null);
+  const [functionForm, setFunctionForm] = useState({ name: '', description: '' });
 
   const createMeeting = useMockMutation<Meeting | undefined, MeetingInput>({
     mutationFn: (input) => organizationService.createMeeting(currentTenant.id, input),
@@ -426,11 +442,32 @@ function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'votes' | '
       setMeetingForm({ title: '', date: '', location: '', participants: 0, agenda: '', type: 'REGULAR', description: '' });
     },
   });
-  const createBoardMember = useMockMutation<BoardMember, BoardMemberInput>({ mutationFn: (input) => organizationService.createBoardMember(currentTenant.id, input), invalidateKeys: [queryKeys.governance.board(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'boardMemberAdded')); setCreateOpen(false); setBoardForm({ memberId: '', position: 'president', mandateStart: '', mandateEnd: '' }); } });
-  const createVote = useMockMutation<Vote, VoteInput>({ mutationFn: (input) => organizationService.createVote(currentTenant.id, input), invalidateKeys: [queryKeys.governance.votes(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'voteCreated')); setCreateOpen(false); setVoteForm({ subject: '', date: '' }); } });
+  const createBoardMember = useMockMutation<BoardMember, BoardMemberInput>({ mutationFn: (input) => organizationService.createBoardMember(currentTenant.id, input), invalidateKeys: [queryKeys.governance.board(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'boardMemberAdded')); setCreateOpen(false); setBoardForm({ memberId: '', positionFunctionId: '', mandateStart: '', mandateEnd: '' }); } });
+  const createMandateFunction = useMockMutation<MandateFunction | undefined, MandateFunctionInput>({
+    mutationFn: (input) => organizationService.createMandateFunction(currentTenant.id, input),
+    invalidateKeys: [queryKeys.governance.mandateFunctions(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('organization', 'duplicateFunctionName')); return; }
+      notify.success(t('organization', 'functionCreated'));
+      setCreateFunctionOpen(false); setFunctionForm({ name: '', description: '' });
+    },
+  });
+  const updateMandateFunction = useMockMutation<MandateFunction | undefined, MandateFunctionInput>({
+    mutationFn: (input) => organizationService.updateMandateFunction(currentTenant.id, editFunctionTarget?.id ?? '', input),
+    invalidateKeys: [queryKeys.governance.mandateFunctions(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('organization', 'duplicateFunctionName')); return; }
+      notify.success(t('organization', 'functionUpdated'));
+      setEditFunctionTarget(null);
+    },
+  });
+  const setFunctionActive = useMockMutation<MandateFunction | undefined, { id: string; active: boolean }>({
+    mutationFn: ({ id, active }) => organizationService.setMandateFunctionActive(currentTenant.id, id, active),
+    invalidateKeys: [queryKeys.governance.mandateFunctions(currentTenant.id)],
+    onSuccess: (_, { active }) => notify.success(t('organization', active ? 'functionActivated' : 'functionDeactivated')),
+  });
   const publishMinutes = useMockMutation<Meeting | undefined, string>({ mutationFn: (minutes) => organizationService.updateMeetingMinutes(currentTenant.id, minutesTarget?.id ?? '', minutes), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'minutesPublished')); setMinutesTarget(null); setMinutesText(''); } });
   const endMandate = useMockMutation<BoardMember | undefined, void>({ mutationFn: () => organizationService.endBoardMandate(currentTenant.id, mandateTarget?.id ?? '', new Date().toISOString().slice(0, 10)), invalidateKeys: [queryKeys.governance.board(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'mandateEnded')); setMandateTarget(null); } });
-  const publishResult = useMockMutation<Vote | undefined, typeof resultForm>({ mutationFn: (patch) => organizationService.updateVoteResult(currentTenant.id, resultTarget?.id ?? '', patch), invalidateKeys: [queryKeys.governance.votes(currentTenant.id)], onSuccess: () => { notify.success(t('organization', 'resultPublished')); setResultTarget(null); } });
   /** D-4C3-TECH-01 : transitions de cycle de vie Meeting — jamais un simple changement de champ, toujours via ces 3 méthodes de service dédiées. */
   const startMeeting = useMockMutation<Meeting | undefined, string>({ mutationFn: (meetingId) => organizationService.startMeeting(currentTenant.id, meetingId), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => notify.success(t('organization', 'meetingStarted')) });
   const completeMeeting = useMockMutation<Meeting | undefined, string>({ mutationFn: (meetingId) => organizationService.completeMeeting(currentTenant.id, meetingId), invalidateKeys: [queryKeys.governance.meetings(currentTenant.id)], onSuccess: () => notify.success(t('organization', 'meetingCompleted')) });
@@ -485,37 +522,46 @@ function GovernanceTablePage({ t, kind }: { t: T; kind: 'meetings' | 'votes' | '
     </GovernanceTableShell>;
   }
 
-  if (kind === 'votes') {
-    const columns: TableColumn<Vote>[] = [{ key: 'subject', header: t('organization', 'voteSubject'), render: (row) => <span className="font-semibold">{row.subject}</span> }, { key: 'date', header: t('organization', 'voteDate'), render: (row) => <DateDisplay value={row.date} /> }, { key: 'yes', header: t('organization', 'yes') }, { key: 'no', header: t('organization', 'no') }, { key: 'abstain', header: t('organization', 'abstain') }, { key: 'result', header: t('organization', 'result'), render: (row) => <StatusBadge label={t('organization', row.result)} tone={statusTone[row.result]} /> }, { key: 'actions', header: '', className: 'w-40', render: (row) => row.result === 'pending' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => { setResultTarget(row); setResultForm({ yes: row.yes, no: row.no, abstain: row.abstain, result: 'adopted' }); }}>{t('organization', 'publishResult')}</Button></PermissionGate> }];
-    return <GovernanceTableShell title={t('organization', 'votesTitle')} description={t('organization', 'votesDescription')} action={t('organization', 'createVote')} icon={ClipboardCheck} t={t} onCreate={() => setCreateOpen(true)}>
-      <DataTable columns={columns} rows={votes} empty={<EmptyState icon={ClipboardCheck} title={t('organization', 'noVotes')} />} />
-      {createOpen && <ConfirmDialog open title={t('organization', 'createVote')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createVote.mutate(voteForm)} onCancel={() => setCreateOpen(false)}>
-        <div className="mt-4 space-y-3 text-left">
-          <div className="space-y-1"><Label htmlFor="vote-subject">{t('organization', 'voteSubject')}</Label><Input id="vote-subject" value={voteForm.subject} onChange={(e) => setVoteForm((v) => ({ ...v, subject: e.target.value }))} /></div>
-          <div className="space-y-1"><Label htmlFor="vote-date">{t('organization', 'voteDate')}</Label><Input id="vote-date" type="date" value={voteForm.date} onChange={(e) => setVoteForm((v) => ({ ...v, date: e.target.value }))} /></div>
-        </div>
-      </ConfirmDialog>}
-      {resultTarget && <ConfirmDialog open title={t('organization', 'publishResult')} description={t('organization', 'publishResultConfirm')} confirmLabel={t('organization', 'publishResult')} cancelLabel={t('organization', 'cancel')} onConfirm={() => publishResult.mutate(resultForm)} onCancel={() => setResultTarget(null)}>
-        <div className="mt-4 space-y-3 text-left">
-          <div className="grid grid-cols-3 gap-3"><div className="space-y-1"><Label htmlFor="result-yes">{t('organization', 'yes')}</Label><Input id="result-yes" type="number" min={0} value={resultForm.yes} onChange={(e) => setResultForm((v) => ({ ...v, yes: Number(e.target.value) }))} /></div><div className="space-y-1"><Label htmlFor="result-no">{t('organization', 'no')}</Label><Input id="result-no" type="number" min={0} value={resultForm.no} onChange={(e) => setResultForm((v) => ({ ...v, no: Number(e.target.value) }))} /></div><div className="space-y-1"><Label htmlFor="result-abstain">{t('organization', 'abstain')}</Label><Input id="result-abstain" type="number" min={0} value={resultForm.abstain} onChange={(e) => setResultForm((v) => ({ ...v, abstain: Number(e.target.value) }))} /></div></div>
-          <div className="space-y-1"><Label htmlFor="result-outcome">{t('organization', 'result')}</Label><select id="result-outcome" value={resultForm.result} onChange={(e) => setResultForm((v) => ({ ...v, result: e.target.value as VoteResult }))} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="adopted">{t('organization', 'adopted')}</option><option value="rejected">{t('organization', 'rejected')}</option></select></div>
-        </div>
-      </ConfirmDialog>}
-    </GovernanceTableShell>;
-  }
-
   const memberById = new Map(members.map((item) => [item.id, item]));
+  const activeFunctions = mandateFunctions.filter((item) => item.active);
   const columns: TableColumn<BoardMember>[] = [{ key: 'memberName', header: t('organization', 'boardMemberName'), render: (row) => { const boardMember = memberById.get(row.memberId); return <button type="button" onClick={() => navigate(`/organization/members/${row.memberId}`)} className="flex items-center gap-3 text-left">{boardMember ? <MemberAvatar member={boardMember} /> : <Avatar name={row.memberName} />}<span><span className="block font-semibold">{row.memberName}</span><span className="block text-xs text-muted-foreground">{row.memberId}</span></span></button>; } }, { key: 'position', header: t('organization', 'position'), render: (row) => t('organization', row.position) }, { key: 'mandateStart', header: t('organization', 'mandateStart'), render: (row) => <DateDisplay value={row.mandateStart} /> }, { key: 'mandateEnd', header: t('organization', 'mandateEnd'), render: (row) => <DateDisplay value={row.mandateEnd} /> }, { key: 'status', header: t('organization', 'mandateStatus'), render: (row) => <StatusBadge label={t('organization', row.status)} tone={statusTone[row.status]} /> }, { key: 'actions', header: '', className: 'w-40', render: (row) => row.status === 'ongoing' && <PermissionGate permission="governance.approve"><Button variant="outline" size="sm" onClick={() => setMandateTarget(row)}>{t('organization', 'endMandate')}</Button></PermissionGate> }];
+  const functionColumns: TableColumn<MandateFunction>[] = [
+    { key: 'name', header: t('organization', 'functionName'), render: (row) => <span className="font-medium">{row.name}</span> },
+    { key: 'active', header: t('organization', 'functionStatus'), render: (row) => <PermissionGate permission="boardPositions.manage" fallback={<StatusBadge label={t('organization', row.active ? 'functionActive' : 'functionInactive')} tone={row.active ? 'success' : 'default'} />}><Switch checked={row.active} aria-label={`${t('organization', 'functionStatus')} — ${row.name}`} onCheckedChange={(checked) => (row.active ? setDeactivateFunctionTarget(row) : setFunctionActive.mutate({ id: row.id, active: checked }))} /></PermissionGate> },
+    { key: 'actions', header: '', className: 'w-32', render: (row) => <PermissionGate permission="boardPositions.manage"><Button variant="outline" size="sm" onClick={() => { setEditFunctionTarget(row); setFunctionForm({ name: row.name, description: row.description }); }}>{t('organization', 'editFunction')}</Button></PermissionGate> },
+  ];
   return <GovernanceTableShell title={t('organization', 'boardMandatesTitle')} description={t('organization', 'boardMandatesDescription')} action={t('organization', 'addBoardMember')} icon={UserCog} t={t} onCreate={() => setCreateOpen(true)}>
-    <DataTable columns={columns} rows={boardMembers} empty={<EmptyState icon={UserCog} title={t('organization', 'noBoardMembers')} />} />
-    {createOpen && <ConfirmDialog open title={t('organization', 'addBoardMember')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => { const member = members.find((m) => m.id === boardForm.memberId); if (!member) return; createBoardMember.mutate({ memberId: member.id, memberName: `${member.firstName} ${member.lastName}`, position: boardForm.position, mandateStart: boardForm.mandateStart, mandateEnd: boardForm.mandateEnd }); }} onCancel={() => setCreateOpen(false)}>
+    <Tabs defaultValue="mandates" className="min-w-0">
+      <TabsList><TabsTrigger value="mandates">{t('organization', 'tabMandates')}</TabsTrigger><TabsTrigger value="functions">{t('organization', 'tabFunctions')}</TabsTrigger></TabsList>
+      <TabsContent value="mandates" className="mt-4">
+        <DataTable columns={columns} rows={boardMembers} empty={<EmptyState icon={UserCog} title={t('organization', 'noBoardMembers')} />} />
+      </TabsContent>
+      <TabsContent value="functions" className="mt-4 space-y-4">
+        <div className="flex justify-end"><PermissionGate permission="boardPositions.manage"><Button size="sm" onClick={() => { setFunctionForm({ name: '', description: '' }); setCreateFunctionOpen(true); }}><Plus size={15} />{t('organization', 'newFunction')}</Button></PermissionGate></div>
+        <DataTable columns={functionColumns} rows={mandateFunctions} empty={<EmptyState icon={UserCog} title={t('organization', 'noFunctions')} description={t('organization', 'noFunctionsDescription')} />} />
+      </TabsContent>
+    </Tabs>
+    {createOpen && <ConfirmDialog open title={t('organization', 'addBoardMember')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => { const member = members.find((m) => m.id === boardForm.memberId); const selectedFunction = activeFunctions.find((fn) => fn.id === boardForm.positionFunctionId); if (!member || !selectedFunction) return; createBoardMember.mutate({ memberId: member.id, memberName: `${member.firstName} ${member.lastName}`, position: selectedFunction.name, positionFunctionId: selectedFunction.id, mandateStart: boardForm.mandateStart, mandateEnd: boardForm.mandateEnd }); }} onCancel={() => setCreateOpen(false)}>
       <div className="mt-4 space-y-3 text-left">
         <div className="space-y-1"><Label htmlFor="board-member">{t('organization', 'selectMember')}</Label><select id="board-member" value={boardForm.memberId} onChange={(e) => setBoardForm((v) => ({ ...v, memberId: e.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="">{t('organization', 'selectMember')}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.firstName} {member.lastName}</option>)}</select></div>
-        <div className="space-y-1"><Label htmlFor="board-position">{t('organization', 'position')}</Label><select id="board-position" value={boardForm.position} onChange={(e) => setBoardForm((v) => ({ ...v, position: e.target.value as PositionRole }))} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{BOARD_POSITIONS.map((role) => <option key={role} value={role}>{t('organization', role)}</option>)}</select></div>
+        <div className="space-y-1"><Label htmlFor="board-position">{t('organization', 'position')}</Label><select id="board-position" value={boardForm.positionFunctionId} onChange={(e) => setBoardForm((v) => ({ ...v, positionFunctionId: e.target.value }))} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="">{t('organization', 'selectFunction')}</option>{activeFunctions.map((fn) => <option key={fn.id} value={fn.id}>{fn.name}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-3"><div className="space-y-1"><Label htmlFor="board-mandate-start">{t('organization', 'mandateStart')}</Label><Input id="board-mandate-start" type="date" value={boardForm.mandateStart} onChange={(e) => setBoardForm((v) => ({ ...v, mandateStart: e.target.value }))} /></div><div className="space-y-1"><Label htmlFor="board-mandate-end">{t('organization', 'mandateEnd')}</Label><Input id="board-mandate-end" type="date" value={boardForm.mandateEnd} onChange={(e) => setBoardForm((v) => ({ ...v, mandateEnd: e.target.value }))} /></div></div>
       </div>
     </ConfirmDialog>}
     {mandateTarget && <ConfirmDialog open title={t('organization', 'endMandate')} description={t('organization', 'endMandateConfirm')} confirmLabel={t('organization', 'endMandate')} cancelLabel={t('organization', 'cancel')} onConfirm={() => endMandate.mutate()} onCancel={() => setMandateTarget(null)} />}
+    {createFunctionOpen && <ConfirmDialog open title={t('organization', 'newFunction')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => createMandateFunction.mutate(functionForm)} confirmDisabled={!functionForm.name.trim()} onCancel={() => setCreateFunctionOpen(false)}>
+      <div className="mt-4 space-y-3 text-left">
+        <div className="space-y-1"><Label htmlFor="function-name">{t('organization', 'functionName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="function-name" value={functionForm.name} onChange={(e) => setFunctionForm((v) => ({ ...v, name: e.target.value }))} /></div>
+        <div className="space-y-1"><Label htmlFor="function-description">{t('organization', 'functionDescription')}</Label><Textarea id="function-description" value={functionForm.description} onChange={(e) => setFunctionForm((v) => ({ ...v, description: e.target.value }))} /></div>
+      </div>
+    </ConfirmDialog>}
+    {editFunctionTarget && <ConfirmDialog open title={t('organization', 'editFunction')} confirmLabel={t('organization', 'save')} cancelLabel={t('organization', 'cancel')} onConfirm={() => updateMandateFunction.mutate(functionForm)} confirmDisabled={!functionForm.name.trim()} onCancel={() => setEditFunctionTarget(null)}>
+      <div className="mt-4 space-y-3 text-left">
+        <div className="space-y-1"><Label htmlFor="edit-function-name">{t('organization', 'functionName')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="edit-function-name" value={functionForm.name} onChange={(e) => setFunctionForm((v) => ({ ...v, name: e.target.value }))} /></div>
+        <div className="space-y-1"><Label htmlFor="edit-function-description">{t('organization', 'functionDescription')}</Label><Textarea id="edit-function-description" value={functionForm.description} onChange={(e) => setFunctionForm((v) => ({ ...v, description: e.target.value }))} /></div>
+      </div>
+    </ConfirmDialog>}
+    {deactivateFunctionTarget && <ConfirmDialog open title={t('organization', 'deactivateFunctionTitle')} description={t('organization', 'deactivateFunctionDescription', { name: deactivateFunctionTarget.name })} confirmLabel={t('organization', 'deactivateFunction')} cancelLabel={t('organization', 'cancel')} onConfirm={() => { setFunctionActive.mutate({ id: deactivateFunctionTarget.id, active: false }); setDeactivateFunctionTarget(null); }} onCancel={() => setDeactivateFunctionTarget(null)} />}
   </GovernanceTableShell>;
 }
 
@@ -822,7 +868,6 @@ export function OrganizationModule() {
       <Route path="governance/meetings/:meetingId/attendances" element={<PermissionRoute permission="governance.read"><MeetingAttendancePage t={t} /></PermissionRoute>} />
       <Route path="governance/meetings/:meetingId/decisions/:decisionId/votes" element={<PermissionRoute permission="governance.read"><DecisionVotesPage t={t} /></PermissionRoute>} />
       <Route path="governance/meetings/:id" element={<PermissionRoute permission="governance.read"><MeetingDetail t={t} /></PermissionRoute>} />
-      <Route path="governance/votes" element={<GovernanceTablePage t={t} kind="votes" />} />
       <Route path="governance/board-mandates" element={<GovernanceTablePage t={t} kind="boardMandates" />} />
       <Route path="governance/assemblies" element={<Navigate to="/organization/governance/meetings" replace />} />
       <Route path="governance/general-assemblies" element={<Navigate to="/organization/governance/meetings" replace />} />

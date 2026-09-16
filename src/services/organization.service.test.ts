@@ -1,7 +1,10 @@
-﻿import { describe, it, expect } from 'vitest';
+﻿import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { organizationService } from './organization.service';
 import { userService } from './user.service';
+import { workflowService } from './workflow.service';
 import { currentUser } from '@/mocks/rbac.mocks';
+import { workflowDefinitions } from '@/mocks/operations/workflow-definitions';
+import { members } from '@/mocks/organization/members';
 
 describe('organizationService — Tenants (special case: scope-gated repository)', () => {
   it('ALLOW: tenant scope sees only its own tenant in listTenants', async () => {
@@ -203,13 +206,6 @@ describe('organizationService — Member.status (D-MEM-04, définitive — vocab
  * d'atteindre l'exécution des tests.
  */
 
-describe('organizationService — Vote.result REGRESSION (D-MEM-04 scope: Member.status only, never Vote.result)', () => {
-  it('ALLOW: a newly created Vote still defaults to result="pending" — unaffected by the Member status migration', async () => {
-    const vote = await organizationService.createVote('T-001', { subject: 'Vote régression D-MEM-04', date: '2026-12-15' });
-    expect(vote?.result).toBe('pending');
-  });
-});
-
 describe('USER vs MEMBER — no automatic relation, no cross-creation (mandat P1 MEMBERS/USERS)', () => {
   it('creating a Member never creates a SystemUser', async () => {
     const usersBefore = (await userService.list('T-001', 'platform')).length;
@@ -233,26 +229,22 @@ describe('USER vs MEMBER — no automatic relation, no cross-creation (mandat P1
   });
 });
 
-describe('organizationService — Governance (Meetings/Votes/BoardMembers)', () => {
-  it('ALLOW: listMeetings/listVotes/listBoardMembers scoped to the requesting tenant', async () => {
-    const [meetings, votes, boardMembers] = await Promise.all([
+describe('organizationService — Governance (Meetings/BoardMembers)', () => {
+  it('ALLOW: listMeetings/listBoardMembers scoped to the requesting tenant', async () => {
+    const [meetings, boardMembers] = await Promise.all([
       organizationService.listMeetings('T-001'),
-      organizationService.listVotes('T-001'),
       organizationService.listBoardMembers('T-001'),
     ]);
     expect(meetings.every((item) => item.tenantId === 'T-001')).toBe(true);
-    expect(votes.every((item) => item.tenantId === 'T-001')).toBe(true);
     expect(boardMembers.every((item) => item.tenantId === 'T-001')).toBe(true);
   });
 
   it('DENY: T-002 sees no T-001 governance records in any list', async () => {
-    const [meetings, votes, boardMembers] = await Promise.all([
+    const [meetings, boardMembers] = await Promise.all([
       organizationService.listMeetings('T-002'),
-      organizationService.listVotes('T-002'),
       organizationService.listBoardMembers('T-002'),
     ]);
     expect(meetings.some((item) => item.id === 'MT-001')).toBe(false);
-    expect(votes.some((item) => item.id === 'V-001')).toBe(false);
     expect(boardMembers.some((item) => item.id === 'BM-001')).toBe(false);
   });
 
@@ -263,11 +255,6 @@ describe('organizationService — Governance (Meetings/Votes/BoardMembers)', () 
 
   it('DENY: endBoardMandate cannot mutate a board member of another tenant', async () => {
     const result = await organizationService.endBoardMandate('T-002', 'BM-001', '2026-01-01');
-    expect(result).toBeNull();
-  });
-
-  it('DENY: updateVoteResult cannot mutate a vote of another tenant', async () => {
-    const result = await organizationService.updateVoteResult('T-002', 'V-001', { yes: 999, no: 0, abstain: 0, result: 'adopted' });
     expect(result).toBeNull();
   });
 
@@ -355,5 +342,221 @@ describe('organizationService — Meeting lifecycle (D-4C3-TECH-01)', () => {
   it('DENY: getMeeting returns null for a meeting of another tenant', async () => {
     const result = await organizationService.getMeeting('T-002', 'MT-001');
     expect(result).toBeNull();
+  });
+});
+
+/**
+ * Mandat « Moteur générique de workflow de validation » — Membre = entité
+ * pilote (voir docs/GENERIC_VALIDATION_WORKFLOW_ENGINE.md). `WD-007` est
+ * `active: false` par défaut (besoin §41/§48) — ce `describe` active
+ * explicitement la définition le temps de SES tests puis la restaure,
+ * pour ne jamais changer le comportement par défaut vu par les autres
+ * fichiers de test (mêmes tableaux mock partagés dans tout le run).
+ */
+describe('organizationService — requestMemberUpdate/decideMemberUpdate/applyMemberUpdateDecision (moteur de workflow de validation, entité pilote Membre)', () => {
+  const wd007 = workflowDefinitions.find((definition) => definition.id === 'WD-007')!;
+  const APPROVER_ID = 'U-999-APPROVER';
+
+  it('REGRESSION (§41/§48) : WD-007 est inactive par défaut — requestMemberUpdate applique directement, comportement inchangé', async () => {
+    expect(wd007.active).toBe(false);
+    const member = await organizationService.createMember({ firstName: 'Direct', lastName: 'SansWorkflow', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    const result = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Après' }, currentUser.id, currentUser.name);
+    expect(result && 'applied' in result && result.applied).toBe(true);
+    const reloaded = await organizationService.getMember('T-001', member!.id);
+    expect(reloaded?.occupation).toBe('Après');
+  });
+
+  describe('avec WD-007 active', () => {
+    beforeAll(() => { wd007.active = true; });
+    afterAll(() => { wd007.active = false; });
+
+    it('ALLOW: une modification réelle crée une ApprovalRequest avec ChangeSet + snapshot de version, sans muter le membre', async () => {
+      const member = await organizationService.createMember({ firstName: 'Fatou', lastName: 'Test', matricule: '', gender: 'female', email: '', phone: '', occupation: 'Avant', nationality: 'Sénégalaise', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const result = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Après', lastName: 'Test' }, currentUser.id, currentUser.name, 'Mise à jour profession');
+      expect(result && 'applied' in result && result.applied === false).toBe(true);
+      const request = result && 'request' in result ? result.request : null;
+      expect(request?.status).toBe('pending');
+      expect(request?.domain).toBe('organization');
+      expect(request?.entityType).toBe('member');
+      expect(request?.changeSet).toEqual([{ field: 'occupation', before: 'Avant', after: 'Après' }]); // lastName identique au patch -> pas dans le ChangeSet
+      expect(request?.entitySnapshotVersion).toBe(member!.version);
+      const reloaded = await organizationService.getMember('T-001', member!.id);
+      expect(reloaded?.occupation).toBe('Avant'); // pas encore appliqué
+      expect(reloaded?.version).toBe(member!.version); // pas incrémenté avant application
+    });
+
+    it("ALLOW: aucun champ réellement modifié -> appliqué immédiatement, aucune ApprovalRequest créée (pas de bruit)", async () => {
+      const member = await organizationService.createMember({ firstName: 'NoOp', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Identique', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const result = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Identique' }, currentUser.id, currentUser.name);
+      expect(result && 'applied' in result && result.applied).toBe(true);
+    });
+
+    it('DENY (§34) : une deuxième demande concurrente sur le même membre est bloquée tant que la première est en attente', async () => {
+      const member = await organizationService.createMember({ firstName: 'Concurrent', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const first = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Première' }, currentUser.id, currentUser.name);
+      expect(first && 'applied' in first && first.applied === false).toBe(true);
+      const second = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Seconde' }, currentUser.id, currentUser.name);
+      expect(second && 'blocked' in second).toBe(true);
+    });
+
+    it('DENY (§22) : decideMemberUpdate refuse que le demandeur approuve sa propre demande', async () => {
+      const member = await organizationService.createMember({ firstName: 'AutoApprobation', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const created = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Après' }, currentUser.id, currentUser.name);
+      const requestId = created && 'request' in created ? created.request.id : '';
+      const decided = await organizationService.decideMemberUpdate('T-001', requestId, 'approve', currentUser.id, currentUser.name);
+      expect(decided).toBeNull();
+      const reloaded = await organizationService.getMember('T-001', member!.id);
+      expect(reloaded?.occupation).toBe('Avant');
+    });
+
+    it('ALLOW: approbation par un acteur différent du demandeur applique le ChangeSet et incrémente la version', async () => {
+      const member = await organizationService.createMember({ firstName: 'Approuve', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const versionBefore = member!.version;
+      const created = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Après approbation' }, currentUser.id, currentUser.name);
+      const requestId = created && 'request' in created ? created.request.id : '';
+      const decided = await organizationService.decideMemberUpdate('T-001', requestId, 'approve', APPROVER_ID, 'Approbateur Test');
+      expect(decided?.status).toBe('approved');
+      const reloaded = await organizationService.getMember('T-001', member!.id);
+      expect(reloaded?.occupation).toBe('Après approbation');
+      expect(reloaded?.version).toBe(versionBefore + 1);
+    });
+
+    it('DENY : un rejet motivé ne modifie jamais le membre', async () => {
+      const member = await organizationService.createMember({ firstName: 'Rejete', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const created = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Ne doit pas apparaître' }, currentUser.id, currentUser.name);
+      const requestId = created && 'request' in created ? created.request.id : '';
+      const decided = await organizationService.decideMemberUpdate('T-001', requestId, 'reject', APPROVER_ID, 'Approbateur Test', 'Motif de rejet obligatoire');
+      expect(decided?.status).toBe('rejected');
+      const reloaded = await organizationService.getMember('T-001', member!.id);
+      expect(reloaded?.occupation).toBe('Avant');
+    });
+
+    it('DENY (§11) : une modification concurrente de l’entité entre la demande et l’approbation est détectée — pas d’écrasement silencieux', async () => {
+      const member = await organizationService.createMember({ firstName: 'Conflit', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const created = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Proposée' }, currentUser.id, currentUser.name);
+      const requestId = created && 'request' in created ? created.request.id : '';
+      // Modification concurrente directe (hors workflow) pendant que la demande est en attente — simule un autre utilisateur.
+      await organizationService.updateMember('T-001', member!.id, { address: 'Nouvelle adresse concurrente' });
+      const decided = await organizationService.decideMemberUpdate('T-001', requestId, 'approve', APPROVER_ID, 'Approbateur Test');
+      expect(decided?.status).toBe('approved'); // la demande elle-même est bien approuvée...
+      expect(decided?.versionConflict).toBe(true); // ...mais le conflit est posé...
+      const reloaded = await organizationService.getMember('T-001', member!.id);
+      expect(reloaded?.occupation).toBe('Avant'); // ...et le ChangeSet n'est PAS appliqué.
+      expect(reloaded?.address).toBe('Nouvelle adresse concurrente'); // la modification concurrente, elle, reste intacte.
+    });
+
+    it('DENY (multi-tenant) : decideMemberUpdate refuse d’agir sur une demande d’un autre tenant', async () => {
+      const member = await organizationService.createMember({ firstName: 'AutreTenant', lastName: 'Test', matricule: '', gender: 'male', email: '', phone: '', occupation: 'Avant', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+      const created = await organizationService.requestMemberUpdate('T-002', member!.id, { occupation: 'Après' }, currentUser.id, currentUser.name);
+      const requestId = created && 'request' in created ? created.request.id : '';
+      const decided = await organizationService.decideMemberUpdate('T-001', requestId, 'approve', APPROVER_ID, 'Approbateur Test');
+      expect(decided).toBeNull();
+    });
+  });
+});
+
+describe('organizationService — hasPendingApproval / getWorkflowFor (moteur générique, réutilisable par tout domaine)', () => {
+  it('workflowService.getWorkflowFor retourne undefined tant qu’aucune définition active ne couvre ce couple entityType/action', async () => {
+    const definition = await workflowService.getWorkflowFor('member', 'update');
+    // Ce test tourne HORS du `describe` "avec WD-007 active" ci-dessus (restaurée à `active: false` en `afterAll`) — comportement par défaut.
+    expect(definition).toBeNull();
+  });
+
+  it('workflowService.hasPendingApproval est tenant-scopé — une demande d’un autre tenant n’est jamais vue', async () => {
+    const wd007 = workflowDefinitions.find((definition) => definition.id === 'WD-007')!;
+    wd007.active = true;
+    try {
+      const member = members.find((item) => item.tenantId === 'T-003');
+      const created = await organizationService.requestMemberUpdate('T-003', member!.id, { occupation: 'Isolation tenant' }, currentUser.id, currentUser.name);
+      expect(created && 'request' in created).toBe(true);
+      const crossTenant = await workflowService.hasPendingApproval('T-004', 'member', member!.id);
+      expect(crossTenant).toBeNull();
+      const sameTenant = await workflowService.hasPendingApproval('T-003', 'member', member!.id);
+      expect(sameTenant).not.toBeNull();
+    } finally {
+      wd007.active = false;
+    }
+  });
+});
+
+/**
+ * Mandat « Fonctions / mandats » — référentiel `MandateFunction`
+ * (`mocks/organization/mandate-functions.ts`), distinct du MANDAT
+ * (`BoardMember`) lui-même. Chaque test utilise un `name`/tenant dédié pour
+ * ne jamais collider avec le seed (MF-001..006, tenant T-001) ni entre eux.
+ */
+describe('organizationService — Fonctions / mandats (référentiel MandateFunction)', () => {
+  it('ALLOW: listMandateFunctions retourne uniquement les fonctions du tenant demandé, actives et inactives confondues', async () => {
+    const t001 = await organizationService.listMandateFunctions('T-001');
+    expect(t001.some((item) => item.name === 'Président')).toBe(true);
+    expect(t001.some((item) => item.name === 'Conseiller' && item.active === false)).toBe(true); // seed volontairement inactive
+    const t002 = await organizationService.listMandateFunctions('T-002');
+    expect(t002.every((item) => item.tenantId === 'T-002')).toBe(true);
+  });
+
+  it('ALLOW: createMandateFunction crée une fonction active par défaut', async () => {
+    const created = await organizationService.createMandateFunction('T-001', { name: 'Responsable communication', description: 'Communication institutionnelle et relations presse.' });
+    expect(created?.active).toBe(true);
+    expect(created?.name).toBe('Responsable communication');
+    expect(created?.createdAt).toBeTruthy();
+  });
+
+  it('DENY (§10/§11): unicité insensible à la casse et aux espaces superflus, au sein du même tenant', async () => {
+    const first = await organizationService.createMandateFunction('T-002', { name: 'Commissaire aux comptes', description: '' });
+    expect(first).not.toBeNull();
+    const duplicateCase = await organizationService.createMandateFunction('T-002', { name: 'commissaire aux comptes', description: '' });
+    expect(duplicateCase).toBeNull();
+    const duplicateSpaces = await organizationService.createMandateFunction('T-002', { name: '  Commissaire aux comptes  ', description: '' });
+    expect(duplicateSpaces).toBeNull();
+  });
+
+  it('ALLOW (§9): le même nom de fonction est autorisé pour deux tenants différents', async () => {
+    const t003 = await organizationService.createMandateFunction('T-003', { name: 'Président du conseil', description: '' });
+    const t004 = await organizationService.createMandateFunction('T-004', { name: 'Président du conseil', description: '' });
+    expect(t003).not.toBeNull();
+    expect(t004).not.toBeNull();
+    expect(t003?.id).not.toBe(t004?.id);
+  });
+
+  it('ALLOW: updateMandateFunction modifie nom/description sans toucher active', async () => {
+    const created = await organizationService.createMandateFunction('T-005', { name: 'Secrétaire adjoint', description: '' });
+    const updated = await organizationService.updateMandateFunction('T-005', created!.id, { name: 'Secrétaire général adjoint', description: 'Assiste le secrétaire général.' });
+    expect(updated?.name).toBe('Secrétaire général adjoint');
+    expect(updated?.active).toBe(true); // inchangé
+  });
+
+  it('DENY: updateMandateFunction refuse un renommage vers un nom déjà utilisé par une autre fonction du même tenant', async () => {
+    await organizationService.createMandateFunction('T-005', { name: 'Existe Déjà', description: '' });
+    const target = await organizationService.createMandateFunction('T-005', { name: 'À renommer', description: '' });
+    const result = await organizationService.updateMandateFunction('T-005', target!.id, { name: 'existe déjà', description: '' });
+    expect(result).toBeNull();
+  });
+
+  it('ALLOW: setMandateFunctionActive active/désactive — aucune suppression physique n’est exposée par ce service', async () => {
+    const created = await organizationService.createMandateFunction('T-001', { name: 'Fonction jetable test', description: '' });
+    const deactivated = await organizationService.setMandateFunctionActive('T-001', created!.id, false);
+    expect(deactivated?.active).toBe(false);
+    // Toujours présente dans la liste (désactivation, pas suppression) — §8/§11.
+    const stillListed = await organizationService.listMandateFunctions('T-001');
+    expect(stillListed.some((item) => item.id === created!.id)).toBe(true);
+    const reactivated = await organizationService.setMandateFunctionActive('T-001', created!.id, true);
+    expect(reactivated?.active).toBe(true);
+  });
+
+  it('DENY (multi-tenant): createMandateFunction/updateMandateFunction/setMandateFunctionActive n’agissent jamais sur/pour un autre tenant', async () => {
+    const created = await organizationService.createMandateFunction('T-002', { name: 'Isolation tenant fonctions', description: '' });
+    expect(await organizationService.updateMandateFunction('T-001', created!.id, { name: 'Intrus', description: '' })).toBeNull();
+    expect(await organizationService.setMandateFunctionActive('T-001', created!.id, false)).toBeNull();
+  });
+
+  it('§12/§13 — renommer une fonction ne réécrit jamais rétroactivement le libellé déjà capturé sur un mandat existant (BoardMember.position)', async () => {
+    // Fixture dédiée (jamais le seed "Président" partagé par d'autres tests de ce fichier) : une fonction,
+    // un mandat qui la référence par son libellé capturé, puis un renommage du référentiel.
+    const functionRecord = await organizationService.createMandateFunction('T-001', { name: 'Fonction historique test', description: '' });
+    const boardMember = await organizationService.createBoardMember('T-001', { memberId: 'M-001', memberName: 'Fatou Ndiaye', position: functionRecord!.name, mandateStart: '2026-01-01', mandateEnd: '2027-01-01' });
+    await organizationService.updateMandateFunction('T-001', functionRecord!.id, { name: 'Fonction historique renommée', description: '' });
+    const boardMembersAfter = await organizationService.listBoardMembers('T-001');
+    const sameMandate = boardMembersAfter.find((item) => item.id === boardMember!.id);
+    expect(sameMandate?.position).toBe('Fonction historique test'); // libellé historique intact, jamais réécrit
   });
 });

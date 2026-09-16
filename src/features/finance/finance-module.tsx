@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { ArrowLeft, Ban, Banknote, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Pencil, Plus, ReceiptText, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, UsersRound, WalletCards } from 'lucide-react';
+import { ArrowLeft, Ban, Banknote, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Pencil, Plus, ReceiptText, RotateCcw, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, UsersRound, WalletCards } from 'lucide-react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, MoneyDisplay, DateDisplay, EmptyState, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, ConfirmDialog, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -12,9 +12,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
+import { usePermissions } from '@/contexts/permission-context';
 import { useFiscalYear } from '@/contexts/fiscal-year-context';
 import { NotFoundPage, PermissionRoute } from '@/routes';
 import { financeService, type AccountCreateInput, type AccountUpdateInput, type TransactionInput } from '@/services/finance.service';
+import { financePositionService } from '@/services/finance-position.service';
+import { scopeKey } from '@/lib/finance';
 import { creditService } from '@/services/credit.service';
 import { loanRuleService, type LoanRuleInput, type LoanRuleUpdateInput } from '@/services/loan-rule.service';
 import { organizationService } from '@/services/organization.service';
@@ -26,6 +29,9 @@ import { accountEntryEffect, normalizeAccountLabel, type Account, type AccountTy
 import type { Member } from '@/mocks/organization/members';
 import type { Transaction, TransactionType } from '@/mocks/finance/transactions';
 import type { Loan } from '@/mocks/finance/loans';
+import type { Application } from '@/mocks/finance/applications';
+import type { Repayment } from '@/mocks/finance/repayments';
+import type { Guarantor } from '@/mocks/finance/guarantors';
 import { TRANSACTION_CATEGORIES, AUTRES_SUBCATEGORIES, DEFAULT_DIRECTION, categoryLabelKey, subcategoryLabelKey, subcategoriesFor, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import type { LoanRule, LoanRuleApprovalLevel, LoanRuleGuaranteeType, LoanRuleInterestPeriod, LoanRuleInterestType, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { TableColumn } from '@/types/ui';
@@ -103,6 +109,12 @@ function AccountsList({ t }: { t: T }) {
       setToDelete(null);
     },
   });
+  /** Seul objet, hors exercice fiscal, où la réouverture transverse a été jugée justifiée (audit §33/§36 du mandat cycle de vie) — voir `financeService.reactivateAccount`. */
+  const reactivateMutation = useMockMutation<Awaited<ReturnType<typeof financeService.reactivateAccount>>, string>({
+    mutationFn: (accountId) => financeService.reactivateAccount(currentTenant.id, accountId),
+    invalidateKeys: [queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (result) => { if (result) notify.success(t('finance', 'accountReactivated')); },
+  });
   const filtered = accounts.filter((a) => a.title.toLowerCase().includes(search.toLowerCase()));
   if (isLoading) return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')}><TableSkeleton /></Page>;
   if (isError) return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')}><ErrorState onRetry={refetch} /></Page>;
@@ -117,10 +129,11 @@ function AccountsList({ t }: { t: T }) {
     { key: 'actions', header: '', className: 'w-32', render: (row) => <div className="flex justify-end gap-1">
       <PermissionGate permission="accounts.manage"><button type="button" onClick={() => navigate(`/finance/accounts/${row.id}/members`)} aria-label={t('finance', 'manageMembers')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><UsersRound size={16} /></button></PermissionGate>
       <PermissionGate permission="accounts.update"><button type="button" onClick={() => navigate(`/finance/accounts/${row.id}/edit`)} aria-label={t('finance', 'edit')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Pencil size={16} /></button></PermissionGate>
+      {row.status === 'inactive' && <PermissionGate permission="accounts.manage"><button type="button" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(row.id)} aria-label={t('finance', 'reactivateAccount')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><RotateCcw size={16} /></button></PermissionGate>}
       <PermissionGate permission="accounts.delete"><button type="button" onClick={() => setToDelete(row)} aria-label={t('finance', 'deleteAccount')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Trash2 size={16} /></button></PermissionGate>
     </div> },
   ];
-  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatFCFA(totalBalance, 'fr', true)} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
+  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="accounts.read"><Button variant="outline" onClick={() => navigate('/finance/position')}><TrendingUp size={16} />{t('finance', 'financialPositionTitle')}</Button></PermissionGate><PermissionGate permission="applications.read"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><HandCoins size={16} />{t('finance', 'credit')}</Button></PermissionGate><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatFCFA(totalBalance, 'fr', true)} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
     {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(toDelete.id)} onCancel={() => setToDelete(null)} />}
   </Page>;
 }
@@ -229,6 +242,11 @@ function AccountDetail({ t }: { t: T }) {
       notify.success(t('finance', 'accountDeactivatedInstead'));
     },
   });
+  const reactivateMutation = useMockMutation<Awaited<ReturnType<typeof financeService.reactivateAccount>>, string>({
+    mutationFn: (accountId) => financeService.reactivateAccount(currentTenant.id, accountId),
+    invalidateKeys: [queryKeys.finance.account(id), queryKeys.finance.accounts(currentTenant.id)],
+    onSuccess: (result) => { if (result) notify.success(t('finance', 'accountReactivated')); },
+  });
   if (isLoading) return <Page title={t('finance', 'accountDetail')} description=""><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('finance', 'accountDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
   if (!account) return <NotFoundPage />;
@@ -240,6 +258,7 @@ function AccountDetail({ t }: { t: T }) {
     <Back label={t('finance', 'backToAccounts')} />
     <PermissionGate permission="accounts.manage"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/members`)}><UsersRound size={15} />{t('finance', 'manageMembers')}</Button></PermissionGate>
     <PermissionGate permission="accounts.update"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/edit`)}><Pencil size={15} />{t('finance', 'edit')}</Button></PermissionGate>
+    {account.status === 'inactive' && <PermissionGate permission="accounts.manage"><Button variant="outline" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(id)}><RotateCcw size={15} />{t('finance', 'reactivateAccount')}</Button></PermissionGate>}
     <PermissionGate permission="accounts.delete"><Button variant="outline" className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300" onClick={() => setToDelete(true)}><Trash2 size={15} />{t('finance', 'deleteAccount')}</Button></PermissionGate>
   </>}>
     {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(id)} onCancel={() => setToDelete(false)} />}
@@ -864,7 +883,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: T
   </>;
 }
 
-function validateTransactionForm(form: TransactionFormState, rule: LoanRule | undefined, mode: 'create' | 'edit', t: T): TransactionFormErrors {
+function validateTransactionForm(form: TransactionFormState, rule: LoanRule | undefined, mode: 'create' | 'edit', t: T, activeLoanCount = 0): TransactionFormErrors {
   const errors: TransactionFormErrors = {};
   if (!form.accountNumber) errors.accountNumber = t('finance', 'fieldRequired');
   if (!form.category) errors.category = t('finance', 'fieldRequired');
@@ -886,6 +905,10 @@ function validateTransactionForm(form: TransactionFormState, rule: LoanRule | un
     if (!form.memberId) errors.member = t('finance', 'fieldRequired');
     if (!rule) { errors.category = t('finance', 'noLoanPolicyForAccount'); return errors; }
     if (!errors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) errors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) });
+    // Mandat « Finalisation Finance/Tontines » §10 : `maxActiveLoans` doit RÉELLEMENT bloquer
+    // la soumission — avant ce mandat, seul un bandeau d'avertissement était affiché
+    // (`activeLoanCount >= rule.maxActiveLoans`, jamais lu par cette fonction de validation).
+    if (!errors.amount && activeLoanCount >= rule.maxActiveLoans) errors.amount = t('finance', 'maxActiveLoansReached', { count: String(rule.maxActiveLoans) });
     const duration = Number(form.durationMonths);
     if (form.durationMonths && (duration <= 0 || duration > rule.durationMonths)) errors.duration = t('finance', 'durationOutOfPolicyRange', { max: String(rule.durationMonths) });
     if (rule.requiresGuarantor) {
@@ -926,6 +949,9 @@ function TransactionCreate({ t }: { t: T }) {
   const { dateById: meetingDateById, nearestId: nearestMeetingId, fiscalYearId } = useFiscalMeetings();
   const { data: loanRules = [] } = useQuery({ queryKey: queryKeys.credit.loanRules(currentTenant.id), queryFn: () => loanRuleService.listLoanRules(currentTenant.id), enabled: form.category === 'PRET' });
   const rule = form.category === 'PRET' ? applicableLoanRule(loanRules, accounts, form.accountNumber) : undefined;
+  /** Même source que le bandeau d'avertissement de `TransactionFormBody` — nécessaire ici aussi pour que `validateTransactionForm` bloque réellement (mandat §10 « maxActiveLoans »), pas seulement pour l'affichage. */
+  const { data: borrowerLoans = [] } = useQuery({ queryKey: queryKeys.credit.loansByMember(form.memberId), queryFn: () => creditService.listLoansByMember(form.memberId), enabled: form.category === 'PRET' && Boolean(form.memberId) });
+  const activeLoanCount = borrowerLoans.filter((loan) => loan.status === 'active').length;
   /**
    * §6 — dès que le calendrier de l'exercice est chargé, présélectionne la
    * réunion la plus proche de ce jour (`distance = |meeting_date − today|`
@@ -936,19 +962,44 @@ function TransactionCreate({ t }: { t: T }) {
     if (!form.meetingId && nearestMeetingId) setForm({ meetingId: nearestMeetingId });
   }, [nearestMeetingId]); // eslint-disable-line react-hooks/exhaustive-deps
   const mutation = useMockMutation<Awaited<ReturnType<typeof financeService.createTransaction>>, TransactionInput>({
+    /**
+     * PRET/REMBOURSEMENT passent désormais par les orchestrateurs atomiques de
+     * `creditService` (mandat « Finalisation Finance/Tontines ») plutôt que
+     * d'appeler `financeService.createTransaction` directement : la Transaction
+     * n'est créée QUE si la politique de prêt (montant, `maxActiveLoans`,
+     * garants, approbation) — ou, pour un remboursement, le solde dû — est déjà
+     * validée, et un véritable `Loan`/`Repayment` est créé/mis à jour dans la
+     * même opération, jamais « une simple transaction ». Le comportement visible
+     * (une transaction, sa description, la redirection) reste inchangé pour
+     * l'utilisateur ; ce qui change est tout ce que le service garantit derrière.
+     */
     mutationFn: async (input) => {
-      const transaction = await financeService.createTransaction(currentTenant.id, input);
-      // REMBOURSEMENT : la transaction (écriture au journal) s'accompagne de l'enregistrement
-      // du remboursement sur le prêt résolu — l'encours reste juste pour le prochain remboursement.
-      // Le prêt/dette reste connu du backend, l'utilisateur ne l'a simplement pas choisi.
-      if (transaction && form.category === 'REMBOURSEMENT' && form.loanId) {
-        const paymentDate = (form.meetingId && meetingDateById.get(form.meetingId)) || new Date().toISOString().slice(0, 10);
-        await creditService.createRepayment(currentTenant.id, { loanId: form.loanId, paymentDate, principalPart: input.amount, interestPart: 0, status: 'completed' });
+      if (form.category === 'PRET') {
+        const account = accounts.find((item) => item.accountNumber === input.accountNumber);
+        if (!account) return undefined;
+        const validGuarantors = guarantorRowsFor(form, rule)
+          .filter((row) => row.name.trim() && Number(row.amount) > 0)
+          .map((row) => ({ guarantorName: row.name.trim(), guaranteedAmount: Number(row.amount) || 0, relation: row.relation.trim() }));
+        const result = await creditService.createLoanTransaction(currentTenant.id, {
+          accountId: account.id,
+          memberId: form.memberId,
+          principal: input.amount,
+          guarantors: validGuarantors,
+          approved: form.approved,
+          approvedBy: form.approvedBy || undefined,
+          transactionInput: input,
+        });
+        return result?.transaction;
       }
-      return transaction;
+      if (form.category === 'REMBOURSEMENT' && form.loanId) {
+        const paymentDate = (form.meetingId && meetingDateById.get(form.meetingId)) || new Date().toISOString().slice(0, 10);
+        const result = await creditService.createRepaymentTransaction(currentTenant.id, { loanId: form.loanId, paymentDate, principalPart: input.amount, interestPart: 0, transactionInput: input });
+        return result?.transaction;
+      }
+      return financeService.createTransaction(currentTenant.id, input);
     },
     // `['finance', 'accounts']` (préfixe large) invalide la liste ET la fiche caisse : le solde et le dernier mouvement sont dérivés du journal, ils doivent se recalculer dès qu'une transaction est créée.
-    invalidateKeys: [['finance', 'transactions'], ['finance', 'accounts'], ['credit', 'loans']],
+    invalidateKeys: [['finance', 'transactions'], ['finance', 'accounts'], ['credit', 'loans'], ['credit', 'applications'], ['credit', 'guarantors']],
     onSuccess: (transaction) => {
       if (!transaction) { notify.error(t('finance', 'transactionActionFailed')); return; }
       notify.success(t('finance', 'transactionCreated'));
@@ -956,7 +1007,7 @@ function TransactionCreate({ t }: { t: T }) {
     },
   });
   const handleSave = () => {
-    const nextErrors = validateTransactionForm(form, rule, 'create', t);
+    const nextErrors = validateTransactionForm(form, rule, 'create', t, activeLoanCount);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     const memberNameById = new Map(members.map((member) => [member.id, `${member.firstName} ${member.lastName}`]));
@@ -1257,18 +1308,319 @@ function LoanRuleEdit({ t }: { t: T }) {
   </div></Page>;
 }
 
+// ----------------------------------------------------------------------- Crédit : demandes, prêts (mandat « Finalisation Finance/Tontines »)
+
+function ApplicationsList({ t }: { t: T }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const [search, setSearch] = useState('');
+  const { data: applications = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.credit.applications(currentTenant.id), queryFn: () => creditService.listApplications(currentTenant.id) });
+  const filtered = applications.filter((application) => `${application.applicant} ${application.id}`.toLowerCase().includes(search.toLowerCase()));
+  const columns: TableColumn<Application>[] = [
+    { key: 'id', header: t('finance', 'loanId'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/applications/${row.id}`)} className="font-mono text-xs font-semibold text-primary">{row.id}</button> },
+    { key: 'applicant', header: t('finance', 'applicant') },
+    { key: 'requestedAmount', header: t('finance', 'requestedAmount'), render: (row) => <MoneyDisplay amount={row.requestedAmount} /> },
+    { key: 'stage', header: t('finance', 'applicationStage'), render: (row) => <StatusBadge label={t('finance', row.stage)} tone={tone[row.stage]} /> },
+    { key: 'submittedDate', header: t('finance', 'submittedDate'), render: (row) => <DateDisplay value={row.submittedDate} /> },
+  ];
+  if (isLoading) return <Page title={t('finance', 'applicationsTitle')} description={t('finance', 'applicationsDescription')}><TableSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'applicationsTitle')} description={t('finance', 'applicationsDescription')}><ErrorState onRetry={refetch} /></Page>;
+  return <Page title={t('finance', 'applicationsTitle')} description={t('finance', 'applicationsDescription')} actions={<><PermissionGate permission="loans.read"><Button variant="outline" onClick={() => navigate('/finance/credit/loans')}><HandCoins size={16} />{t('finance', 'loansTitle')}</Button></PermissionGate><PermissionGate permission="applications.create"><Button onClick={() => navigate('/finance/credit/applications/create')}><Plus size={16} />{t('finance', 'createApplication')}</Button></PermissionGate></>}>
+    <FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchTransaction')} />
+    <DataTable columns={columns} rows={filtered} empty={<EmptyState icon={FileText} title={t('finance', 'noApplications')} />} />
+  </Page>;
+}
+
+function ApplicationDetail({ t }: { t: T }) {
+  const { id = '' } = useParams(); const { currentTenant } = useTenant(); const navigate = useNavigate();
+  const { data: application, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.credit.application(id), currentTenant.id], queryFn: () => creditService.getApplication(currentTenant.id, id) });
+  const { data: loans = [] } = useQuery({ queryKey: queryKeys.credit.loans(currentTenant.id), queryFn: () => creditService.listLoans(currentTenant.id), enabled: application?.stage === 'stageDisbursed' });
+  const relatedLoan = loans.find((loan) => loan.applicationId === application?.id);
+  if (isLoading) return <Page title={t('finance', 'applicationDetail')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'applicationDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!application) return <NotFoundPage />;
+  return <Page title={application.id} description={application.applicant} actions={<Back label={t('finance', 'backToApplications')} />}>
+    <div className="max-w-3xl space-y-5">
+      <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-3">
+        <Info label={t('finance', 'applicant')} value={application.applicant} icon={UsersRound} />
+        <Info label={t('finance', 'requestedAmount')} value={<MoneyDisplay amount={application.requestedAmount} />} icon={HandCoins} />
+        <Info label={t('finance', 'submittedDate')} value={<DateDisplay value={application.submittedDate} />} icon={CalendarClock} />
+        {application.purpose && <Info label={t('finance', 'purpose')} value={application.purpose} icon={FileText} />}
+        {application.reviewDate && <Info label={t('finance', 'reviewDate')} value={<DateDisplay value={application.reviewDate} />} icon={CalendarClock} />}
+        {application.approvalDate && <Info label={t('finance', 'approvalDate')} value={<DateDisplay value={application.approvalDate} />} icon={CalendarClock} />}
+      </CardContent></Card>
+      <div className="flex items-center gap-3">
+        <StatusBadge label={t('finance', application.stage)} tone={tone[application.stage]} />
+        {(application.stage === 'stageSubmitted' || application.stage === 'stageReview' || application.stage === 'stageApproved') && (
+          <Button variant="outline" size="sm" onClick={() => navigate('/operations/workflows')}><ClipboardIcon />{t('finance', 'seeAlso')} · Workflows</Button>
+        )}
+        {relatedLoan && <Button variant="outline" size="sm" onClick={() => navigate(`/finance/credit/loans/${relatedLoan.id}`)}><HandCoins size={15} />{t('finance', 'loanDetail')}</Button>}
+      </div>
+    </div>
+  </Page>;
+}
+/** Petite icône neutre pour le lien « voir aussi » (évite d'ajouter une dépendance d'icône dédiée pour un seul bouton). */
+function ClipboardIcon() { return <ChevronRight size={15} />; }
+
+type ApplicationFormState = { accountId: string; memberId: string; requestedAmount: string; purpose: string; guarantors: GuarantorRow[] };
+const emptyApplicationForm: ApplicationFormState = { accountId: '', memberId: '', requestedAmount: '', purpose: '', guarantors: [] };
+
+/**
+ * Nouvelle demande de prêt (mandat « Finalisation Finance/Tontines », phase
+ * Prêts) — chemin PRÉ-décaissement passant par le moteur d'approbation
+ * générique (WD-001, déjà défini mais jamais utilisé pour créer une nouvelle
+ * demande à l'exécution avant ce mandat). Le décaissement lui-même reste une
+ * action séparée, effectuée depuis Opérations → Workflows une fois la demande
+ * intégralement approuvée (voir `creditService.disburseLoan`).
+ */
+function ApplicationCreate({ t }: { t: T }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
+  const [form, setFormState] = useState<ApplicationFormState>(emptyApplicationForm);
+  const [errors, setErrors] = useState<{ accountId?: string; memberId?: string; amount?: string; guarantors?: string }>({});
+  const setForm = (patch: Partial<ApplicationFormState>) => setFormState((current) => ({ ...current, ...patch }));
+  const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
+  const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
+  const { data: loanRules = [] } = useQuery({ queryKey: queryKeys.credit.loanRules(currentTenant.id), queryFn: () => loanRuleService.listLoanRules(currentTenant.id) });
+  const eligibleAccounts = accounts.filter((account) => loanRules.some((item) => item.accountId === account.id && item.status === 'ACTIVE' && item.allowLoans));
+  const rule = loanRules.find((item) => item.accountId === form.accountId && item.status === 'ACTIVE' && item.allowLoans);
+  const guarantorRows = rule?.requiresGuarantor ? Array.from({ length: Math.min(Math.max(form.guarantors.length, rule.minGuarantors), rule.maxGuarantors) }, (_, index) => form.guarantors[index] ?? { name: '', amount: '', relation: '' }) : [];
+  const setGuarantor = (index: number, patch: Partial<GuarantorRow>) => setForm({ guarantors: guarantorRows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)) });
+
+  const mutation = useMockMutation<Awaited<ReturnType<typeof creditService.submitLoanApplication>>, void>({
+    mutationFn: () =>
+      creditService.submitLoanApplication(
+        currentTenant.id,
+        {
+          accountId: form.accountId,
+          memberId: form.memberId,
+          requestedAmount: Number(form.requestedAmount),
+          purpose: form.purpose,
+          guarantors: guarantorRows.filter((row) => row.name.trim() && Number(row.amount) > 0).map((row) => ({ guarantorName: row.name.trim(), guaranteedAmount: Number(row.amount) || 0, relation: row.relation.trim() })),
+        },
+        user.name,
+        user.id,
+      ),
+    invalidateKeys: [queryKeys.credit.applications(currentTenant.id)],
+    onSuccess: (result) => {
+      if (!result) { notify.error(t('finance', 'applicationRejected')); return; }
+      notify.success(t('finance', 'applicationCreated'));
+      navigate(`/operations/workflows/${result.request.id}`);
+    },
+  });
+
+  const handleSave = () => {
+    const nextErrors: typeof errors = {};
+    if (!form.accountId) nextErrors.accountId = t('finance', 'fieldRequired');
+    if (!form.memberId) nextErrors.memberId = t('finance', 'fieldRequired');
+    const amount = Number(form.requestedAmount);
+    if (!form.requestedAmount || amount <= 0) nextErrors.amount = t('finance', 'invalidAmount');
+    if (rule && !nextErrors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) nextErrors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) });
+    if (rule?.requiresGuarantor) {
+      const complete = guarantorRows.filter((row) => row.name.trim() && Number(row.amount) > 0).length;
+      if (complete < rule.minGuarantors) nextErrors.guarantors = t('finance', 'minGuarantorsNotMet', { count: String(rule.minGuarantors) });
+    }
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
+    mutation.mutate();
+  };
+
+  return <Page title={t('finance', 'createApplication')} description={t('finance', 'applicationsDescription')} actions={<Back label={t('finance', 'backToApplications')} />}>
+    <div className="max-w-3xl space-y-5">
+      <FormSection title={t('finance', 'general')}>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="app-account">{t('finance', 'accountOrCash')}</Label>
+            <select id="app-account" value={form.accountId} onChange={(event) => setForm({ accountId: event.target.value })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+              <option value="">{t('finance', 'selectAccountPlaceholder')}</option>
+              {eligibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.accountNumber} — {account.title}</option>)}
+            </select>
+            <FieldError message={errors.accountId} />
+          </div>
+          <div className="space-y-2"><Label htmlFor="app-member">{t('finance', 'selectMember')}</Label>
+            <select id="app-member" value={form.memberId} onChange={(event) => setForm({ memberId: event.target.value })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+              <option value="">{t('finance', 'selectMember')}</option>
+              {members.map((member) => <option key={member.id} value={member.id}>{member.firstName} {member.lastName}</option>)}
+            </select>
+            <FieldError message={errors.memberId} />
+          </div>
+          <div className="space-y-2"><Label htmlFor="app-amount">{t('finance', 'requestedAmount')} *</Label><Input id="app-amount" type="number" inputMode="decimal" value={form.requestedAmount} onChange={(event) => setForm({ requestedAmount: event.target.value })} /><FieldError message={errors.amount} />{rule && <p className="text-[11px] text-muted-foreground">{t('finance', 'policyAmountRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) })}</p>}</div>
+          <div className="space-y-2 sm:col-span-2"><Label htmlFor="app-purpose">{t('finance', 'purpose')}</Label><Textarea id="app-purpose" value={form.purpose} onChange={(event) => setForm({ purpose: event.target.value })} /></div>
+        </div>
+      </FormSection>
+      {rule?.requiresGuarantor && <FormSection title={t('finance', 'guarantorsSection')}>
+        <p className="mb-3 text-xs text-muted-foreground">{t('finance', 'guarantorRequiredByPolicy', { min: String(rule.minGuarantors), max: String(rule.maxGuarantors) })}</p>
+        <div className="space-y-3">
+          {guarantorRows.map((row, index) => <div key={index} className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-3">
+            <div className="space-y-1"><Label htmlFor={`app-guarantor-name-${index}`}>{t('finance', 'guarantorName')}</Label>
+              <select id={`app-guarantor-name-${index}`} value={row.name} onChange={(event) => setGuarantor(index, { name: event.target.value })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+                <option value="">{t('finance', 'selectMember')}</option>
+                {members.filter((member) => rule.allowSelfGuarantee || member.id !== form.memberId).map((member) => <option key={member.id} value={`${member.firstName} ${member.lastName}`}>{member.firstName} {member.lastName}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1"><Label htmlFor={`app-guarantor-amount-${index}`}>{t('finance', 'guaranteedAmount')}</Label><Input id={`app-guarantor-amount-${index}`} type="number" inputMode="decimal" value={row.amount} onChange={(event) => setGuarantor(index, { amount: event.target.value })} /></div>
+            <div className="space-y-1"><Label htmlFor={`app-guarantor-relation-${index}`}>{t('finance', 'guarantorRelation')}</Label><Input id={`app-guarantor-relation-${index}`} value={row.relation} onChange={(event) => setGuarantor(index, { relation: event.target.value })} /></div>
+          </div>)}
+          <FieldError message={errors.guarantors} />
+        </div>
+      </FormSection>}
+      <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/finance/credit/applications')}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+    </div>
+  </Page>;
+}
+
+/**
+ * PRIORITÉ N°1 du mandat « Finalisation Finance/Tontines » — brancher le
+ * nouveau moteur financier (`@/lib/finance`, `financePositionService`) à
+ * l'interface : jusqu'ici entièrement fonctionnel et testé (150+ cas), mais
+ * invisible pour un utilisateur (aucune route ne l'appelait, cf. audit
+ * TANZEN). Ne remplace PAS `resolveAccount()` (déjà utilisé par la liste des
+ * comptes et la fiche caisse, déjà correct et testé) : ajoute la capacité
+ * qui n'existait nulle part — solde à une date passée, et position financière
+ * consolidée d'un membre (épargne / prêts en cours / distributions).
+ */
+function FinancePosition({ t }: { t: T }) {
+  const { currentTenant } = useTenant();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
+  const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
+
+  const [accountId, setAccountId] = useState('');
+  const [accountDate, setAccountDate] = useState(today);
+  const accountScope = accountId ? ({ kind: 'ACCOUNT' as const, accountId }) : null;
+  const { data: balanceResult, isFetching: balanceLoading } = useQuery({
+    queryKey: accountScope ? queryKeys.finance.position.balance(currentTenant.id, scopeKey(accountScope), accountDate) : ['finance', 'position', 'balance', 'idle'],
+    queryFn: () => financePositionService.balanceAsOf(currentTenant.id, accountScope!, accountDate),
+    enabled: Boolean(accountScope && accountDate),
+  });
+
+  const [memberId, setMemberId] = useState('');
+  const [memberDate, setMemberDate] = useState(today);
+  const memberScope = memberId ? ({ kind: 'MEMBER_ALL_ACCOUNTS' as const, memberId }) : null;
+  const { data: positionResult, isFetching: positionLoading } = useQuery({
+    queryKey: memberScope ? queryKeys.finance.position.memberPosition(currentTenant.id, scopeKey(memberScope), memberDate) : ['finance', 'position', 'member', 'idle'],
+    queryFn: () => financePositionService.memberFinancialPosition(currentTenant.id, memberScope!, memberDate),
+    enabled: Boolean(memberScope && memberDate),
+  });
+
+  return <Page title={t('finance', 'financialPositionTitle')} description={t('finance', 'financialPositionDescription')} actions={<Back label={t('finance', 'backToAccounts')} />}>
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'balanceAsOfTitle')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="pos-account">{t('finance', 'accountOrCash')}</Label>
+            <select id="pos-account" value={accountId} onChange={(event) => setAccountId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+              <option value="">{t('finance', 'selectAccountPlaceholder')}</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.accountNumber} — {account.title}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2"><Label htmlFor="pos-account-date">{t('finance', 'asOfDate')}</Label><Input id="pos-account-date" type="date" value={accountDate} onChange={(event) => setAccountDate(event.target.value)} /></div>
+        </div>
+        {accountId && (balanceLoading ? <p className="text-xs text-muted-foreground">{t('finance', 'saving')}</p> : balanceResult && (
+          <div className="rounded-lg border border-border p-4">
+            <p className="text-[11px] text-muted-foreground">{t('finance', 'balance')}</p>
+            <p className="text-2xl font-semibold"><MoneyDisplay amount={balanceResult.total} /></p>
+            {balanceResult.outOfScope && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{t('finance', 'outOfScope')}</p>}
+          </div>
+        ))}
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'memberPositionTitle')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="pos-member">{t('finance', 'selectMember')}</Label>
+            <select id="pos-member" value={memberId} onChange={(event) => setMemberId(event.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+              <option value="">{t('finance', 'selectMember')}</option>
+              {members.map((member) => <option key={member.id} value={member.id}>{member.firstName} {member.lastName}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2"><Label htmlFor="pos-member-date">{t('finance', 'asOfDate')}</Label><Input id="pos-member-date" type="date" value={memberDate} onChange={(event) => setMemberDate(event.target.value)} /></div>
+        </div>
+        {memberId && (positionLoading ? <p className="text-xs text-muted-foreground">{t('finance', 'saving')}</p> : positionResult && (
+          <div className="grid grid-cols-2 gap-3">
+            <Info label={t('finance', 'savingsPosition')} value={<MoneyDisplay amount={positionResult.savings} />} icon={WalletCards} />
+            <Info label={t('finance', 'otherMovementsPosition')} value={<MoneyDisplay amount={positionResult.otherMovements} />} icon={Banknote} />
+            {positionResult.credit && <Info label={t('finance', 'outstanding')} value={<MoneyDisplay amount={positionResult.credit.outstanding} />} icon={HandCoins} />}
+            {positionResult.distributions !== undefined && <Info label={t('finance', 'distributionsPosition')} value={<MoneyDisplay amount={positionResult.distributions} />} icon={Landmark} />}
+            {positionResult.estimatedNetPosition !== undefined && <Info label={t('finance', 'estimatedNetPositionLabel')} value={<MoneyDisplay amount={positionResult.estimatedNetPosition} />} icon={TrendingUp} />}
+            {positionResult.outOfScope && <p className="col-span-2 text-xs text-amber-700 dark:text-amber-300">{t('finance', 'outOfScope')}</p>}
+          </div>
+        ))}
+      </CardContent></Card>
+    </div>
+  </Page>;
+}
+
+function LoansList({ t }: { t: T }) {
+  const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const [search, setSearch] = useState('');
+  const { data: loans = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.credit.loans(currentTenant.id), queryFn: () => creditService.listLoans(currentTenant.id) });
+  const filtered = loans.filter((loan) => `${loan.borrower} ${loan.id}`.toLowerCase().includes(search.toLowerCase()));
+  const columns: TableColumn<Loan>[] = [
+    { key: 'id', header: t('finance', 'loanId'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/loans/${row.id}`)} className="font-mono text-xs font-semibold text-primary">{row.id}</button> },
+    { key: 'borrower', header: t('finance', 'borrower') },
+    { key: 'principal', header: t('finance', 'principal'), render: (row) => <MoneyDisplay amount={row.principal} /> },
+    { key: 'outstanding', header: t('finance', 'outstanding'), render: (row) => <MoneyDisplay amount={row.outstanding} /> },
+    { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },
+    { key: 'nextPaymentDate', header: t('finance', 'nextPayment'), render: (row) => <DateDisplay value={row.nextPaymentDate} /> },
+  ];
+  if (isLoading) return <Page title={t('finance', 'loansTitle')} description={t('finance', 'loansDescription')}><TableSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'loansTitle')} description={t('finance', 'loansDescription')}><ErrorState onRetry={refetch} /></Page>;
+  return <Page title={t('finance', 'loansTitle')} description={t('finance', 'loansDescription')} actions={<PermissionGate permission="applications.create"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><FileText size={16} />{t('finance', 'applicationsTitle')}</Button></PermissionGate>}>
+    <FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchTransaction')} />
+    <DataTable columns={columns} rows={filtered} empty={<EmptyState icon={HandCoins} title={t('finance', 'noLoans')} />} />
+  </Page>;
+}
+
+function LoanDetail({ t }: { t: T }) {
+  const { id = '' } = useParams(); const { currentTenant } = useTenant();
+  const { data: loan, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.credit.loan(id), currentTenant.id], queryFn: () => creditService.getLoan(currentTenant.id, id) });
+  const { data: repayments = [] } = useQuery({ queryKey: queryKeys.credit.repaymentsByLoan(id), queryFn: () => creditService.listRepaymentsByLoan(currentTenant.id, id), enabled: Boolean(loan) });
+  const { data: loanGuarantors = [] } = useQuery({ queryKey: queryKeys.credit.guarantorsByLoan(id), queryFn: () => creditService.listGuarantorsByLoan(currentTenant.id, id), enabled: Boolean(loan) });
+  if (isLoading) return <Page title={t('finance', 'loanDetail')} description=""><DetailSkeleton /></Page>;
+  if (isError) return <Page title={t('finance', 'loanDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
+  if (!loan) return <NotFoundPage />;
+  const repaymentColumns: TableColumn<Repayment>[] = [
+    { key: 'paymentDate', header: t('finance', 'paymentDate'), render: (row) => <DateDisplay value={row.paymentDate} /> },
+    { key: 'principalPart', header: t('finance', 'principalPart'), render: (row) => <MoneyDisplay amount={row.principalPart} /> },
+    { key: 'interestPart', header: t('finance', 'interestPart'), render: (row) => <MoneyDisplay amount={row.interestPart} /> },
+    { key: 'amount', header: t('finance', 'amount'), render: (row) => <MoneyDisplay amount={row.amount} /> },
+    { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },
+  ];
+  const guarantorColumns: TableColumn<Guarantor>[] = [
+    { key: 'guarantorName', header: t('finance', 'guarantorName') },
+    { key: 'guaranteedAmount', header: t('finance', 'guaranteedAmount'), render: (row) => <MoneyDisplay amount={row.guaranteedAmount} /> },
+    { key: 'relation', header: t('finance', 'relation') },
+  ];
+  return <Page title={loan.id} description={loan.borrower} actions={<Back label={t('finance', 'backToLoans')} />}>
+    <div className="space-y-5">
+      <Card><CardContent className="grid gap-4 p-5 sm:grid-cols-4">
+        <Info label={t('finance', 'principal')} value={<MoneyDisplay amount={loan.principal} />} icon={HandCoins} />
+        <Info label={t('finance', 'interestRate')} value={`${loan.interestRate}%`} icon={TrendingUp} />
+        <Info label={t('finance', 'interestAmount')} value={<MoneyDisplay amount={loan.interestAmount} />} icon={TrendingUp} />
+        <Info label={t('finance', 'totalRepayable')} value={<MoneyDisplay amount={loan.totalRepayable} />} icon={Landmark} />
+        <Info label={t('finance', 'outstanding')} value={<MoneyDisplay amount={loan.outstanding} />} icon={WalletCards} />
+        <Info label={t('finance', 'paidAmount')} value={<MoneyDisplay amount={loan.paidAmount} />} icon={Banknote} />
+        <Info label={t('finance', 'disbursementDate')} value={<DateDisplay value={loan.disbursementDate} />} icon={CalendarClock} />
+        <Info label={t('finance', 'maturityDate')} value={<DateDisplay value={loan.maturityDate} />} icon={CalendarClock} />
+        <Info label={t('finance', 'monthlyPayment')} value={<MoneyDisplay amount={loan.monthlyPayment} />} icon={Clock3} />
+        <Info label={t('finance', 'nextPayment')} value={<DateDisplay value={loan.nextPaymentDate} />} icon={Clock3} />
+      </CardContent></Card>
+      <div><StatusBadge label={t('finance', loan.status)} tone={tone[loan.status]} /></div>
+      {loanGuarantors.length > 0 && <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'guarantorsTitle')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={guarantorColumns} rows={loanGuarantors} empty={null} /></CardContent></Card>}
+      <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'repaymentsTitle')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={repaymentColumns} rows={repayments} empty={<EmptyState icon={ReceiptText} title={t('finance', 'noRepayments')} />} /></CardContent></Card>
+    </div>
+  </Page>;
+}
+
 export function FinanceModule() {
   const { t } = useLocale();
   return (
     <Routes>
       {/*
-       * Mandat « Refonte module Finances » : le domaine n'expose plus que deux
-       * parcours — Comptes et Transactions (journal central, point d'entrée
-       * unique de TOUTE opération via « + Ajouter une transaction »). Les écrans
-       * Contributions / Demandes / Prêts / Remboursements / Garants / Distributions
-       * ont été supprimés (routes ET composants) : ce sont des types d'opération,
-       * pas des modules. Seul `credit/loan-rules` subsiste — éditeur de la
-       * politique de prêt d'une caisse, atteignable depuis la page Comptes.
+       * Mandat « Refonte module Finances » : le domaine expose Comptes et
+       * Transactions (journal central, point d'entrée unique de TOUTE
+       * opération via « + Ajouter une transaction »). Mandat « Finalisation
+       * Finance/Tontines » (ultérieur) : les écrans Demandes/Prêts sont
+       * réintroduits pour porter le cycle de vie complet du crédit (demande →
+       * approbation via le moteur de workflow générique → décaissement réel,
+       * cf. `creditService`) — Contributions/Garants/Distributions dédiés
+       * restent hors périmètre (types d'opération du journal, pas des
+       * modules). `credit/loan-rules` reste atteignable depuis Comptes.
        */}
       <Route index element={<Navigate to="transactions" replace />} />
       <Route path="accounts" element={<AccountsList t={t} />} />
@@ -1284,6 +1636,12 @@ export function FinanceModule() {
       <Route path="credit/loan-rules/create" element={<PermissionRoute permission="loanRules.manage"><LoanRuleCreate t={t} /></PermissionRoute>} />
       <Route path="credit/loan-rules/:id/edit" element={<PermissionRoute permission="loanRules.manage"><LoanRuleEdit t={t} /></PermissionRoute>} />
       <Route path="credit/loan-rules/:id" element={<PermissionRoute permission="loanRules.manage"><LoanRuleDetail t={t} /></PermissionRoute>} />
+      <Route path="credit/applications" element={<PermissionRoute permission="applications.read"><ApplicationsList t={t} /></PermissionRoute>} />
+      <Route path="credit/applications/create" element={<PermissionRoute permission="applications.create"><ApplicationCreate t={t} /></PermissionRoute>} />
+      <Route path="credit/applications/:id" element={<PermissionRoute permission="applications.read"><ApplicationDetail t={t} /></PermissionRoute>} />
+      <Route path="credit/loans" element={<PermissionRoute permission="loans.read"><LoansList t={t} /></PermissionRoute>} />
+      <Route path="credit/loans/:id" element={<PermissionRoute permission="loans.read"><LoanDetail t={t} /></PermissionRoute>} />
+      <Route path="position" element={<PermissionRoute permission="accounts.read"><FinancePosition t={t} /></PermissionRoute>} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

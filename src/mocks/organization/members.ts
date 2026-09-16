@@ -182,4 +182,92 @@ export const members: Member[] = [
     activities: [{ id: 'AC-9', type: 'Suspension', description: 'Membre suspendu - retard de remboursement', date: '2026-07-01' }],
     governanceParticipation: [],
   },
+  // M-009..M-018 — 10 membres fictifs supplémentaires (mandat « Évolution du cycle de vie des
+  // exercices fiscaux » §annexe), répartis sur les 5 tenants existants, couvrant les 4 valeurs de
+  // `MemberStatus` (dont `exited`, absent du seed jusqu'ici). Même convention que M-001..M-008 :
+  // `matricule`/`photoUrl` vides (non renseignés), `statusHistory` amorcée à une seule entrée
+  // `{ status: <actuel>, since: joinedAt }` (bootstrap conservateur, cf. commentaire du type ci-dessus).
+  {
+    id: 'M-009', uuid: 'a1b2c3d4-1111-4a1b-9c2d-3e4f5a6b7c81', tenantId: 'T-002', matricule: '', firstName: 'Aminata', lastName: 'Diallo', gender: 'female', birthDate: '1990-05-14', nationality: 'Sénégalaise', idNumber: 'SN-514-05-1990', occupation: 'Couturière', email: 'aminata.diallo@email.sn', phone: '+221 77 234 56 78', address: '9 Rue de la Paix, Thiès', photoUrl: '', joinedAt: '2022-02-10', status: 'active', statusHistory: [{ status: 'active', since: '2022-02-10' }], tenantName: 'Tontine Horizon', syncStatus: 'synced', version: 1, createdAt: '2022-02-10T00:00:00.000Z', updatedAt: '2022-02-10T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-6', role: 'member', tenantName: 'Tontine Horizon', startDate: '2022-02-10', endDate: null }],
+    accounts: [{ id: 'A-10', accountNumber: 'TH-002-SAV-3', type: 'savings', balance: 275000 }],
+    documents: [{ id: 'D-11', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2022-02-10' }],
+    activities: [{ id: 'AC-10', type: 'Contribution', description: 'Contribution cycle 4 - Tontine Horizon', date: '2026-08-08' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-010', uuid: 'a1b2c3d4-2222-4a1b-9c2d-3e4f5a6b7c82', tenantId: 'T-002', matricule: '', firstName: 'Moussa', lastName: 'Fall', gender: 'male', birthDate: '1982-11-03', nationality: 'Sénégalaise', idNumber: 'SN-113-11-1982', occupation: 'Menuisier', email: 'moussa.fall@email.sn', phone: '+221 76 345 67 89', address: '22 Avenue Léopold Sédar Senghor, Thiès', photoUrl: '', joinedAt: '2020-09-05', status: 'active', statusHistory: [{ status: 'active', since: '2020-09-05' }], tenantName: 'Tontine Horizon', syncStatus: 'synced', version: 1, createdAt: '2020-09-05T00:00:00.000Z', updatedAt: '2020-09-05T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-7', role: 'boardMember', tenantName: 'Tontine Horizon', startDate: '2024-01-10', endDate: null }],
+    accounts: [{ id: 'A-11', accountNumber: 'TH-002-CUR-2', type: 'current', balance: 512000 }],
+    documents: [{ id: 'D-12', name: 'Carte d\'identité', type: 'idDocument', uploadedAt: '2020-09-05' }],
+    activities: [{ id: 'AC-11', type: 'Prêt', description: 'Prêt approuvé - 900 000 FCFA', date: '2026-06-18' }],
+    governanceParticipation: [{ id: 'G-4', assemblyName: 'AG 2026', role: 'Membre du bureau', date: '2026-06-15' }],
+  },
+  {
+    id: 'M-011', uuid: 'a1b2c3d4-3333-4a1b-9c2d-3e4f5a6b7c83', tenantId: 'T-003', matricule: '', firstName: 'Bineta', lastName: 'Sow', gender: 'female', birthDate: '1993-07-22', nationality: 'Sénégalaise', idNumber: 'SN-722-07-1993', occupation: 'Enseignante', email: 'bineta.sow@email.sn', phone: '+221 78 456 78 90', address: '4 Rue Blaise Diagne, Saint-Louis', photoUrl: '', joinedAt: '2023-04-18', status: 'active', statusHistory: [{ status: 'active', since: '2023-04-18' }], tenantName: 'Mutuelle Teranga', syncStatus: 'synced', version: 1, createdAt: '2023-04-18T00:00:00.000Z', updatedAt: '2023-04-18T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-8', role: 'secretary', tenantName: 'Mutuelle Teranga', startDate: '2024-01-10', endDate: null }],
+    accounts: [{ id: 'A-12', accountNumber: 'MT-003-SAV-2', type: 'savings', balance: 640000 }],
+    documents: [{ id: 'D-13', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2023-04-18' }],
+    activities: [{ id: 'AC-12', type: 'Contribution', description: 'Contribution cycle 1 - Mutuelle Teranga', date: '2026-07-15' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-012', uuid: 'a1b2c3d4-4444-4a1b-9c2d-3e4f5a6b7c84', tenantId: 'T-004', matricule: '', firstName: 'Ousmane', lastName: 'Ba', gender: 'male', birthDate: '1979-01-30', nationality: 'Sénégalaise', idNumber: 'SN-130-01-1979', occupation: 'Agriculteur', email: 'ousmane.ba@email.sn', phone: '+221 77 567 89 01', address: '15 Route de Rufisque, Dakar', photoUrl: '', joinedAt: '2019-06-12', status: 'active', statusHistory: [{ status: 'active', since: '2019-06-12' }], tenantName: 'Association Jappo', syncStatus: 'synced', version: 1, createdAt: '2019-06-12T00:00:00.000Z', updatedAt: '2019-06-12T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-9', role: 'president', tenantName: 'Association Jappo', startDate: '2023-01-15', endDate: null }],
+    accounts: [{ id: 'A-13', accountNumber: 'AJ-004-SAV', type: 'savings', balance: 980000 }],
+    documents: [{ id: 'D-14', name: 'Carte d\'identité', type: 'idDocument', uploadedAt: '2019-06-12' }],
+    activities: [{ id: 'AC-13', type: 'Assemblée', description: 'Participation AG 2026', date: '2026-06-15' }],
+    governanceParticipation: [{ id: 'G-5', assemblyName: 'AG 2026', role: 'Président de séance', date: '2026-06-15' }],
+  },
+  {
+    id: 'M-013', uuid: 'a1b2c3d4-5555-4a1b-9c2d-3e4f5a6b7c85', tenantId: 'T-004', matricule: '', firstName: 'Khady', lastName: 'Sy', gender: 'female', birthDate: '1986-09-09', nationality: 'Sénégalaise', idNumber: 'SN-909-09-1986', occupation: 'Commerçante', email: 'khady.sy@email.sn', phone: '+221 76 678 90 12', address: '31 Rue de Thiaroye, Dakar', photoUrl: '', joinedAt: '2021-10-01', status: 'inactive', statusHistory: [{ status: 'inactive', since: '2021-10-01' }], tenantName: 'Association Jappo', syncStatus: 'synced', version: 1, createdAt: '2021-10-01T00:00:00.000Z', updatedAt: '2021-10-01T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [],
+    accounts: [{ id: 'A-14', accountNumber: 'AJ-004-CUR', type: 'current', balance: 85000 }],
+    documents: [{ id: 'D-15', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2021-10-01' }],
+    activities: [{ id: 'AC-14', type: 'Désactivation', description: 'Compte désactivé - inactivité', date: '2025-03-01' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-014', uuid: 'a1b2c3d4-6666-4a1b-9c2d-3e4f5a6b7c86', tenantId: 'T-005', matricule: '', firstName: 'Alassane', lastName: 'Diouf', gender: 'male', birthDate: '1991-12-25', nationality: 'Sénégalaise', idNumber: 'SN-1225-12-1991', occupation: 'Chauffeur', email: 'alassane.diouf@email.sn', phone: '+221 78 789 01 23', address: '6 Rue du Marché, Touba', photoUrl: '', joinedAt: '2024-03-08', status: 'active', statusHistory: [{ status: 'active', since: '2024-03-08' }], tenantName: 'Tontine Avenir', syncStatus: 'synced', version: 1, createdAt: '2024-03-08T00:00:00.000Z', updatedAt: '2024-03-08T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-10', role: 'treasurer', tenantName: 'Tontine Avenir', startDate: '2024-03-08', endDate: null }],
+    accounts: [{ id: 'A-15', accountNumber: 'TA-005-SAV-2', type: 'savings', balance: 310000 }],
+    documents: [{ id: 'D-16', name: 'Carte d\'identité', type: 'idDocument', uploadedAt: '2024-03-08' }],
+    activities: [{ id: 'AC-15', type: 'Contribution', description: 'Contribution mensuelle - Tontine Avenir', date: '2026-08-05' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-015', uuid: 'a1b2c3d4-7777-4a1b-9c2d-3e4f5a6b7c87', tenantId: 'T-005', matricule: '', firstName: 'Ndeye', lastName: 'Gueye', gender: 'female', birthDate: '1984-06-17', nationality: 'Sénégalaise', idNumber: 'SN-617-06-1984', occupation: 'Commerçante', email: 'ndeye.gueye@email.sn', phone: '+221 77 890 23 45', address: '18 Rue Cheikh Ahmadou Bamba, Touba', photoUrl: '', joinedAt: '2022-08-14', status: 'suspended', statusHistory: [{ status: 'suspended', since: '2022-08-14' }], tenantName: 'Tontine Avenir', syncStatus: 'synced', version: 1, createdAt: '2022-08-14T00:00:00.000Z', updatedAt: '2022-08-14T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [],
+    accounts: [{ id: 'A-16', accountNumber: 'TA-005-CUR', type: 'current', balance: 42000 }],
+    documents: [{ id: 'D-17', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2022-08-14' }],
+    activities: [{ id: 'AC-16', type: 'Suspension', description: 'Membre suspendu - retard de remboursement', date: '2026-05-20' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-016', uuid: 'a1b2c3d4-8888-4a1b-9c2d-3e4f5a6b7c88', tenantId: 'T-001', matricule: '', firstName: 'Modou', lastName: 'Faye', gender: 'male', birthDate: '1989-02-11', nationality: 'Sénégalaise', idNumber: 'SN-211-02-1989', occupation: 'Électricien', email: 'modou.faye@email.sn', phone: '+221 76 901 34 56', address: '27 Rue Vincens, Dakar', photoUrl: '', joinedAt: '2023-11-02', status: 'active', statusHistory: [{ status: 'active', since: '2023-11-02' }], tenantName: 'Coopérative Sutura', syncStatus: 'synced', version: 1, createdAt: '2023-11-02T00:00:00.000Z', updatedAt: '2023-11-02T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-11', role: 'member', tenantName: 'Coopérative Sutura', startDate: '2023-11-02', endDate: null }],
+    accounts: [{ id: 'A-17', accountNumber: 'CS-001-SAV-3', type: 'savings', balance: 155000 }],
+    documents: [{ id: 'D-18', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2023-11-02' }],
+    activities: [{ id: 'AC-17', type: 'Contribution', description: 'Contribution cycle 4 - Coopérative Sutura', date: '2026-08-08' }],
+    governanceParticipation: [],
+  },
+  // Premier exemple de seed en statut `exited` (absent jusqu'ici) — `positions` porte une `endDate`
+  // cohérente avec la sortie, `statusHistory` amorcée à `exited` (même hypothèse conservatrice que
+  // les autres membres : aucune source ne fournit un historique différencié plus riche).
+  {
+    id: 'M-017', uuid: 'a1b2c3d4-9999-4a1b-9c2d-3e4f5a6b7c89', tenantId: 'T-003', matricule: '', firstName: 'Lamine', lastName: 'Diagne', gender: 'male', birthDate: '1980-04-05', nationality: 'Sénégalaise', idNumber: 'SN-405-04-1980', occupation: 'Mécanicien', email: 'lamine.diagne@email.sn', phone: '+221 78 012 45 67', address: '11 Rue Khalifa Ababacar Sy, Saint-Louis', photoUrl: '', joinedAt: '2018-05-20', status: 'exited', statusHistory: [{ status: 'exited', since: '2025-09-01' }], tenantName: 'Mutuelle Teranga', syncStatus: 'synced', version: 1, createdAt: '2018-05-20T00:00:00.000Z', updatedAt: '2025-09-01T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-12', role: 'member', tenantName: 'Mutuelle Teranga', startDate: '2018-05-20', endDate: '2025-09-01' }],
+    accounts: [],
+    documents: [{ id: 'D-19', name: 'Contrat d\'adhésion', type: 'contract', uploadedAt: '2018-05-20' }],
+    activities: [{ id: 'AC-18', type: 'Sortie', description: 'Membre sorti - démission volontaire', date: '2025-09-01' }],
+    governanceParticipation: [],
+  },
+  {
+    id: 'M-018', uuid: 'a1b2c3d4-aaaa-4a1b-9c2d-3e4f5a6b7c90', tenantId: 'T-001', matricule: '', firstName: 'Coumba', lastName: 'Thiam', gender: 'female', birthDate: '1995-10-28', nationality: 'Sénégalaise', idNumber: 'SN-1028-10-1995', occupation: 'Infirmière', email: 'coumba.thiam@email.sn', phone: '+221 77 123 56 78', address: '3 Rue Jules Ferry, Dakar', photoUrl: '', joinedAt: '2024-06-01', status: 'active', statusHistory: [{ status: 'active', since: '2024-06-01' }], tenantName: 'Coopérative Sutura', syncStatus: 'synced', version: 1, createdAt: '2024-06-01T00:00:00.000Z', updatedAt: '2024-06-01T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
+    positions: [{ id: 'P-13', role: 'member', tenantName: 'Coopérative Sutura', startDate: '2024-06-01', endDate: null }],
+    accounts: [{ id: 'A-18', accountNumber: 'CS-001-SAV-4', type: 'savings', balance: 92000 }],
+    documents: [{ id: 'D-20', name: 'Carte d\'identité', type: 'idDocument', uploadedAt: '2024-06-01' }],
+    activities: [{ id: 'AC-19', type: 'Contribution', description: 'Contribution cycle 4 - Coopérative Sutura', date: '2026-08-08' }],
+    governanceParticipation: [],
+  },
 ];

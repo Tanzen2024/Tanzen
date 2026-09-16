@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { tontinesService, type TontineInput } from './tontines.service';
+import { settingsService } from './settings.service';
 
 describe('tontinesService — Tontines', () => {
   it('ALLOW/DENY: listTontines and getTontine are scoped to the requesting tenant', async () => {
@@ -21,7 +22,8 @@ describe('tontinesService — createTontine (Tontine.valueType)', () => {
   it('the historical structure field `type` no longer exists on the model — valueType is the sole classification', async () => {
     const tontine = (await tontinesService.createTontine({ name: 'Sans type historique', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
     expect('type' in tontine).toBe(false);
-    expect(Object.keys(tontine).sort()).toEqual(['contributionAmount', 'createdAt', 'frequency', 'id', 'memberCount', 'monthlyDayOfMonth', 'name', 'status', 'tenantId', 'totalContributions', 'valueType']);
+    /** `currency` apparaît désormais même sans être fourni en entrée : héritée automatiquement de Paramètres > Organisation pour toute tontine MONEY (mandat « devise automatique »). */
+    expect(Object.keys(tontine).sort()).toEqual(['contributionAmount', 'createdAt', 'currency', 'frequency', 'id', 'memberCount', 'monthlyDayOfMonth', 'name', 'status', 'tenantId', 'totalContributions', 'valueType']);
   });
 
   it('creates a GOODS tontine', async () => {
@@ -77,18 +79,31 @@ describe('tontinesService — createTontine GOODS reference (item / quantity)', 
   });
 });
 
-describe('tontinesService — createTontine MONEY currency', () => {
-  it('a MONEY tontine created with XAF (the UI default) persists the currency as provided', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine XAF', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.currency).toBe('XAF');
+describe('tontinesService — createTontine MONEY currency (héritée de Paramètres > Organisation, mandat « devise automatique »)', () => {
+  it('a MONEY tontine created without a currency in the input inherits the tenant’s organization currency (T-002 seeded as XOF)', async () => {
+    const tontine = (await tontinesService.createTontine({ name: 'Tontine héritée', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
+    expect(tontine.currency).toBe('XOF');
   });
 
-  it('a MONEY tontine can be created with a different currency (the user is free to change the default)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine EUR', valueType: 'MONEY', tenantId: 'T-002', currency: 'EUR', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.currency).toBe('EUR');
+  it('DENY: a currency supplied by the caller is ignored — the organization currency always wins, the client cannot override it', async () => {
+    const tontine = (await tontinesService.createTontine({ name: 'Tentative EUR', valueType: 'MONEY', tenantId: 'T-002', currency: 'EUR', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
+    expect(tontine.currency).toBe('XOF');
   });
 
-  it('a GOODS tontine does not carry a currency (undefined, not persisted)', async () => {
+  it('two tenants with different organization currencies each get their own currency on a new tontine (no bleed from one tenant to another)', async () => {
+    await settingsService.updateOrganizationSettings('T-003', { timezone: 'Africa/Dakar', currency: 'EUR' });
+    const tontineXof = (await tontinesService.createTontine({ name: 'Tontine T-002 (XOF)', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
+    const tontineEur = (await tontinesService.createTontine({ name: 'Tontine T-003 (EUR)', valueType: 'MONEY', tenantId: 'T-003', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
+    expect(tontineXof.currency).toBe('XOF');
+    expect(tontineEur.currency).toBe('EUR');
+  });
+
+  it('DENY: a MONEY tontine cannot be created for a tenant with no organization currency configured (no silent XAF fallback)', async () => {
+    const result = await tontinesService.createTontine({ name: 'Sans devise configurée', valueType: 'MONEY', tenantId: 'T-999', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 });
+    expect(result).toBeNull();
+  });
+
+  it('a GOODS tontine does not carry a currency (undefined, not persisted), even when the organization has one configured', async () => {
     const tontine = (await tontinesService.createTontine({ name: 'Tontine sans devise', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Sucre', quantity: 5, unit: 'SAC' }))!;
     expect(tontine.currency).toBeUndefined();
   });

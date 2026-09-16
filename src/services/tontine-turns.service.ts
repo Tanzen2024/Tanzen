@@ -13,6 +13,8 @@ import {
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { workflowService } from './workflow.service';
+import { insertTransaction } from './finance.service';
+import { accounts, type AccountRecord } from '@/mocks/finance/accounts';
 import type { UnitCode } from '@/constants/units';
 
 export type ReceptionInput = { amount?: number; quantity?: number; purchaseAmount?: number };
@@ -58,6 +60,73 @@ function appendOperation(beneficiary: OccurrenceBeneficiary, operation: Receptio
 /** `Date.now()` seul peut collisionner entre deux créations survenant dans la même milliseconde (constaté en test) — un suffixe aléatoire garantit l'unicité sans dépendre du timing. */
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Résout la caisse Finance (`Account`) d'une Période, si sa Tontine en porte
+ * une (mandat « intégration Tontine ↔ Finance ») — remonte Période → Tontine
+ * → `Tontine.accountId` → `Account`, en revérifiant que le compte appartient
+ * bien au même tenant (défense en profondeur, même si `isValidAccountLink`,
+ * côté `tontines.service.ts`, l'a déjà garanti à l'écriture). `undefined` si
+ * la tontine n'est pas rattachée à une caisse — cas normal pour toute tontine
+ * créée avant ce mandat, ou n'ayant simplement pas besoin de cette intégration.
+ */
+function resolveTontineAccount(tenantId: string, periodId: string): AccountRecord | undefined {
+  const period = tontinePeriods.find((item) => item.tenantId === tenantId && item.id === periodId);
+  const tontine = period && tontines.find((item) => item.tenantId === tenantId && item.id === period.tontineId);
+  if (!tontine?.accountId) return undefined;
+  return accounts.find((account) => account.id === tontine.accountId && account.tenantId === tenantId);
+}
+
+/**
+ * Résout la caisse « Achat tontine » (mandat « Avec achat ») — même chemin
+ * Période → Tontine que `resolveTontineAccount` ci-dessus, mais lit
+ * `Tontine.purchaseAccountId`, JAMAIS `accountId`. RÈGLE FINANCIÈRE CRITIQUE :
+ * ces deux résolutions ne doivent jamais être confondues — `accountId`/
+ * `resolveTontineAccount` restent le chemin des COTISATIONS et RÉCEPTIONS
+ * (inchangé par ce mandat, cf. fonctions ci-dessus) ; `purchaseAccountId`/
+ * `resolveTontinePurchaseAccount` est le SEUL chemin des montants d'ACHAT
+ * (`postTontinePurchaseTransaction` ci-dessous). `undefined` si la tontine
+ * n'est pas « Avec achat » (purchaseAccountId n'est alors jamais renseigné,
+ * cf. `tontines.service.ts`) — donc structurellement aucune association,
+ * jamais de transaction, quand « Avec achat » est OFF.
+ */
+function resolveTontinePurchaseAccount(tenantId: string, periodId: string): AccountRecord | undefined {
+  const period = tontinePeriods.find((item) => item.tenantId === tenantId && item.id === periodId);
+  const tontine = period && tontines.find((item) => item.tenantId === tenantId && item.id === period.tontineId);
+  if (!tontine?.purchaseAccountId) return undefined;
+  return accounts.find((account) => account.id === tontine.purchaseAccountId && account.tenantId === tenantId);
+}
+
+/**
+ * Poste une transaction Finance pour un mouvement Tontine (mandat
+ * « intégration Tontine ↔ Finance », objectif majeur) — le module Tontines
+ * ALIMENTE désormais le moteur financier au lieu de maintenir un calcul
+ * strictement parallèle (§21 du mandat). Ne poste JAMAIS pour une tontine
+ * GOODS (aucun flux monétaire à faire transiter par un compte, cohérent avec
+ * l'absence de « disponible » financier déjà actée ailleurs pour ce cas), ni
+ * pour un montant nul/négatif (ex. bascule « annuler le paiement » côté
+ * Opérations, qui nette `paidAmount` via un montant négatif — aucun concept
+ * de transaction négative/d'avoir n'existe dans le journal Finance ; inventer
+ * une contre-écriture ici serait une règle non sourcée, volontairement absente).
+ * Best-effort et non bloquant : si `insertTransaction` refuse (cas
+ * théorique — classification déjà fixée ici, jamais fournie par l'appelant,
+ * donc toujours valide), l'opération Tontine elle-même n'est jamais annulée
+ * a posteriori — la Tontine reste la source de vérité de son propre état,
+ * la Transaction n'est qu'un reflet best-effort côté Finance.
+ */
+function postTontineTransaction(tenantId: string, params: { account: AccountRecord; memberId: string; memberName: string; amount: number | undefined; direction: 'credit' | 'debit'; category: 'EPARGNE' | 'AUTRES'; subcategory?: 'DISTRIBUTION' | 'AUTRE'; description: string }): void {
+  if (!params.amount || params.amount <= 0) return;
+  insertTransaction(tenantId, {
+    accountNumber: params.account.accountNumber,
+    memberId: params.memberId,
+    memberName: params.memberName,
+    category: params.category,
+    subcategory: params.subcategory ?? null,
+    type: params.direction,
+    amount: params.amount,
+    description: params.description,
+  });
 }
 
 /** Mutation partagée par `createAdhesion` et `createAdhesionsForPeriod` (mandat ajout multiple §18 : « éviter deux implémentations divergentes ») — seule et unique fonction qui pousse une TontineAdhesion dans le mock. */
@@ -245,6 +314,97 @@ export const tontineTurnsService = {
         nextNumber += 1;
       }
       return created;
+    }),
+
+  /**
+   * DÉTERMINATION DE L'ORDRE DE PASSAGE (mandat « Finalisation Finance/Tontines »,
+   * priorité Tontines) — AUCUNE règle de rotation/tirage n'existait dans le modèle
+   * avant ce mandat : `addBeneficiaries` se contente d'enregistrer un tirage déjà
+   * réalisé hors TANZEN (RB-06/RB-07 ci-dessus). Faute de règle métier sourcée,
+   * l'algorithme retenu ici — documenté, pas inventé arbitrairement — est un tour
+   * de rôle déterministe par ORDRE D'ADHÉSION (rotation classique d'une tontine/
+   * ROSCA, cohérente avec l'architecture existante) : au sein d'une Période,
+   * l'Occurrence suivante attribue le bénéfice à l'adhésion active la plus
+   * anciennement arrivée (`joinedAt` croissant, `id` en cas d'égalité stricte) qui
+   * n'a PAS encore été bénéficiaire d'une Occurrence de CETTE Période. Une fois
+   * toutes les adhésions actives servies, le tour est déclaré terminé
+   * (`cycleComplete: true`) — aucune boucle automatique n'est appliquée, cohérent
+   * avec `createPeriod`/`generateOccurrences` qui ne transitionnent jamais
+   * automatiquement une période (une nouvelle « tournée » = une nouvelle Période,
+   * mécanisme déjà existant, pas réinventé ici).
+   *
+   * Une adhésion inactive à la date de référence (membre suspendu/sorti) est
+   * exclue du calcul ; un membre qui rejoint en cours de période entre dans le
+   * calcul dès que son adhésion devient active à cette date (aucune règle
+   * supplémentaire nécessaire : `isAdhesionActiveAt`, déjà utilisée partout
+   * ailleurs dans ce fichier, gère les deux cas identiquement). Une Occurrence
+   * déjà pourvue d'un bénéficiaire n'est pas reproposée (elle a déjà retiré son
+   * adhésion du pool via `alreadyServedAdhesionIds`) ; une Occurrence CLOSED n'a
+   * de toute façon plus vocation à recevoir de nouveau bénéficiaire
+   * (`addBeneficiaries` le refuse déjà).
+   *
+   * Suggestion pure, jamais assignée automatiquement : reste un simple pré-remplissage
+   * proposé à l'écran, la décision finale passant toujours par `addBeneficiaries`
+   * (qui accepte n'importe quelle adhésion valide, y compris différente de la
+   * suggestion — un gestionnaire garde la main en cas de situation particulière).
+   */
+  suggestNextBeneficiary: (tenantId: string, occurrenceId: string) =>
+    mockRequest((): { adhesionId: string; memberName: string; cycleComplete: false } | { cycleComplete: true } | undefined => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence) return undefined;
+      const period = getTenantScoped(tontinePeriods, (item) => item.id === occurrence.periodId, tenantId);
+      if (!period) return undefined;
+      const referenceDate = occurrence.actualDate ?? occurrence.plannedDate;
+
+      const periodOccurrenceIds = new Set(
+        tontineOccurrences.filter((item) => item.tenantId === tenantId && item.periodId === period.id).map((item) => item.id),
+      );
+      const alreadyServedAdhesionIds = new Set(
+        occurrenceBeneficiaries
+          .filter((item) => item.tenantId === tenantId && periodOccurrenceIds.has(item.tontineOccurrenceId))
+          .map((item) => item.adhesionId),
+      );
+
+      const remaining = tontineAdhesions
+        .filter((item) => item.tenantId === tenantId && item.periodId === period.id)
+        .filter((item) => isAdhesionActiveAt(item, referenceDate))
+        .filter((item) => !alreadyServedAdhesionIds.has(item.id))
+        .sort((a, b) => a.joinedAt.localeCompare(b.joinedAt) || a.id.localeCompare(b.id));
+
+      if (remaining.length === 0) return { cycleComplete: true };
+      const next = remaining[0];
+      return { adhesionId: next.id, memberName: next.memberName, cycleComplete: false };
+    }),
+
+  /**
+   * Vue d'ensemble de l'ordre de passage d'une Période (mandat « Finalisation
+   * Finance/Tontines ») — toutes les adhésions de la Période, dans l'ordre de
+   * rotation (même tri que `suggestNextBeneficiary`), avec le numéro
+   * d'Occurrence qui les a déjà servies (`null` = pas encore passée). Lecture
+   * pure, aucune mutation — dérivée à 100% des adhésions/occurrences/bénéficiaires
+   * déjà existants.
+   */
+  listRotationOrder: (tenantId: string, periodId: string) =>
+    mockRequest(() => {
+      const period = getTenantScoped(tontinePeriods, (item) => item.id === periodId, tenantId);
+      if (!period) return [];
+      const adhesions = tontineAdhesions
+        .filter((item) => item.tenantId === tenantId && item.periodId === periodId)
+        .sort((a, b) => a.joinedAt.localeCompare(b.joinedAt) || a.id.localeCompare(b.id));
+      const occurrences = tontineOccurrences.filter((item) => item.tenantId === tenantId && item.periodId === periodId);
+      const servedAt = new Map<string, number>();
+      for (const occurrence of occurrences) {
+        for (const beneficiary of occurrenceBeneficiaries.filter((item) => item.tontineOccurrenceId === occurrence.id)) {
+          if (!servedAt.has(beneficiary.adhesionId)) servedAt.set(beneficiary.adhesionId, occurrence.occurrenceNumber);
+        }
+      }
+      return adhesions.map((adhesion) => ({
+        adhesionId: adhesion.id,
+        memberName: adhesion.memberName,
+        joinedAt: adhesion.joinedAt,
+        active: adhesion.status === 'active',
+        servedOccurrenceNumber: servedAt.get(adhesion.id) ?? null,
+      }));
     }),
 
   /** 1..N bénéficiaires par Occurrence (D-TON-04-19, confirmé) — jamais un champ unique. */
@@ -515,6 +675,18 @@ export const tontineTurnsService = {
       const expected = contribution.expectedAmount ?? contribution.expectedQuantity ?? 0;
       const paid = contribution.valueType === 'MONEY' ? contribution.paidAmount : contribution.paidQuantity;
       contribution.status = paid <= 0 ? 'PENDING' : paid >= expected ? 'PAID' : 'PARTIAL';
+      // Mandat « intégration Tontine ↔ Finance » (objectif majeur) : Cotisation → Transaction → Compte.
+      if (contribution.valueType === 'MONEY') {
+        const adhesion = tontineAdhesions.find((item) => item.tenantId === tenantId && item.id === contribution.adhesionId);
+        const account = adhesion && resolveTontineAccount(tenantId, adhesion.periodId);
+        const tontine = adhesion && tontines.find((item) => item.id === tontinePeriods.find((p) => p.id === adhesion.periodId)?.tontineId);
+        if (adhesion && account) {
+          postTontineTransaction(tenantId, {
+            account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: operation.amount, direction: 'credit', category: 'EPARGNE',
+            description: `Cotisation tontine ${tontine?.name ?? ''} — occurrence ${contribution.tontineOccurrenceId}`.trim(),
+          });
+        }
+      }
       return contribution;
     }),
 
@@ -526,6 +698,33 @@ export const tontineTurnsService = {
       const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.tontineOccurrenceId);
       if (!occurrence || occurrence.status === 'CLOSED') return undefined;
       appendOperation(beneficiary, { id: uniqueId('OP'), type: 'reception', amount: input.amount, quantity: input.quantity, purchaseAmount: input.purchaseAmount, date: new Date().toISOString().slice(0, 10), actorId: currentUser.id, actorName: currentUser.name, reason: null });
+      // Mandat « intégration Tontine ↔ Finance » (objectif majeur) : Réception → Transaction → Compte bénéficiaire.
+      if (beneficiary.valueType === 'MONEY') {
+        const adhesion = tontineAdhesions.find((item) => item.tenantId === tenantId && item.id === beneficiary.adhesionId);
+        const account = adhesion && resolveTontineAccount(tenantId, adhesion.periodId);
+        const tontine = adhesion && tontines.find((item) => item.id === tontinePeriods.find((p) => p.id === adhesion.periodId)?.tontineId);
+        if (adhesion && account) {
+          postTontineTransaction(tenantId, {
+            account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: input.amount, direction: 'debit', category: 'AUTRES', subcategory: 'DISTRIBUTION',
+            description: `Réception tontine ${tontine?.name ?? ''} — occurrence ${occurrence.occurrenceNumber}`.trim(),
+          });
+        }
+        /**
+         * RÈGLE FINANCIÈRE CRITIQUE (mandat « Avec achat ») : le montant D'ACHAT, et lui
+         * seul, va dans la caisse « Achat tontine » — jamais le montant de réception « net »
+         * posté juste au-dessus (chemin `accountId`/`resolveTontineAccount`, totalement
+         * distinct, inchangé). `purchaseAccountId` n'est renseigné QUE si la tontine est
+         * « Avec achat » (cf. `tontines.service.ts`) : pas d'association ⇒ pas de compte
+         * résolu ⇒ pas de transaction, sans condition supplémentaire à dupliquer ici.
+         */
+        const purchaseAccount = adhesion && resolveTontinePurchaseAccount(tenantId, adhesion.periodId);
+        if (adhesion && purchaseAccount) {
+          postTontineTransaction(tenantId, {
+            account: purchaseAccount, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: input.purchaseAmount, direction: 'credit', category: 'AUTRES', subcategory: 'AUTRE',
+            description: `Achat tontine ${tontine?.name ?? ''} — occurrence ${occurrence.occurrenceNumber}`.trim(),
+          });
+        }
+      }
       return { ...beneficiary, receivedTotal: computeReceivedTotal(beneficiary.operations), purchaseTotal: computePurchaseTotal(beneficiary.operations), status: computeBeneficiaryStatus(beneficiary) };
     }),
 
