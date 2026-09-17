@@ -97,21 +97,21 @@ describe('workflowService — submitAction actorId (D-FY-08 mandat §10: corrige
  * Mandat « Moteur générique de workflow de validation » — capacités
  * génériques du moteur ajoutées à côté de `createRequest`/`submitAction`
  * déjà existants, testées ici indépendamment de tout domaine métier
- * (`member`), sur des définitions déjà actives (WD-001/WD-006) pour ne pas
+ * (`member`), sur des définitions déjà actives (WD-001/WD-008) pour ne pas
  * dépendre de l'état par défaut inactif de `WD-007` (voir
  * organization.service.test.ts pour les tests spécifiques au domaine Membre).
  */
 describe('workflowService — capacités génériques du moteur (ChangeSet/version/résolveur/anti-conflit)', () => {
   it('createRequest capture workflowDefinitionVersion depuis la définition (besoin §17, versionnement)', async () => {
-    const request = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-1', entityLabel: 'Test versionnement', requestedBy: 'Testeur' });
+    const request = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-1', entityLabel: 'Test versionnement', requestedBy: 'Testeur' });
     expect(request?.workflowDefinitionVersion).toBe(1);
   });
 
   it('createRequest capture changeSet et entitySnapshotVersion quand ils sont fournis, absents sinon (besoin §10/§11)', async () => {
-    const withChangeSet = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-2', entityLabel: 'Avec ChangeSet', requestedBy: 'Testeur', changeSet: [{ field: 'occupation', before: 'Avant', after: 'Après' }], entitySnapshotVersion: 3 });
+    const withChangeSet = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-2', entityLabel: 'Avec ChangeSet', requestedBy: 'Testeur', changeSet: [{ field: 'occupation', before: 'Avant', after: 'Après' }], entitySnapshotVersion: 3 });
     expect(withChangeSet?.changeSet).toEqual([{ field: 'occupation', before: 'Avant', after: 'Après' }]);
     expect(withChangeSet?.entitySnapshotVersion).toBe(3);
-    const withoutChangeSet = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-3', entityLabel: 'Sans ChangeSet', requestedBy: 'Testeur' });
+    const withoutChangeSet = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-3', entityLabel: 'Sans ChangeSet', requestedBy: 'Testeur' });
     expect(withoutChangeSet?.changeSet).toBeUndefined();
     expect(withoutChangeSet?.entitySnapshotVersion).toBeUndefined();
   });
@@ -125,7 +125,7 @@ describe('workflowService — capacités génériques du moteur (ChangeSet/versi
 
   it('hasPendingApproval trouve une demande pending/inProgress existante sur cette entité pour ce tenant, undefined sinon', async () => {
     // Entité fraîche (pas un seed déjà décidé par un autre test de ce fichier, ex. WR-005 plus haut) — même précaution d'isolation que le reste de la suite.
-    const created = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-PENDING', entityLabel: 'Pending lookup', requestedBy: 'Testeur' });
+    const created = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-PENDING', entityLabel: 'Pending lookup', requestedBy: 'Testeur' });
     expect(created?.status).toBe('pending');
     const existing = await workflowService.hasPendingApproval('T-001', 'beneficiaryPermutation', 'BPM-TEST-PENDING');
     expect(existing?.id).toBe(created?.id);
@@ -134,11 +134,11 @@ describe('workflowService — capacités génériques du moteur (ChangeSet/versi
   });
 
   it('isSelfApprovalBlocked compare requestedByUserId à actorId — jamais appelée automatiquement par submitAction (opt-in par domaine, §22)', async () => {
-    const request = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-4', entityLabel: 'Self approval', requestedBy: 'Testeur', requestedByUserId: 'U-001' });
+    const request = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-4', entityLabel: 'Self approval', requestedBy: 'Testeur', requestedByUserId: 'U-001' });
     expect(workflowService.isSelfApprovalBlocked(request!, 'U-001')).toBe(true);
     expect(workflowService.isSelfApprovalBlocked(request!, 'U-002')).toBe(false);
     // Aucun `requestedByUserId` (cas des demandes de seed Crédit/Gouvernance/Finance) -> jamais bloqué.
-    const withoutRequester = await workflowService.createRequest('T-001', 'WD-006', { entityId: 'BPM-TEST-5', entityLabel: 'Sans demandeur identifié', requestedBy: 'Testeur' });
+    const withoutRequester = await workflowService.createRequest('T-001', 'WD-008', { entityId: 'BPM-TEST-5', entityLabel: 'Sans demandeur identifié', requestedBy: 'Testeur' });
     expect(workflowService.isSelfApprovalBlocked(withoutRequester!, 'U-001')).toBe(false);
   });
 });

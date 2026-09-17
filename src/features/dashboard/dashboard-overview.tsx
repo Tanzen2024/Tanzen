@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDownRight, ArrowUpRight, BellRing, CalendarClock, ClipboardCheck, Clock3, Coins, CreditCard, HandCoins, Landmark, ListChecks, MoreHorizontal, ReceiptText, Sparkles, Users, WalletCards } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, BellRing, CalendarClock, ClipboardCheck, Clock3, Coins, CreditCard, HandCoins, Landmark, MoreHorizontal, ReceiptText, Sparkles, Users, WalletCards } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
@@ -43,7 +43,6 @@ function KpiGrid({ t, locale, kpis }: { t: T; locale: 'fr' | 'en'; kpis: Dashboa
     { key: 'kpiRepayments', label: t('dashboard', 'kpiRepayments'), value: formatFCFA(kpis.repayments.value, locale, true), delta: kpis.repayments.delta, icon: HandCoins, tone: 'success' },
     { key: 'kpiOutstanding', label: t('dashboard', 'kpiOutstanding'), value: formatFCFA(kpis.outstanding.value, locale, true), delta: kpis.outstanding.delta, icon: WalletCards, tone: 'warning' },
     { key: 'kpiActiveTontines', label: t('dashboard', 'kpiActiveTontines'), value: formatNumber(kpis.activeTontines.value, locale), delta: kpis.activeTontines.delta, icon: Coins, tone: 'info' },
-    { key: 'kpiActivePeriods', label: t('dashboard', 'kpiActivePeriods'), value: formatNumber(kpis.activePeriods.value, locale), delta: kpis.activePeriods.delta, icon: ListChecks, tone: 'success' },
     { key: 'kpiPendingWorkflows', label: t('dashboard', 'kpiPendingWorkflows'), value: formatNumber(kpis.pendingWorkflows.value, locale), delta: kpis.pendingWorkflows.delta, icon: ClipboardCheck, tone: 'warning' },
   ];
   return <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">{cards.map(({ key, ...kpi }) => <KpiCard key={key} {...kpi} />)}</section>;

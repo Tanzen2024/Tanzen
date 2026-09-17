@@ -102,16 +102,19 @@ export const workflowDefinitions: WorkflowDefinition[] = [
    */
   { id: 'WD-005', tenantId: 'T-001', code: 'FISCAL_YEAR_REOPEN', name: 'Réouverture d’exercice fiscal', domain: 'settings', description: 'Demande de réouverture exceptionnelle d’un exercice fiscal clôturé, avec justification obligatoire.', entityType: 'fiscalYear', action: 'reopen', version: 1, steps: [{ order: 1, name: 'Autorisation de réouverture', approverPermission: 'fiscalYears.approve' }], active: true },
   /**
-   * Mandat planification/permutation des bénéficiaires — étape unique,
-   * `beneficiaries.manage` (déjà la permission de gestion des bénéficiaires,
-   * réutilisée telle quelle : aucune permission `*.approve` dédiée n'existe
-   * pour le domaine Tontines). Auto-approbation autorisée (décision
-   * explicite du mandat : ne PAS généraliser le blocage D-FY-08, spécifique
-   * à Fiscal Year) — voir `tontineTurnsService.applyBeneficiaryPermutationDecision`,
-   * appelé sans aucun contrôle `requestedByUserId`, contrairement à
+   * Reconstruction complète du module Tontines — remplace l'ancien `WD-006`
+   * (supprimé avec le reste de l'ancienne implémentation, id volontairement
+   * non réutilisé). Permutation de deux POSITIONS de `TontineBeneficiaryPlan`
+   * (sans-achat, planification à l'avance) — étape unique,
+   * `beneficiaries.manage` (même permission déjà utilisée pour la gestion
+   * des bénéficiaires, aucune permission `*.approve` dédiée n'existe pour ce
+   * domaine). Auto-approbation autorisée (décision explicite de mandat : ne
+   * PAS généraliser le blocage D-FY-08, spécifique à Fiscal Year) — voir
+   * `tontineOperationsService.applyPlanPermutationDecision`, appelé sans
+   * aucun contrôle `requestedByUserId`, contrairement à
    * `decideFiscalYearReopen`.
    */
-  { id: 'WD-006', tenantId: 'T-001', code: 'TONTINE_BENEFICIARY_PERMUTATION', name: 'Permutation de bénéficiaires', domain: 'tontines', description: 'Échange de deux bénéficiaires déjà désignés sur des occurrences, entre deux adhésions, soumis à validation avant application.', entityType: 'beneficiaryPermutation', action: 'update', version: 1, steps: [{ order: 1, name: 'Validation de la permutation', approverPermission: 'beneficiaries.manage' }], active: true, allowSelfApproval: true },
+  { id: 'WD-008', tenantId: 'T-001', code: 'TONTINE_BENEFICIARY_PERMUTATION', name: 'Permutation de bénéficiaires planifiés', domain: 'tontines', description: 'Échange de deux positions de planification (sans-achat) entre deux adhésions, soumis à validation avant application.', entityType: 'beneficiaryPermutation', action: 'update', version: 1, steps: [{ order: 1, name: 'Validation de la permutation', approverPermission: 'beneficiaries.manage' }], active: true, allowSelfApproval: true },
   /**
    * Mandat « Moteur générique de workflow de validation » — entité pilote
    * choisie pour valider l'architecture (voir docs/GENERIC_VALIDATION_WORKFLOW_ENGINE.md) :

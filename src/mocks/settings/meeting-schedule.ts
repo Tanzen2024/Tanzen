@@ -5,31 +5,39 @@
  * de réunion consommées partout dans l'application via `meetingService`
  * (`src/services/meeting.service.ts`).
  *
- * Ce module est un WRAPPER : il NE réimplémente PAS un moteur de récurrence.
- * Pour DAILY/WEEKLY/MONTHLY/QUARTERLY il délègue tel quel à
- * `generateOccurrenceDates` (`src/mocks/tontines/tontine-frequency.ts`), le
- * moteur déjà présent et testé. Il n'ajoute que :
- *   - les fréquences SEMIANNUAL / ANNUAL (absentes du moteur tontine, hors
- *     périmètre de ce dernier), construites en réutilisant les mêmes helpers
- *     purs (`computeDayOfMonthDate` / `computeNthWeekdayDate` / `daysInMonth`) ;
+ * Ce module NE réimplémente AUCUN calcul de date calendaire : il bâtit
+ * directement sur les primitives neutres de `src/lib/recurrence.ts`
+ * (`computeDayOfMonthDate`/`computeNthWeekdayDate`/`daysInMonth`/
+ * `allWeekdayDatesInMonth`/`iterateMonths`/`iterateQuarters`), exactement
+ * comme le moteur de fréquence Tontines (`src/mocks/tontines/tontine-frequency.ts`)
+ * bâtit sur les mêmes primitives — aucun des deux domaines ne dépend de
+ * l'autre (extraction déjà faite lors de la reconstruction complète du
+ * module Tontines, qui ne génère plus JAMAIS de dates en masse : la
+ * génération calendaire complète d'un exercice reste un besoin propre aux
+ * réunions, implémentée ici, jamais déléguée à un module qui ne la fait
+ * plus). N'ajoute, au-delà des 4 fréquences communes (DAILY/WEEKLY/MONTHLY/
+ * QUARTERLY), que :
+ *   - les fréquences SEMIANNUAL / ANNUAL (propres aux réunions) ;
  *   - la règle LAST_DAY_OF_PERIOD (« dernier jour de la période »).
  *
  * Fonctions pures, sans dépendance React ni service — directement testables
  * (`meeting-schedule.test.ts`).
  */
 import {
-  generateOccurrenceDates,
   computeDayOfMonthDate,
   computeNthWeekdayDate,
   daysInMonth,
+  allWeekdayDatesInMonth,
+  iterateMonths,
+  iterateQuarters,
+  WEEKDAY_INDEX,
   toISODate,
   type Weekday,
   type Ordinal,
-  type FrequencyConfig,
-} from '@/mocks/tontines/tontine-frequency';
+} from '@/lib/recurrence';
 
-export type { Weekday, Ordinal } from '@/mocks/tontines/tontine-frequency';
-export { WEEKDAYS, ORDINALS } from '@/mocks/tontines/tontine-frequency';
+export type { Weekday, Ordinal } from '@/lib/recurrence';
+export { WEEKDAYS, ORDINALS } from '@/lib/recurrence';
 
 /** Les 6 fréquences imposées par le mandat (§2). ANNUAL n'est jamais dédoublée. */
 export type MeetingFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
@@ -99,9 +107,9 @@ export function generateMeetingDates(period: { startDate: string; endDate: strin
   if (!isValidMeetingScheduleConfig(config)) return [];
   const inRange = (d: string) => d >= startDate && d <= endDate;
 
-  // DAILY / WEEKLY / MONTHLY / QUARTERLY (hors LAST_DAY_OF_PERIOD) → moteur existant, aucune copie.
-  const delegated = toFrequencyConfig(config);
-  if (delegated) return generateOccurrenceDates(period, delegated);
+  // DAILY / WEEKLY / MONTHLY / QUARTERLY (hors LAST_DAY_OF_PERIOD) → implémentation directe sur les primitives neutres.
+  const common = generateCommonFrequencyDates(period, config);
+  if (common) return common;
 
   const [startYear] = splitYearMonth(startDate);
   const [endYear] = splitYearMonth(endDate);
@@ -156,24 +164,74 @@ export function generateMeetingDates(period: { startDate: string; endDate: strin
 }
 
 /**
- * Mappe la config réunion vers une `FrequencyConfig` du moteur tontine quand
- * c'est possible (délégation directe). Renvoie `null` pour SEMIANNUAL/ANNUAL et
- * pour toute règle `LAST_DAY_OF_PERIOD` (non représentables par le moteur).
+ * DAILY / WEEKLY / MONTHLY / QUARTERLY (hors `LAST_DAY_OF_PERIOD`) — mêmes 4
+ * fréquences communes que le moteur de fréquence Tontines, implémentées
+ * directement ici sur les mêmes primitives neutres (`src/lib/recurrence.ts`),
+ * jamais déléguées (Tontines ne génère plus de dates en masse). Renvoie
+ * `null` pour SEMIANNUAL/ANNUAL et pour toute règle `LAST_DAY_OF_PERIOD`
+ * (traités séparément par `generateMeetingDates` ci-dessus).
  */
-function toFrequencyConfig(config: MeetingScheduleConfig): FrequencyConfig | null {
-  if (config.frequency === 'DAILY') return { frequency: 'DAILY' };
-  if (config.frequency === 'WEEKLY') return config.weekday ? { frequency: 'WEEKLY', weekday: config.weekday } : null;
-  if (config.rule === 'LAST_DAY_OF_PERIOD') return null;
-  if (config.frequency === 'MONTHLY') {
-    if (config.rule === 'DAY_OF_MONTH') return { frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: config.dayOfMonth };
-    if (config.rule === 'NTH_WEEKDAY') return { frequency: 'MONTHLY', monthlyRule: 'NTH_WEEKDAY', monthlyOrdinal: config.ordinal, monthlyWeekday: config.nthWeekday };
-    return null;
+function generateCommonFrequencyDates(period: { startDate: string; endDate: string }, config: MeetingScheduleConfig): string[] | null {
+  const { startDate, endDate } = period;
+  const inRange = (d: string) => d >= startDate && d <= endDate;
+  const dates: string[] = [];
+
+  if (config.frequency === 'DAILY') {
+    const cursor = new Date(startDate); const end = new Date(endDate);
+    while (cursor.getTime() <= end.getTime()) {
+      const iso = toISODate(cursor.getFullYear(), cursor.getMonth() + 1, cursor.getDate());
+      if (inRange(iso)) dates.push(iso);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dates;
   }
-  if (config.frequency === 'QUARTERLY') {
-    if (config.rule === 'DAY_OF_MONTH') return { frequency: 'QUARTERLY', quarterlyRule: 'DAY_OF_MONTH', quarterlyMonth: config.anchorMonth as 1 | 2 | 3, quarterlyDayOfMonth: config.dayOfMonth };
-    if (config.rule === 'NTH_WEEKDAY') return { frequency: 'QUARTERLY', quarterlyRule: 'NTH_WEEKDAY', quarterlyMonth: config.anchorMonth as 1 | 2 | 3, quarterlyOrdinal: config.ordinal, quarterlyWeekday: config.nthWeekday };
-    return null;
+
+  if (config.frequency === 'WEEKLY') {
+    if (!config.weekday) return [];
+    const targetIndex = WEEKDAY_INDEX[config.weekday];
+    const cursor = new Date(startDate); const end = new Date(endDate);
+    while (cursor.getTime() <= end.getTime()) {
+      if (cursor.getDay() === targetIndex) {
+        const iso = toISODate(cursor.getFullYear(), cursor.getMonth() + 1, cursor.getDate());
+        if (inRange(iso)) dates.push(iso);
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return dates;
   }
+
+  if (config.frequency === 'MONTHLY' && config.rule !== 'LAST_DAY_OF_PERIOD') {
+    const [startYear, startMonth] = splitYearMonth(startDate);
+    const [endYear, endMonth] = splitYearMonth(endDate);
+    for (const { year, month } of iterateMonths(startYear, startMonth, endYear, endMonth)) {
+      if (config.rule === 'NTH_WEEKDAY') {
+        if (!config.nthWeekday) continue;
+        const monthDates = config.ordinal
+          ? [computeNthWeekdayDate(year, month, config.ordinal, config.nthWeekday)].filter((d): d is string => d !== null)
+          : allWeekdayDatesInMonth(year, month, WEEKDAY_INDEX[config.nthWeekday]);
+        for (const dateStr of monthDates) if (inRange(dateStr)) dates.push(dateStr);
+      } else {
+        const dateStr = computeDayOfMonthDate(year, month, config.dayOfMonth);
+        if (dateStr && inRange(dateStr)) dates.push(dateStr);
+      }
+    }
+    return dates;
+  }
+
+  if (config.frequency === 'QUARTERLY' && config.rule !== 'LAST_DAY_OF_PERIOD') {
+    if (!config.anchorMonth) return [];
+    const [startYear, startMonth] = splitYearMonth(startDate);
+    const [endYear, endMonth] = splitYearMonth(endDate);
+    for (const { year, quarter } of iterateQuarters(startYear, startMonth, endYear, endMonth)) {
+      const targetMonth = quarter * 3 + config.anchorMonth;
+      const dateStr = config.rule === 'NTH_WEEKDAY'
+        ? computeNthWeekdayDate(year, targetMonth, config.ordinal, config.nthWeekday)
+        : computeDayOfMonthDate(year, targetMonth, config.dayOfMonth);
+      if (dateStr && inRange(dateStr)) dates.push(dateStr);
+    }
+    return dates;
+  }
+
   return null;
 }
 

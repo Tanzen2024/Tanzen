@@ -18,7 +18,6 @@ import { workflowService } from '@/services/workflow.service';
 import { financeService } from '@/services/finance.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
-import { tontineTurnsService } from '@/services/tontine-turns.service';
 import { attendanceService, type AttendanceInput } from '@/services/attendance.service';
 import { quorumService, type QuorumThresholdInput } from '@/services/quorum.service';
 import { assemblyDecisionService, type AssemblyDecisionInput } from '@/services/assembly-decision.service';
@@ -332,9 +331,9 @@ function ContributionsTab({ t, memberId, tontineNameById }: { t: T; memberId: st
   const { data: rows = [] } = useQuery({ queryKey: queryKeys.finance.contributionsByMember(memberId), queryFn: () => financeService.listContributionsByMember(memberId) });
   const columns: TableColumn<Contribution>[] = [
     { key: 'tontineId', header: t('organization', 'tontineName'), render: (row) => tontineNameById.get(row.tontineId) ?? row.tontineId },
-    { key: 'cycleNumber', header: t('organization', 'cycle'), render: (row) => row.cycleNumber },
     { key: 'amount', header: t('organization', 'amount'), render: (row) => <MoneyDisplay amount={row.amount} /> },
     { key: 'date', header: t('organization', 'date'), render: (row) => <DateDisplay value={row.date} /> },
+    { key: 'status', header: t('organization', 'contributionStatusLabel'), render: (row) => <StatusBadge label={t('organization', row.status === 'completed' ? 'contributionStatusCompleted' : 'contributionStatusPending')} tone={row.status === 'completed' ? 'success' : 'warning'} /> },
   ];
   return <DataTable columns={columns} rows={rows} empty={<EmptyState icon={Landmark} title={t('organization', 'noContributions')} />} />;
 }
@@ -347,22 +346,16 @@ function LoansTab({ t, memberId }: { t: T; memberId: string }) {
 }
 
 /**
- * Adhésions du membre, toutes tontines confondues (mandat « suppression complète de la
- * logique Cycle/Tour » — migré depuis `tontinesService.listCyclesByMember`, qui affichait
- * les anciens `TontineCycle` d'un membre). Réutilise `tontineTurnsService.listAdhesionsByMember`
- * (déjà existant) + `listAllPeriods` pour résoudre `periodId → tontineId`, exactement le
- * même pattern de résolution que `PeriodAdhesionDetail` ailleurs dans le module Tontines —
- * aucune nouvelle lecture ni règle métier inventée.
+ * Adhésions du membre, toutes tontines confondues (reconstruction complète
+ * du module Tontines — Adhesion est désormais rattachée DIRECTEMENT à la
+ * Tontine, plus de passage par une Période : `tontinesService.listAdhesionsByMember`
+ * porte déjà `tontineId`, aucune jointure supplémentaire n'est nécessaire ici).
  */
 function TontinesTab({ t, memberId, tontineNameById }: { t: T; memberId: string; tontineNameById: Map<string, string> }) {
   const { currentTenant } = useTenant();
-  const { data: adhesions = [] } = useQuery({ queryKey: ['tontines', 'adhesions-by-member', memberId, currentTenant.id], queryFn: () => tontineTurnsService.listAdhesionsByMember(currentTenant.id, memberId) });
-  const { data: periods = [] } = useQuery({ queryKey: queryKeys.tontines.allPeriods(currentTenant.id), queryFn: () => tontineTurnsService.listAllPeriods(currentTenant.id), enabled: adhesions.length > 0 });
-  const periodById = new Map(periods.map((period) => [period.id, period]));
+  const { data: adhesions = [] } = useQuery({ queryKey: queryKeys.tontines.adhesionsByMember(memberId), queryFn: () => tontinesService.listAdhesionsByMember(currentTenant.id, memberId) });
   return <div className="grid gap-4 sm:grid-cols-2">{adhesions.map((adhesion) => {
-    const period = periodById.get(adhesion.periodId);
-    const tontineId = period?.tontineId ?? '';
-    return <Card key={adhesion.id}><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Landmark size={17} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={tontineNameById.get(tontineId) ?? tontineId}>{tontineNameById.get(tontineId) ?? tontineId}</p><p className="text-xs text-muted-foreground">{period ? `${period.startDate} → ${period.endDate}` : '—'}</p></div><StatusBadge label={t('organization', adhesion.status === 'active' ? 'active' : 'exited')} tone={adhesion.status === 'active' ? 'success' : 'default'} /></CardContent></Card>;
+    return <Card key={adhesion.id}><CardContent className="flex items-center gap-3 p-4"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Landmark size={17} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={tontineNameById.get(adhesion.tontineId) ?? adhesion.tontineId}>{tontineNameById.get(adhesion.tontineId) ?? adhesion.tontineId}</p><p className="text-xs text-muted-foreground">{formatDate(adhesion.joinedAt)}{adhesion.leftAt ? ` → ${formatDate(adhesion.leftAt)}` : ''}</p></div><StatusBadge label={t('organization', adhesion.status === 'active' ? 'active' : 'exited')} tone={adhesion.status === 'active' ? 'success' : 'default'} /></CardContent></Card>;
   })}{adhesions.length === 0 && <EmptyState icon={Landmark} title={t('organization', 'noTontines')} />}</div>;
 }
 

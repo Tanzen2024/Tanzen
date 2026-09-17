@@ -1,274 +1,143 @@
 import { describe, it, expect } from 'vitest';
-import { tontinesService, type TontineInput } from './tontines.service';
-import { settingsService } from './settings.service';
+import { tontinesService } from './tontines.service';
+import { permissionCatalog } from '@/mocks/rbac.mocks';
+import { tontineOccurrences } from '@/mocks/tontines/tontines';
 
-describe('tontinesService — Tontines', () => {
-  it('ALLOW/DENY: listTontines and getTontine are scoped to the requesting tenant', async () => {
-    const [t002] = await tontinesService.listTontines('T-002');
-    expect(t002.tenantId).toBe('T-002');
-    const result = await tontinesService.getTontine('T-001', t002.id);
+describe('tontinesService — Tontine CRUD', () => {
+  it('ALLOW: listTontines returns only tontines of the requesting tenant', async () => {
+    const result = await tontinesService.listTontines('T-002');
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every((tontine) => tontine.tenantId === 'T-002')).toBe(true);
+  });
+
+  it('DENY: getTontine returns null for a tontine of another tenant', async () => {
+    const [t001, t002] = await Promise.all([tontinesService.listTontines('T-001'), tontinesService.listTontines('T-002')]);
+    expect(t002.length).toBeGreaterThan(0);
+    const result = await tontinesService.getTontine('T-001', t002[0].id);
     expect(result).toBeNull();
-  });
-});
-
-describe('tontinesService — createTontine (Tontine.valueType)', () => {
-  it('creates a MONEY tontine with the requesting tenant', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine de 10000', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.valueType).toBe('MONEY');
-    expect(tontine.tenantId).toBe('T-002');
-    expect(tontine.status).toBe('statusActive');
+    expect(t001.some((item) => item.id === t002[0].id)).toBe(false);
   });
 
-  it('the historical structure field `type` no longer exists on the model — valueType is the sole classification', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Sans type historique', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect('type' in tontine).toBe(false);
-    /** `currency` apparaît désormais même sans être fourni en entrée : héritée automatiquement de Paramètres > Organisation pour toute tontine MONEY (mandat « devise automatique »). */
-    expect(Object.keys(tontine).sort()).toEqual(['contributionAmount', 'createdAt', 'currency', 'frequency', 'id', 'memberCount', 'monthlyDayOfMonth', 'name', 'status', 'tenantId', 'totalContributions', 'valueType']);
-  });
-
-  it('creates a GOODS tontine', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 10, unit: 'SAC' }))!;
-    expect(tontine.valueType).toBe('GOODS');
-  });
-
-  it('a newly created tontine is only visible to its own tenant (isolation preserved)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine isolée', valueType: 'MONEY', tenantId: 'T-003', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const ownTenant = await tontinesService.getTontine('T-003', tontine.id);
-    const otherTenant = await tontinesService.getTontine('T-001', tontine.id);
-    expect(ownTenant?.id).toBe(tontine.id);
-    expect(otherTenant).toBeNull();
-  });
-
-});
-
-describe('tontinesService — createTontine GOODS reference (item / quantity)', () => {
-  it('a GOODS tontine can carry a reference item and quantity ("10 savons")', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine des savons', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Savon', quantity: 10, unit: 'PIECE' }))!;
-    expect(tontine.item).toBe('Savon');
-    expect(tontine.quantity).toBe(10);
-  });
-
-  it('a MONEY tontine does not carry item/quantity (undefined, not persisted)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine financière', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.item).toBeUndefined();
-    expect(tontine.quantity).toBeUndefined();
-  });
-
-  it('createTontine uses tenantId exactly as provided by the caller (TontineCreate always passes currentTenant.id)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine isolée bis', valueType: 'GOODS', tenantId: 'T-003', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 25, unit: 'SAC' }))!;
-    expect(tontine.tenantId).toBe('T-003');
-    const otherTenant = await tontinesService.getTontine('T-002', tontine.id);
-    expect(otherTenant).toBeNull();
-  });
-
-  it('a GOODS tontine can also carry a reference unit ("10 pièces")', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine des savons (unité)', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Savon', quantity: 10, unit: 'PIECE' }))!;
-    expect(tontine.unit).toBe('PIECE');
-  });
-
-  it('DENY: rejects empty required GOODS fields and non-positive reference quantities', async () => {
-    const invalidInputs: TontineInput[] = [
-      { name: '', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 5, unit: 'SAC' },
-      { name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: '', quantity: 5, unit: 'SAC' },
-      { name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', unit: 'SAC' },
-      { name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 0, unit: 'SAC' },
-      { name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: -1, unit: 'SAC' },
-      { name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 5, unit: '' as unknown as TontineInput['unit'] },
-    ];
-    for (const input of invalidInputs) expect(await tontinesService.createTontine(input)).toBeNull();
-  });
-});
-
-describe('tontinesService — createTontine MONEY currency (héritée de Paramètres > Organisation, mandat « devise automatique »)', () => {
-  it('a MONEY tontine created without a currency in the input inherits the tenant’s organization currency (T-002 seeded as XOF)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine héritée', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.currency).toBe('XOF');
-  });
-
-  it('DENY: a currency supplied by the caller is ignored — the organization currency always wins, the client cannot override it', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tentative EUR', valueType: 'MONEY', tenantId: 'T-002', currency: 'EUR', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.currency).toBe('XOF');
-  });
-
-  it('two tenants with different organization currencies each get their own currency on a new tontine (no bleed from one tenant to another)', async () => {
-    await settingsService.updateOrganizationSettings('T-003', { timezone: 'Africa/Dakar', currency: 'EUR' });
-    const tontineXof = (await tontinesService.createTontine({ name: 'Tontine T-002 (XOF)', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const tontineEur = (await tontinesService.createTontine({ name: 'Tontine T-003 (EUR)', valueType: 'MONEY', tenantId: 'T-003', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontineXof.currency).toBe('XOF');
-    expect(tontineEur.currency).toBe('EUR');
-  });
-
-  it('DENY: a MONEY tontine cannot be created for a tenant with no organization currency configured (no silent XAF fallback)', async () => {
-    const result = await tontinesService.createTontine({ name: 'Sans devise configurée', valueType: 'MONEY', tenantId: 'T-999', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 });
-    expect(result).toBeNull();
-  });
-
-  it('a GOODS tontine does not carry a currency (undefined, not persisted), even when the organization has one configured', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine sans devise', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Sucre', quantity: 5, unit: 'SAC' }))!;
-    expect(tontine.currency).toBeUndefined();
-  });
-});
-
-describe('tontinesService — contributionAmount (mandat « montant de cotisation »)', () => {
-  it('ALLOW: creates a MONEY tontine with a strictly positive contribution amount', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Epargne familiale', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 50_000 }))!;
+  it('ALLOW: creates a MONEY tontine — currency is resolved from organization settings, never from the caller', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Tontine ${Date.now()}`, valueType: 'MONEY', contributionAmount: 20_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5, withPurchase: false } as never);
     expect(tontine).toBeTruthy();
-    expect(tontine?.contributionAmount).toBe(50_000);
+    expect(tontine?.currency).toBe('XOF');
   });
 
-  it('DENY: rejects a MONEY tontine created without a contribution amount', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Sans montant', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1 }))!;
+  it('DENY: any currency passed by the caller is ignored — the organization currency always wins', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Tontine ${Date.now()}`, valueType: 'MONEY', contributionAmount: 20_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5, withPurchase: false, currency: 'USD' } as never);
+    expect(tontine?.currency).toBe('XOF');
+  });
+
+  it('DENY: a Tontine has no `startDate` property at all — the Tontine carries rules, never a date (mandat suppression startDate)', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test No StartDate ${Date.now()}`, valueType: 'MONEY', contributionAmount: 20_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5 } as never);
+    expect('startDate' in (tontine as object)).toBe(false);
+    // Même en passant explicitement un `startDate` à la création — le champ n'existe pas dans `TontineInput`, il est donc ignoré silencieusement par le typage, jamais stocké.
+    const tontineWithAttempt = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Attempted StartDate ${Date.now()}`, valueType: 'MONEY', contributionAmount: 20_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5, startDate: '2026-01-01' } as never);
+    expect('startDate' in (tontineWithAttempt as object)).toBe(false);
+  });
+
+  it('DENY: creating a Tontine never auto-creates a first Tour — Tours are always created progressively, one manual act at a time', async () => {
+    const before = tontineOccurrences.length;
+    await tontinesService.createTontine({ tenantId: 'T-001', name: `Test No Auto Tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 20_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5 } as never);
+    expect(tontineOccurrences.length).toBe(before);
+  });
+
+  it('DENY: a MONEY tontine without a strictly positive contributionAmount is refused', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Tontine ${Date.now()}`, valueType: 'MONEY', contributionAmount: 0, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 5 } as never);
     expect(tontine).toBeNull();
   });
 
-  it('DENY: rejects a MONEY tontine created with a contribution amount of exactly 0', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Montant zéro', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 0 }))!;
+  it('DENY: an incomplete frequency configuration is refused', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Tontine ${Date.now()}`, valueType: 'MONEY', contributionAmount: 10_000, frequency: 'WEEKLY' } as never);
     expect(tontine).toBeNull();
   });
 
-  it('DENY: rejects a MONEY tontine created with a negative contribution amount', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Montant négatif', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: -100 }))!;
-    expect(tontine).toBeNull();
+  it('ALLOW: « Avec achat » ON resolves and stores the tenant’s « Achat tontine » purchase account automatically', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Avec Achat ${Date.now()}`, valueType: 'MONEY', contributionAmount: 15_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 10, withPurchase: true } as never);
+    expect(tontine?.withPurchase).toBe(true);
+    expect(tontine?.purchaseAccountId).toBe('AC-015');
   });
 
-  it('DENY: rejects a MONEY tontine with an empty name', async () => {
-    expect(await tontinesService.createTontine({ name: '', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 })).toBeNull();
+  it('ALLOW: « Avec achat » OFF never associates a purchase account', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Sans Achat ${Date.now()}`, valueType: 'MONEY', contributionAmount: 15_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 10, withPurchase: false } as never);
+    expect(tontine?.withPurchase).toBe(false);
+    expect(tontine?.purchaseAccountId).toBeUndefined();
   });
 
-  it('ALLOW: a GOODS tontine is accepted without any contribution amount', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'En nature sans montant', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 5, unit: 'SAC' }))!;
+  it('ALLOW: creates a GOODS tontine without any currency/withPurchase field', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-002', name: `Test Nature ${Date.now()}`, valueType: 'GOODS', item: 'Sac de riz', quantity: 3, unit: 'SAC', frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
     expect(tontine).toBeTruthy();
-    expect(tontine?.contributionAmount).toBeUndefined();
+    expect(tontine?.currency).toBeUndefined();
+    expect(tontine?.withPurchase).toBeUndefined();
   });
 
-  it('ALLOW: updateTontine switches a MONEY tontine to GOODS without requiring a contribution amount', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À convertir', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 20_000 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created!.id, { valueType: 'GOODS', item: 'Sucre', quantity: 3, unit: 'SAC' });
-    expect(updated?.valueType).toBe('GOODS');
+  it('DENY: updateTontine never accepts a currency field, even if one is passed', async () => {
+    const created = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Update ${Date.now()}`, valueType: 'MONEY', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    const updated = await tontinesService.updateTontine('T-001', created!.id, { currency: 'EUR' } as never);
+    expect(updated?.currency).toBe('XOF');
   });
 
-  it('DENY: updateTontine switching GOODS back to MONEY without a contribution amount is rejected', async () => {
-    const created = (await tontinesService.createTontine({ name: 'En nature', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Huile', quantity: 4, unit: 'BIDON' }))!;
-    const updated = await tontinesService.updateTontine('T-002', created.id, { valueType: 'MONEY' });
-    expect(updated).toBeNull();
-  });
-
-  it('ALLOW: updateTontine updates a MONEY tontine with a valid contribution amount', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À modifier', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created!.id, { contributionAmount: 15_000 });
-    expect(updated?.contributionAmount).toBe(15_000);
-  });
-
-  it('DENY: updateTontine rejects a contribution amount of exactly 0', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À corrompre zéro', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created!.id, { contributionAmount: 0 });
-    expect(updated).toBeNull();
-    const after = await tontinesService.getTontine('T-002', created!.id);
-    expect(after?.contributionAmount).toBe(10_000);
-  });
-
-  it('DENY: updateTontine rejects a negative contribution amount', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À corrompre négatif', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created!.id, { contributionAmount: -500 });
-    expect(updated).toBeNull();
-    const after = await tontinesService.getTontine('T-002', created!.id);
-    expect(after?.contributionAmount).toBe(10_000);
-  });
-
-  it('DENY: updateTontine cannot write against a tontine of another tenant', async () => {
-    const created = (await tontinesService.createTontine({ name: 'Isolée update', valueType: 'MONEY', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const updated = await tontinesService.updateTontine('T-001', created!.id, { contributionAmount: 99_999 });
-    expect(updated).toBeNull();
-  });
-
-  it('DENY: updateTontine rejects invalid GOODS fields and an empty name', async () => {
-    const created = (await tontinesService.createTontine({ name: 'Tontine riz', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 5, unit: 'SAC' }))!;
-    await expect(tontinesService.updateTontine('T-002', created.id, { name: '' })).resolves.toBeNull();
-    await expect(tontinesService.updateTontine('T-002', created.id, { item: '' })).resolves.toBeNull();
-    await expect(tontinesService.updateTontine('T-002', created.id, { quantity: 0 })).resolves.toBeNull();
-    await expect(tontinesService.updateTontine('T-002', created.id, { quantity: -1 })).resolves.toBeNull();
-    await expect(tontinesService.updateTontine('T-002', created.id, { unit: '' as unknown as TontineInput['unit'] })).resolves.toBeNull();
-  });
-
-  it('removes fields from the previous value type when switching types', async () => {
-    const financial = (await tontinesService.createTontine({ name: 'À convertir', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITH_PURCHASE', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    const goods = await tontinesService.updateTontine('T-002', financial.id, { valueType: 'GOODS', item: 'Riz', quantity: 5, unit: 'SAC' });
-    expect(goods).toMatchObject({ valueType: 'GOODS', item: 'Riz', quantity: 5, unit: 'SAC' });
-    expect(goods?.currency).toBeUndefined();
-    expect(goods?.purchaseMode).toBeUndefined();
-    expect(goods?.contributionAmount).toBeUndefined();
-
-    const money = await tontinesService.updateTontine('T-002', financial.id, { valueType: 'MONEY', contributionAmount: 10_000, currency: 'XAF' });
-    expect(money).toMatchObject({ valueType: 'MONEY', contributionAmount: 10_000 });
-    expect(money?.item).toBeUndefined();
-    expect(money?.quantity).toBeUndefined();
-    expect(money?.unit).toBeUndefined();
+  it('ALLOW: toggling withPurchase ON via update resolves the purchase account', async () => {
+    const created = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Toggle ${Date.now()}`, valueType: 'MONEY', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: false } as never);
+    expect(created?.purchaseAccountId).toBeUndefined();
+    const updated = await tontinesService.updateTontine('T-001', created!.id, { withPurchase: true });
+    expect(updated?.purchaseAccountId).toBe('AC-015');
   });
 });
 
-describe('tontinesService — frequency obligatoire (mandat « Fréquence obligatoire »)', () => {
-  it('DENY: createTontine rejects a missing frequency', async () => {
-    const result = await tontinesService.createTontine({ name: 'Sans fréquence', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000 } as unknown as TontineInput);
-    expect(result).toBeNull();
+/** Chaque test crée sa propre Tontine plutôt que de réutiliser TON-004 (seed partagé) — évite tout épuisement des membres actifs disponibles / toute interférence entre tests. */
+async function freshTontine(tenantId: string) {
+  return tontinesService.createTontine({ tenantId, name: `Test Adhesions ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+}
+
+describe('tontinesService — Adhesions (rattachées directement à la Tontine)', () => {
+  it('ALLOW: addAdhesion attaches a member directly to the tontine, with tontineId (no Period in between)', async () => {
+    const tontine = await freshTontine('T-001');
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
+    expect(adhesion).toBeTruthy();
+    expect(adhesion?.tontineId).toBe(tontine!.id);
+    expect(adhesion?.status).toBe('active');
   });
 
-  it('DENY: createTontine rejects an incomplete frequency (WEEKLY without weekday)', async () => {
-    const result = await tontinesService.createTontine({ name: 'Hebdo incomplète', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000, frequency: 'WEEKLY' });
-    expect(result).toBeNull();
+  it('DENY: addAdhesion refuses a member already an active adherent of this tontine', async () => {
+    const tontine = await freshTontine('T-001');
+    await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-02');
+    const second = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-03');
+    expect(second).toBeNull();
   });
 
-  it('ALLOW: createTontine accepts a complete frequency', async () => {
-    const created = await tontinesService.createTontine({ name: 'Fréquence complète', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000, frequency: 'WEEKLY', weekday: 'MONDAY' });
-    expect(created?.frequency).toBe('WEEKLY');
+  it('DENY: listAdhesions of a tenant never leaks another tenant’s adhesions', async () => {
+    const tontine = await freshTontine('T-001');
+    await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
+    const result = await tontinesService.listAdhesions('T-002', tontine!.id);
+    expect(result).toEqual([]);
   });
 
-  it('DENY: updateTontine rejects a patch that blanks out an existing frequency', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À protéger', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyDayOfMonth: 10 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created.id, { frequency: undefined });
-    expect(updated).toBeNull();
-    const after = await tontinesService.getTontine('T-002', created.id);
-    expect(after?.frequency).toBe('MONTHLY');
+  it('ALLOW: closeAdhesion is a logical closure (UPDATE), never a deletion — history remains readable', async () => {
+    const tontine = await freshTontine('T-001');
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-016', '2026-09-01');
+    const closed = await tontinesService.closeAdhesion('T-001', adhesion!.id, '2026-09-10');
+    expect(closed?.status).toBe('exited');
+    expect(closed?.leftAt).toBe('2026-09-10');
+    const stillReadable = await tontinesService.getAdhesion('T-001', adhesion!.id);
+    expect(stillReadable?.id).toBe(adhesion!.id);
   });
 
-  it('DENY: updateTontine rejects switching to WEEKLY without providing a weekday', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À protéger bis', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyDayOfMonth: 10 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created.id, { frequency: 'WEEKLY' });
-    expect(updated).toBeNull();
-  });
-
-  it('ALLOW: updateTontine accepts a complete replacement frequency', async () => {
-    const created = (await tontinesService.createTontine({ name: 'À remplacer', valueType: 'MONEY', tenantId: 'T-002', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyDayOfMonth: 10 }))!;
-    const updated = await tontinesService.updateTontine('T-002', created.id, { frequency: 'WEEKLY', weekday: 'FRIDAY' });
-    expect(updated?.frequency).toBe('WEEKLY');
-    expect(updated?.weekday).toBe('FRIDAY');
-  });
-
-  it('ALLOW: updateTontine on a legacy tontine (seeded before this mandate) still accepts edits unrelated to frequency, without forcing it to be re-entered', async () => {
-    const updated = await tontinesService.updateTontine('T-003', 'TON-003', { contributionAmount: 35_000 });
-    expect(updated?.contributionAmount).toBe(35_000);
-    expect(updated?.frequency).toBe('MONTHLY');
-  });
-
-  it('DENY: direct API-style calls cannot bypass the rule via tenant isolation either', async () => {
-    const created = (await tontinesService.createTontine({ name: 'Isolation fréquence', valueType: 'MONEY', tenantId: 'T-003', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyDayOfMonth: 5 }))!;
-    const updated = await tontinesService.updateTontine('T-001', created.id, { frequency: undefined });
-    expect(updated).toBeNull();
+  it('DENY: closeAdhesion refuses a double closure', async () => {
+    const tontine = await freshTontine('T-001');
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-05');
+    await tontinesService.closeAdhesion('T-001', adhesion!.id, '2026-09-20');
+    const secondClose = await tontinesService.closeAdhesion('T-001', adhesion!.id, '2026-09-25');
+    expect(secondClose).toBeNull();
   });
 });
 
-describe('tontinesService — purchaseMode (mandat refonte §13-16, MONEY uniquement)', () => {
-  it('a MONEY tontine can be created "Sans achat" (WITHOUT_PURCHASE, le défaut)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine sans achat', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITHOUT_PURCHASE', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.purchaseMode).toBe('WITHOUT_PURCHASE');
+describe('RBAC — legacy Cycle/Draw keys removed, no duplicated new keys', () => {
+  it('DENY: the permission catalog no longer contains any cycles.*/draws.* key', () => {
+    expect(permissionCatalog.some((permission) => permission.startsWith('cycles.') || permission.startsWith('draws.'))).toBe(false);
   });
-
-  it('a MONEY tontine can be created "Avec achat" (WITH_PURCHASE)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine avec achat', valueType: 'MONEY', tenantId: 'T-002', currency: 'XAF', purchaseMode: 'WITH_PURCHASE', frequency: 'MONTHLY', monthlyDayOfMonth: 1, contributionAmount: 10_000 }))!;
-    expect(tontine.purchaseMode).toBe('WITH_PURCHASE');
-  });
-
-  it('a GOODS tontine does not carry a purchaseMode (undefined, not persisted — the field is MONEY-only)', async () => {
-    const tontine = (await tontinesService.createTontine({ name: 'Tontine en nature sans achat', valueType: 'GOODS', tenantId: 'T-002', frequency: 'MONTHLY', monthlyDayOfMonth: 1, item: 'Riz', quantity: 10, unit: 'SAC' }))!;
-    expect(tontine.purchaseMode).toBeUndefined();
+  it('ALLOW: the permission catalog still exposes the generic keys reused by the rebuilt Tontines module', () => {
+    expect(permissionCatalog).toEqual(expect.arrayContaining(['tontines.read', 'tontines.create', 'tontines.update', 'beneficiaries.manage', 'adhesions.read', 'adhesions.manage', 'contributions.manage']));
   });
 });

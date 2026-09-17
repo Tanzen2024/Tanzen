@@ -115,7 +115,7 @@ function withComputedBalance(account: AccountRecord): Account {
  * Logique PURE (aucun `mockRequest`, aucun délai) de `createTransaction` —
  * extraite pour être réutilisable de façon strictement SYNCHRONE par d'autres
  * services dont les propres fonctions sont elles-mêmes des factories
- * synchrones enveloppées par `mockRequest` (ex. `tontineTurnsService.
+ * synchrones enveloppées par `mockRequest` (ex. `tontineOperationsService.
  * recordContributionPayment`/`recordReception`, mandat « intégration Tontine
  * ↔ Finance »). ATTENTION technique documentée : `mockRequest()` ne coerce
  * `undefined → null` QUE pour une factory synchrone — une factory `async`

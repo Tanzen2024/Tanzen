@@ -8,7 +8,6 @@ import { applications } from '@/mocks/finance/applications';
 import { loans } from '@/mocks/finance/loans';
 import { repayments } from '@/mocks/finance/repayments';
 import { tontines } from '@/mocks/tontines/tontines';
-import { tontinePeriods } from '@/mocks/tontines/tontine-periods';
 
 type KpiValue = { value: number; delta: string };
 
@@ -21,7 +20,6 @@ export type DashboardOverview = {
     repayments: KpiValue;
     outstanding: KpiValue;
     activeTontines: KpiValue;
-    activePeriods: KpiValue;
     pendingWorkflows: KpiValue;
   };
   loansDistribution: { key: string; value: number }[];
@@ -50,8 +48,6 @@ function buildOverview(tenantId: string): DashboardOverview {
   const tenantLoans = loans.filter((loan) => loan.tenantId === tenantId);
   const tenantRepayments = repayments.filter((repayment) => repayment.tenantId === tenantId);
   const tenantTontines = tontines.filter((tontine) => tontine.tenantId === tenantId);
-  /** Remplace `tontineCycles` (mandat « suppression complète de la logique Cycle/Tour ») — `Period` est le niveau temporel retenu du modèle Tontine → Fréquence → Période → Occurrence. */
-  const tenantPeriods = tontinePeriods.filter((period) => period.tenantId === tenantId);
 
   const byDateDesc = <T extends { date: string }>(rows: T[]) => [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -64,7 +60,6 @@ function buildOverview(tenantId: string): DashboardOverview {
     repayments: kpi(tenantRepayments.filter((r) => r.status === 'completed').reduce((sum, r) => sum + r.amount, 0)),
     outstanding: kpi(tenantLoans.reduce((sum, loan) => sum + loan.outstanding, 0)),
     activeTontines: kpi(tenantTontines.filter((tontine) => tontine.status === 'statusActive').length),
-    activePeriods: kpi(tenantPeriods.filter((period) => period.status === 'ACTIVE').length),
     pendingWorkflows: kpi(0),
   };
 
@@ -117,13 +112,8 @@ function buildOverview(tenantId: string): DashboardOverview {
   // 'pending' (demande d'adhésion en attente) est retiré du vocabulaire Member — cette
   // notification/approbation ne peut plus jamais se déclencher (aucun membre ne peut plus
   // être 'pending'), retirée plutôt que conservée comme code mort silencieusement inatteignable.
-  const now = Date.now();
-  /** Remplace « cycle bientôt clôturé » (mandat « suppression complète de la logique Cycle/Tour ») — même fenêtre de 45 jours, portée par la Période (niveau temporel retenu) plutôt que par l'ancien Cycle. */
-  const soonEndingPeriods = tenantPeriods.filter((period) => period.status === 'ACTIVE' && new Date(period.endDate).getTime() - now < 45 * 86_400_000);
-  if (soonEndingPeriods[0]) {
-    const tontine = tontines.find((t) => t.id === soonEndingPeriods[0].tontineId);
-    importantNotifications.push({ id: `notif-period-${soonEndingPeriods[0].id}`, priority: 'low', titleKey: 'periodEndingSoon', detail: `${tontine?.name ?? soonEndingPeriods[0].tontineId} · ${soonEndingPeriods[0].startDate} → ${soonEndingPeriods[0].endDate}`, date: soonEndingPeriods[0].endDate });
-  }
+  // Notification « Période bientôt terminée » retirée — la notion de Période n'existe plus
+  // dans le module Tontines (restructuration : Tontine → Tour, directement, sans Période).
 
   const pendingApprovals: DashboardOverview['pendingApprovals'] = [];
   applicationsInReview.slice(0, 2).forEach((application) => pendingApprovals.push({ id: `approval-app-${application.id}`, typeKey: 'approvalLoan', requester: application.applicant, amount: application.requestedAmount, date: application.submittedDate }));

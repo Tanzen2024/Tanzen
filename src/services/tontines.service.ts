@@ -1,58 +1,48 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { tontines, type Tontine } from '@/mocks/tontines/tontines';
+import { tontines, tontineAdhesions, type Tontine, type TontineAdhesion } from '@/mocks/tontines/tontines';
 import { isValidFrequencyConfig } from '@/mocks/tontines/tontine-frequency';
 import { accounts, normalizeAccountLabel } from '@/mocks/finance/accounts';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
+import { members } from '@/mocks/organization/members';
 
-/** Libellé canonique de la caisse « Achat tontine » (mandat « Avec achat ») — comparé de façon normalisée (cf. `normalizeAccountLabel`), comme la règle d'unicité des libellés de caisse. */
+/** Libellé canonique de la caisse « Achat tontine » (mandat « Avec achat ») — comparé normalisé, comme la règle d'unicité des libellés de caisse. */
 const PURCHASE_ACCOUNT_LABEL = 'Achat tontine';
 
-export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'currency' | 'purchaseMode' | 'contributionAmount' | 'item' | 'quantity' | 'unit' | 'accountId'
+export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'withPurchase' | 'contributionAmount' | 'item' | 'quantity' | 'unit' | 'accountId'
   | 'frequency' | 'weekday' | 'monthlyRule' | 'monthlyDayOfMonth' | 'monthlyOrdinal' | 'monthlyWeekday'
   | 'quarterlyRule' | 'quarterlyMonth' | 'quarterlyDayOfMonth' | 'quarterlyOrdinal' | 'quarterlyWeekday'>;
+/**
+ * AUCUN champ `currency` — la devise n'est JAMAIS acceptée en entrée, ni à la
+ * création ni à la modification (mandat reconstruction : « No currency field
+ * in any Tontine form »). Toujours résolue depuis `organizationSettingsList`.
+ */
 export type TontineUpdateInput = Partial<Omit<TontineInput, 'tenantId'>>;
 
-/**
- * MONEY exige un montant de cotisation strictement positif (mandat « montant de cotisation »,
- * §1/§5) ; GOODS n'en a pas besoin, quelle que soit la valeur passée (jamais utilisée pour une
- * tontine non financière, même si une ancienne valeur traîne après un changement de valueType).
- */
 function isNonBlankString(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
-
 function isStrictlyPositiveNumber(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-/** Valide la configuration métier complète, y compris pour les appels directs au service. */
+/** Valide la configuration métier complète — aucun rate/pourcentage/coefficient n'existe nulle part dans ce modèle : un seul `contributionAmount` par Tontine, partagé par toutes les Adhésions. */
 function isValidTontineConfiguration(input: Pick<Tontine, 'name' | 'valueType' | 'contributionAmount' | 'item' | 'quantity' | 'unit'>): boolean {
   if (!isNonBlankString(input.name)) return false;
   if (input.valueType === 'MONEY') return isStrictlyPositiveNumber(input.contributionAmount);
   return isNonBlankString(input.item) && isStrictlyPositiveNumber(input.quantity) && isNonBlankString(input.unit);
 }
 
-/**
- * Résout la caisse « Achat tontine » du tenant courant (mandat « Avec achat »)
- * — jamais choisie par l'utilisateur, uniquement par correspondance de
- * libellé normalisé, comme la règle d'unicité des libellés de caisse
- * (`hasAccountLabelConflict`). `undefined` si ce tenant n'a pas (encore)
- * configuré cette caisse — la tontine est alors créée/modifiée sans
- * association plutôt que de bloquer l'utilisateur (aucune règle de blocage
- * n'est sourcée pour ce cas).
- */
+/** Résolution automatique, jamais un choix utilisateur (pas de champ « Caisse liée »). `undefined` si le tenant n'a pas (encore) configuré cette caisse. */
 function resolvePurchaseAccountId(tenantId: string): string | undefined {
   return accounts.find((account) => account.tenantId === tenantId && normalizeAccountLabel(account.title) === normalizeAccountLabel(PURCHASE_ACCOUNT_LABEL))?.id;
 }
 
-/** Un patch ne touchant à aucun champ de fréquence n'a pas à revalider une configuration déjà complète (ex. tontines pré-migration, cf. tontines.ts) — évite de bloquer une modification portant sur un champ non lié (mandat « Fréquence obligatoire », exigence de compatibilité avec les tontines existantes). */
 function patchTouchesFrequency(patch: TontineUpdateInput): boolean {
   return 'frequency' in patch || 'weekday' in patch || 'monthlyRule' in patch || 'monthlyDayOfMonth' in patch || 'monthlyOrdinal' in patch || 'monthlyWeekday' in patch
     || 'quarterlyRule' in patch || 'quarterlyMonth' in patch || 'quarterlyDayOfMonth' in patch || 'quarterlyOrdinal' in patch || 'quarterlyWeekday' in patch;
 }
 
-/** Les attributs propres à un type ne sont jamais conservés lors d'un changement de type. */
 function keepOnlyFieldsForValueType(tontine: Tontine): void {
   if (tontine.valueType === 'MONEY') {
     delete tontine.item;
@@ -61,68 +51,65 @@ function keepOnlyFieldsForValueType(tontine: Tontine): void {
     return;
   }
   delete tontine.currency;
-  delete tontine.purchaseMode;
+  delete tontine.withPurchase;
   delete tontine.purchaseAccountId;
   delete tontine.contributionAmount;
-  // Mandat « intégration Tontine ↔ Finance » : le rattachement à une caisse n'a de sens
-  // que pour un flux monétaire — une tontine GOODS n'a pas de compte financier.
   delete tontine.accountId;
 }
 
-/**
- * `accountId` (mandat « intégration Tontine ↔ Finance ») doit référencer une
- * caisse du MÊME tenant, sinon la tontine pourrait poster ses transactions
- * dans le compte d'une autre organisation — même règle d'isolation que
- * partout ailleurs dans le projet, appliquée ici avant toute écriture.
- * `undefined`/absent reste toujours valide (rétrocompatibilité totale).
- */
 function isValidAccountLink(tenantId: string, accountId: string | undefined): boolean {
   if (!accountId) return true;
   return accounts.some((account) => account.id === accountId && account.tenantId === tenantId);
 }
 
-/**
- * Source unique de la devise d'une tontine MONEY : Paramètres > Organisation
- * (`organizationSettingsList`), jamais le formulaire de création (mandat
- * « devise automatique »). Lue directement depuis le mock au même titre que
- * `accounts` ci-dessus, pas via `settingsService`, pour rester synchrone dans
- * ce `mockRequest`. Pas de repli XAF/défaut silencieux : un tenant sans
- * devise configurée ne peut pas voir sa demande de création satisfaite.
- */
+/** Source unique de la devise d'une tontine MONEY : Paramètres > Organisation, jamais le formulaire (aucun repli XAF/défaut silencieux). */
 function getOrganizationCurrency(tenantId: string): string | undefined {
   return organizationSettingsList.find((item) => item.tenantId === tenantId)?.currency;
+}
+
+function resolveWithPurchase(tontine: Tontine): void {
+  delete tontine.purchaseAccountId;
+  if (tontine.valueType === 'MONEY' && tontine.withPurchase) {
+    const purchaseAccountId = resolvePurchaseAccountId(tontine.tenantId);
+    if (purchaseAccountId) tontine.purchaseAccountId = purchaseAccountId;
+  }
 }
 
 export const tontinesService = {
   listTontines: (tenantId: string) => mockRequest(() => tontines.filter((tontine) => tontine.tenantId === tenantId)),
   getTontine: (tenantId: string, tontineId: string) => mockRequest(() => getTenantScoped(tontines, (tontine) => tontine.id === tontineId, tenantId)),
+
+  /** Compte réel d'adhérents actifs et cotisations totales réellement collectées (jamais un compteur statique dénormalisé sur la Tontine — évite toute dérive/désynchronisation). */
+  getTontineSummary: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const adhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId);
+      return { memberCount: adhesions.filter((item) => item.status === 'active').length };
+    }),
+
   createTontine: (input: TontineInput) =>
     mockRequest(() => {
       if (!isValidTontineConfiguration(input)) return undefined;
       if (!isValidFrequencyConfig(input)) return undefined;
       if (!isValidAccountLink(input.tenantId, input.accountId)) return undefined;
-      /** Toute `currency` envoyée par l'appelant est ignorée pour MONEY — la devise de l'organisation fait foi, le client ne peut pas la contourner (§6 mandat « devise automatique », même logique de protection que `isValidAccountLink`). */
       const organizationCurrency = getOrganizationCurrency(input.tenantId);
       if (input.valueType === 'MONEY' && !organizationCurrency) return undefined;
-      const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', memberCount: 0, totalContributions: 0, createdAt: new Date().toISOString().slice(0, 10), ...input, currency: input.valueType === 'MONEY' ? organizationCurrency : input.currency };
+      const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', createdAt: new Date().toISOString().slice(0, 10), ...input, currency: input.valueType === 'MONEY' ? organizationCurrency : undefined };
       /**
-       * « Avec achat » (mandat « Avec achat ») : association PURE à la caisse « Achat tontine »
-       * du tenant — jamais choisie par l'utilisateur, jamais de transaction créée ici (cf. doc
-       * `Tontine.purchaseAccountId`). N'affecte la propriété QUE si une caisse est réellement
-       * résolue — jamais `purchaseAccountId: undefined` explicite, pour ne pas faire apparaître
-       * une clé vide sur une tontine "Sans achat"/sans caisse configurée (comme `contributionAmount`,
-       * `accountId`, etc., simplement absents quand non pertinents).
+       * Rempart runtime : la Tontine ne porte AUCUNE date propre (mandat
+       * suppression `startDate` — elle définit les règles, seul le Tour porte
+       * une date). `startDate` n'est pas dans `TontineInput`, mais comme pour
+       * `currency` (`updateTontine`), le typage seul ne protège pas un
+       * appelant qui le passerait quand même à l'exécution (`...input` ci-
+       * dessus le recopierait sinon aveuglément) — retiré explicitement.
        */
-      if (tontine.valueType === 'MONEY' && tontine.purchaseMode === 'WITH_PURCHASE') {
-        const purchaseAccountId = resolvePurchaseAccountId(tontine.tenantId);
-        if (purchaseAccountId) tontine.purchaseAccountId = purchaseAccountId;
-      }
+      delete (tontine as Record<string, unknown>).startDate;
+      resolveWithPurchase(tontine);
       keepOnlyFieldsForValueType(tontine);
       tontines.push(tontine);
       return tontine;
     }),
 
-  /** Aucun champ technique (id/tenantId/status/memberCount/totalContributions/createdAt) n'est jamais accepté en entrée — seule la configuration métier peut être modifiée. */
+  /** Aucun champ technique (id/tenantId/status/createdAt) n'est jamais accepté en entrée — et JAMAIS `currency` (voir `TontineUpdateInput`). */
   updateTontine: (tenantId: string, tontineId: string, patch: TontineUpdateInput) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
@@ -139,7 +126,6 @@ export const tontinesService = {
       if (!isValidTontineConfiguration(nextConfiguration)) return undefined;
       if ('accountId' in patch && !isValidAccountLink(tenantId, patch.accountId)) return undefined;
       if (patchTouchesFrequency(patch)) {
-        /** `'x' in patch`, jamais `patch.x ?? tontine.x` : un patch avec `frequency: undefined` explicite doit être traité comme une tentative de vider le champ, pas comme une absence de changement (sinon la validation retomberait silencieusement sur l'ancienne valeur alors qu'Object.assign, lui, écrase bien tontine.frequency avec `undefined`). */
         const nextFrequencyConfig = {
           frequency: 'frequency' in patch ? patch.frequency : tontine.frequency,
           weekday: 'weekday' in patch ? patch.weekday : tontine.weekday,
@@ -155,16 +141,54 @@ export const tontinesService = {
         };
         if (!isValidFrequencyConfig(nextFrequencyConfig)) return undefined;
       }
-      Object.assign(tontine, patch);
-      /** « Avec achat » : recalculée uniquement si la modification touche réellement `purchaseMode` ou `valueType` — pas de re-résolution intempestive à chaque modification non liée (ex. changement de nom), la caisse déjà associée reste valide tant que ces deux champs ne bougent pas. `delete` (jamais `= undefined`) pour retirer proprement l'association quand elle ne s'applique plus, cohérent avec `keepOnlyFieldsForValueType` ci-dessous. */
-      if ('purchaseMode' in patch || 'valueType' in patch) {
-        delete tontine.purchaseAccountId;
-        if (tontine.valueType === 'MONEY' && tontine.purchaseMode === 'WITH_PURCHASE') {
-          const purchaseAccountId = resolvePurchaseAccountId(tontine.tenantId);
-          if (purchaseAccountId) tontine.purchaseAccountId = purchaseAccountId;
-        }
-      }
+      /**
+       * `currency` n'est PAS dans `TontineUpdateInput` — mais un rempart runtime
+       * reste nécessaire : `Object.assign` ne connaît rien du type TypeScript à
+       * l'exécution, et un appelant contournant le typage (JS pur, `as never`
+       * dans un test) ne doit JAMAIS réussir à modifier la devise autrement que
+       * via `organizationSettingsList` (mandat « no currency field in any
+       * Tontine form »). Retiré explicitement avant l'assignation plutôt que de
+       * ne compter que sur la protection de compilation.
+       */
+      const safePatch: Record<string, unknown> = { ...patch };
+      delete safePatch.currency;
+      delete safePatch.startDate; // même rempart runtime — la Tontine ne porte aucune date propre.
+      Object.assign(tontine, safePatch);
+      if ('withPurchase' in patch || 'valueType' in patch) resolveWithPurchase(tontine);
       keepOnlyFieldsForValueType(tontine);
       return tontine;
+    }),
+
+  // --- Adhésions (rattachées DIRECTEMENT à la Tontine, mandat reconstruction §2) ---
+
+  listAdhesions: (tenantId: string, tontineId: string) =>
+    mockRequest(() => tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId)),
+  listAdhesionsByMember: (tenantId: string, memberId: string) =>
+    mockRequest(() => tontineAdhesions.filter((item) => item.tenantId === tenantId && item.memberId === memberId)),
+  getAdhesion: (tenantId: string, adhesionId: string) =>
+    mockRequest(() => getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId)),
+
+  /** Multi-adhésion illimitée (aucune règle sourcée d'unicité membre/tontine) — refuse un membre invalide/inactif/hors tenant, ou déjà adhérent actif de cette tontine (doublon actif silencieusement ignoré). */
+  addAdhesion: (tenantId: string, tontineId: string, memberId: string, joinedAt: string) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      const member = getTenantScoped(members, (item) => item.id === memberId, tenantId);
+      if (!member || member.status !== 'active') return undefined;
+      const alreadyActive = tontineAdhesions.some((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.memberId === memberId && item.status === 'active');
+      if (alreadyActive) return undefined;
+      const adhesion: TontineAdhesion = { id: `ADH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, tontineId, memberId, memberName: `${member.firstName} ${member.lastName}`, joinedAt, leftAt: null, status: 'active' };
+      tontineAdhesions.push(adhesion);
+      return adhesion;
+    }),
+
+  /** Clôture logique (UPDATE, jamais DELETE) — l'historique (Contributions/Bénéfices) reste consultable. Refuse une double clôture. */
+  closeAdhesion: (tenantId: string, adhesionId: string, leftAt: string) =>
+    mockRequest(() => {
+      const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
+      if (!adhesion || adhesion.status === 'exited') return undefined;
+      adhesion.status = 'exited';
+      adhesion.leftAt = leftAt;
+      return adhesion;
     }),
 };

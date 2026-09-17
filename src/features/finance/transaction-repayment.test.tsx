@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
@@ -52,7 +52,8 @@ async function openRepaymentForm(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(memberSelect, 'M-001');
 }
 
-let createRepaymentTransactionSpy: ReturnType<typeof vi.spyOn>;
+/** Typé directement via `MockInstance<typeof creditService.createRepaymentTransaction>` plutôt que `ReturnType<typeof vi.spyOn<...>>` — la résolution de surcharge générique de `vi.spyOn` dépend de la version de vitest réellement installée (cf. mémoire projet — écart connu entre `package.json` (`^4.1.10`) et les types actuellement résolus) ; cette forme reste compatible dans les deux cas. */
+let createRepaymentTransactionSpy: MockInstance<typeof creditService.createRepaymentTransaction>;
 
 /**
  * Mandat « Finalisation Finance/Tontines » §14/§15 : le formulaire appelle

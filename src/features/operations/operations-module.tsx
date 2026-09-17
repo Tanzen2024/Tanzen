@@ -19,7 +19,7 @@ import { documentService, type DocumentInput } from '@/services/document.service
 import { organizationService } from '@/services/organization.service';
 import { creditService } from '@/services/credit.service';
 import { tontinesService } from '@/services/tontines.service';
-import { tontineTurnsService } from '@/services/tontine-turns.service';
+import { tontineOperationsService } from '@/services/tontine-operations.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
@@ -169,7 +169,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   });
   /** Mandat §9 « photos partout où l'identité du bénéficiaire est affichée, y compris en validation de permutation » — écran générique, donc lecture activée seulement pour ce domaine/entityType précis (même garde que `isFiscalYearReopen` ci-dessus). */
   const isBeneficiaryPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'beneficiaryPermutation');
-  const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineTurnsService.getBeneficiaryPermutationPreview(currentTenant.id, requestId), enabled: isBeneficiaryPermutation });
+  const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineOperationsService.getPlanPermutationPreview(currentTenant.id, requestId), enabled: isBeneficiaryPermutation });
 
   const mutation = useMutation({
     mutationFn: async (action: 'approve' | 'reject' | 'return' | 'cancel') => {
@@ -207,7 +207,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
        * statut à `approved`. Auto-approbation volontairement non bloquée ici (décision
        * du mandat), contrairement à la branche Fiscal Year ci-dessus.
        */
-      if (result) tontineTurnsService.applyBeneficiaryPermutationDecision(currentTenant.id, result);
+      if (result) tontineOperationsService.applyPlanPermutationDecision(currentTenant.id, result);
       /**
        * Même point d'intégration générique, troisième domaine (mandat « Finalisation
        * Finance/Tontines » — prêts) — `applyLoanApplicationDecision` fait progresser
@@ -244,12 +244,8 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
        * jusqu'à 30s après validation. `permutationPreview` est déjà chargé (photos) et porte
        * `occurrenceId` des deux côtés — réutilisé ici, aucune requête supplémentaire.
        */
-      if (result?.domain === 'tontines' && result.entityType === 'beneficiaryPermutation') {
-        queryClient.invalidateQueries({ queryKey: queryKeys.tontines.allBeneficiaries(currentTenant.id) });
-        if (permutationPreview) {
-          queryClient.invalidateQueries({ queryKey: ['tontines', 'occurrence-beneficiaries', permutationPreview.a.occurrenceId, currentTenant.id] });
-          queryClient.invalidateQueries({ queryKey: ['tontines', 'occurrence-beneficiaries', permutationPreview.b.occurrenceId, currentTenant.id] });
-        }
+      if (result?.domain === 'tontines' && result.entityType === 'beneficiaryPermutation' && permutationPreview) {
+        queryClient.invalidateQueries({ queryKey: ['tontines', 'plans'] });
       }
       setPendingAction(null); setComment('');
     },
@@ -277,9 +273,9 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       <div className="space-y-5">
         {isBeneficiaryPermutation && permutationPreview && (
           <Card><CardContent className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 p-5">
-            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.a.memberName, lastName: '', photoUrl: permutationPreview.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.a.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.a.occurrenceNumber}</p></div>
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.a.memberName, lastName: '', photoUrl: permutationPreview.a.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.a.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.a.position}</p></div>
             <Repeat className="text-muted-foreground" size={18} />
-            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.b.occurrenceNumber}</p></div>
+            <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.b.position}</p></div>
           </CardContent></Card>
         )}
         <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'requestDetail')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">

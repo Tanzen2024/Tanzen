@@ -50,7 +50,7 @@ export type CreateRepaymentTransactionInput = {
   transactionInput: TransactionInput;
 };
 
-/** `Date.now()` seul peut collisionner entre deux créations survenant dans la même milliseconde (même précaution que `tontine-turns.service.ts`, `uniqueId`). */
+/** `Date.now()` seul peut collisionner entre deux créations survenant dans la même milliseconde (même précaution que `tontine-operations.service.ts`, `uniqueId`). */
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -189,7 +189,7 @@ export const creditService = {
    */
   /**
    * NOTE D'IMPLÉMENTATION — pas de `mockRequest()` ici (même choix que
-   * `tontineTurnsService.requestBeneficiaryPermutation`) : cette fonction
+   * `tontineOperationsService.requestPlanPermutation`) : cette fonction
    * orchestre déjà plusieurs appels eux-mêmes enveloppés par `mockRequest`
    * (`workflowService.createRequest`, `financeService.createTransaction`) —
    * l'envelopper une seconde fois ajouterait un délai redondant et, plus
@@ -248,7 +248,7 @@ export const creditService = {
   /**
    * Effet de bord propre au domaine Credit, appelé après `workflowService.submitAction`
    * (même point d'intégration générique que `settingsService.applyFiscalYearReopenDecision`
-   * et `tontineTurnsService.applyBeneficiaryPermutationDecision`, cf. `operations-module.tsx`,
+   * et `tontineOperationsService.applyPlanPermutationDecision`, cf. `operations-module.tsx`,
    * `WorkflowDetail`) — no-op pour tout autre domaine/entité. Fait progresser `Application.stage`
    * en miroir de l'avancement des 2 étapes de WD-001 : étape 1 approuvée → `stageReview` ;
    * étape 2 (décision finale) approuvée → `stageApproved` (prêt à décaisser, jamais décaissé

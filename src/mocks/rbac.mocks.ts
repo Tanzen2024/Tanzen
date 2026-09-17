@@ -65,9 +65,8 @@ export const permissionCatalog: Permission[] = [
   'repayments.read', 'repayments.create',
   'guarantors.read', 'guarantors.create',
   'loanRules.manage',
+  /** Domaine Tontines (reconstruction complète) : `cycles.*`/`draws.*` (ancien modèle Cycle/Draw, supprimé) retirés — plus aucune trace de terminologie Cycle/Draw dans le catalogue. `beneficiaries.manage` couvre à la fois les `OccurrenceBeneficiary` (avec-achat), les `TontineBeneficiaryPlan` (sans-achat) et leur permutation (même capacité métier : décider qui bénéficie, et dans quel ordre) — aucune permission dédiée « plans »/« permutations » introduite, pour ne pas dupliquer une même capacité sous plusieurs clés. */
   'tontines.read', 'tontines.create', 'tontines.update',
-  'cycles.read', 'cycles.create', 'cycles.manage',
-  'draws.read', 'draws.manage',
   'beneficiaries.manage',
   'adhesions.read', 'adhesions.manage',
   'contributions.manage',
