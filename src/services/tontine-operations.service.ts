@@ -3,17 +3,30 @@ import { getTenantScoped } from './tenant-scope';
 import { currentUser } from '@/mocks/rbac.mocks';
 import {
   tontines, tontineAdhesions, tontineOccurrences, occurrenceBeneficiaries,
-  tontineBeneficiaryPlans, tontineRemainders, tontineContributions, isAdhesionActiveAt,
-  type TontineOccurrence, type OccurrenceBeneficiary, type TontineBeneficiaryPlan, type TontineRemainder, type TontineContribution,
+  tontineBeneficiaryPlans, tontineRemainders, tontineContributions, tontineCycles, isAdhesionActiveAt,
+  type TontineOccurrence, type OccurrenceBeneficiary, type TontineBeneficiaryPlan, type TontineRemainder, type TontineContribution, type TontineCycle,
 } from '@/mocks/tontines/tontines';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { workflowService } from './workflow.service';
-import { insertTransaction } from './finance.service';
+import { insertTransaction, resolveSystemAccount } from './finance.service';
 import { accounts, type AccountRecord } from '@/mocks/finance/accounts';
 import { members } from '@/mocks/organization/members';
 
 export type PlanPermutationInput = { planAId: string; planBId: string; requestedBy: string; requestedByUserId?: string; justification?: string };
+
+/**
+ * Statut d'un bénéficiaire — dérivé EXCLUSIVEMENT de `amountDue`/`amountPaid`,
+ * jamais un champ stocké séparément ni modifiable directement par
+ * l'utilisateur (mandat « finalisation » §19). Fonction UNIQUE et
+ * centralisée — jamais dupliquée dans un composant UI.
+ */
+export type BeneficiaryPaymentStatus = 'PENDING' | 'PARTIAL' | 'PAID';
+export function getBeneficiaryPaymentStatus(beneficiary: { amountDue: number; amountPaid: number }): BeneficiaryPaymentStatus {
+  if (beneficiary.amountPaid >= beneficiary.amountDue && beneficiary.amountDue > 0) return 'PAID';
+  if (beneficiary.amountPaid > 0) return 'PARTIAL';
+  return 'PENDING';
+}
 
 /** Identifiant technique reliant une `WorkflowRequest` de permutation aux deux `TontineBeneficiaryPlan` échangés. */
 type PlanPermutation = { id: string; tenantId: string; workflowRequestId: string; planAId: string; planBId: string; appliedAt: string | null };
@@ -23,16 +36,163 @@ function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Cycle système courant (« OPEN ») d'une Tontine — un seul à la fois (mandat
+ * « recommencement automatique »). `undefined` uniquement si la Tontine
+ * elle-même n'existe pas/hors tenant, ou pour une donnée corrompue sans
+ * aucun cycle courant (ne devrait jamais arriver : `tontinesService.
+ * createTontine` en crée toujours un).
+ */
+function getCurrentCycle(tenantId: string, tontineId: string): TontineCycle | undefined {
+  return tontineCycles.find((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.status === 'OPEN');
+}
+
+/**
+ * Participations ÉLIGIBLES pour le calcul de fin de cycle — mêmes critères
+ * que le reste du module (ex. `AdhesionsPanel`/`addPlanEntry`) : les
+ * adhésions actuellement `active` de CETTE Tontine, jamais celles déjà
+ * sorties (`exited`). Raisonne exclusivement par `adhesionId`, jamais
+ * `memberId` (mandat §2 : plusieurs représentations d'un même membre sont
+ * autant de participations distinctes).
+ */
+function getEligibleAdhesionIds(tenantId: string, tontineId: string): string[] {
+  return tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.status === 'active').map((item) => item.id);
+}
+
+/**
+ * `adhesionId` déjà DÉSIGNÉ bénéficiaire d'un Tour DANS le cycle donné —
+ * dérivé des `OccurrenceBeneficiary` déjà existants (simple présence de la
+ * ligne), aucune nouvelle donnée de stockage. Sert UNIQUEMENT la règle
+ * structurelle « une participation n'occupe jamais deux désignations dans le
+ * même cycle » (`hasAlreadyBenefitedInCurrentCycle`) — PAS la détermination
+ * de fin de cycle, qui exige le bénéfice RÉALISÉ (cf.
+ * `getRealizedBeneficiaryAdhesionIdsInCycle`, audit ciblé du 2026-09-18 :
+ * une désignation seule, `amountPaid` encore à 0, n'est jamais un bénéfice
+ * consommé).
+ */
+function getBeneficiaryAdhesionIdsInCycle(tenantId: string, tontineId: string, cycleId: string): Set<string> {
+  const cycleOccurrenceIds = new Set(tontineOccurrences.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycleId).map((item) => item.id));
+  return new Set(occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId && cycleOccurrenceIds.has(item.occurrenceId)).map((item) => item.adhesionId));
+}
+
+/**
+ * `adhesionId` ayant RÉELLEMENT bénéficié — c'est-à-dire réglé
+ * intégralement (`getBeneficiaryPaymentStatus(...) === 'PAID'`, la SEULE
+ * fonction déjà existante et centralisée du projet qui détermine la
+ * réalisation d'un bénéfice, réutilisée ici jamais dupliquée/redéfinie) —
+ * dans le cycle donné. Une désignation encore `PENDING` (`amountPaid === 0`)
+ * ou `PARTIAL` (`0 < amountPaid < amountDue`) ne compte JAMAIS ici : c'est
+ * précisément la distinction que `closeOccurrence` applique déjà pour
+ * clôturer un Tour (exige `amountPaid >= amountDue` pour CHAQUE
+ * bénéficiaire) et que `removeOccurrenceBeneficiary` applique déjà pour
+ * autoriser un retrait (`amountPaid === 0` uniquement, sinon immuable) —
+ * cette fonction ne fait qu'appliquer la MÊME règle déjà établie ailleurs
+ * dans ce module à l'échelle du cycle.
+ */
+function getRealizedBeneficiaryAdhesionIdsInCycle(tenantId: string, tontineId: string, cycleId: string): Set<string> {
+  const cycleOccurrenceIds = new Set(tontineOccurrences.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycleId).map((item) => item.id));
+  return new Set(
+    occurrenceBeneficiaries
+      .filter((item) => item.tenantId === tenantId && cycleOccurrenceIds.has(item.occurrenceId) && getBeneficiaryPaymentStatus(item) === 'PAID')
+      .map((item) => item.adhesionId),
+  );
+}
+
+/**
+ * Règle structurelle — une participation (`adhesionId`) n'occupe jamais
+ * DEUX désignations de bénéficiaire dans le même cycle courant, RÉGLÉE ou
+ * non (mandat « recommencement automatique » §14). Volontairement basée sur
+ * la simple DÉSIGNATION (`getBeneficiaryAdhesionIdsInCycle`), jamais sur la
+ * réalisation : deux lignes `OccurrenceBeneficiary` simultanées pour la même
+ * participation dans le même cycle seraient de toute façon incohérentes
+ * (quel Tour porte le « vrai » bénéfice ?), qu'elles soient payées ou non —
+ * distinct de `isCycleComplete`, qui lui exige la réalisation. Vérifiée
+ * AVANT toute création de bénéficiaire (AVEC-ACHAT comme SANS-ACHAT),
+ * jamais uniquement côté UI.
+ */
+function hasAlreadyBenefitedInCurrentCycle(tenantId: string, tontineId: string, adhesionId: string): boolean {
+  const cycle = getCurrentCycle(tenantId, tontineId);
+  if (!cycle) return false;
+  return getBeneficiaryAdhesionIdsInCycle(tenantId, tontineId, cycle.id).has(adhesionId);
+}
+
+/**
+ * Le cycle courant est terminé quand TOUTES les participations éligibles ont
+ * RÉELLEMENT bénéficié — réglé intégralement, `getBeneficiaryPaymentStatus
+ * === 'PAID'` — d'un Tour dans ce cycle (mandat §4, précisé par l'audit
+ * ciblé du 2026-09-18 : une simple désignation `OccurrenceBeneficiary` avec
+ * `amountPaid === 0`, ou un règlement partiel, ne clôt jamais le cycle) —
+ * jamais après un nombre fixe de Tours (le nombre de Tours n'est jamais
+ * prédéfini, §3), et jamais `false` par défaut sur une Tontine sans aucune
+ * participation éligible (rien à distribuer ne peut jamais être « terminé »).
+ */
+export function isCycleComplete(tenantId: string, tontineId: string): boolean {
+  const cycle = getCurrentCycle(tenantId, tontineId);
+  if (!cycle) return false;
+  const eligibleAdhesionIds = getEligibleAdhesionIds(tenantId, tontineId);
+  if (eligibleAdhesionIds.length === 0) return false;
+  const realizedAdhesionIds = getRealizedBeneficiaryAdhesionIdsInCycle(tenantId, tontineId, cycle.id);
+  return eligibleAdhesionIds.every((id) => realizedAdhesionIds.has(id));
+}
+
+/**
+ * Planification COMPLÈTE (mandat « onglet par défaut selon adhérents et
+ * planification ») — TOUTES les participations éligibles (`adhesionId`
+ * actives de cette Tontine, mêmes critères que `getEligibleAdhesionIds`,
+ * jamais `memberId` seul : deux représentations d'un même membre sont deux
+ * participations distinctes à planifier séparément) possèdent une position
+ * dans la planification du cycle COURANT — jamais celle d'un cycle clos
+ * (nouveau cycle sans planification propre ≠ planifié, même si l'ancien
+ * cycle l'était intégralement). SEULE définition de « planification
+ * complète » du projet — réutilisée telle quelle partout où ce besoin existe
+ * (onglet par défaut ici), jamais redéfinie en parallèle.
+ *
+ * Sans objet pour une Tontine « Avec achat » (aucune planification n'existe
+ * pour ce mode) : retourne toujours `false`, jamais utilisée pour ce cas par
+ * l'appelant (l'onglet par défaut « Avec achat » ignore totalement la
+ * planification).
+ */
+export function isPlanningComplete(tenantId: string, tontineId: string): boolean {
+  const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+  if (!tontine || tontine.withPurchase) return false;
+  const cycle = getCurrentCycle(tenantId, tontineId);
+  if (!cycle) return false;
+  const eligibleAdhesionIds = getEligibleAdhesionIds(tenantId, tontineId);
+  if (eligibleAdhesionIds.length === 0) return false;
+  const plannedAdhesionIds = new Set(
+    tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id).map((item) => item.adhesionId),
+  );
+  return eligibleAdhesionIds.every((id) => plannedAdhesionIds.has(id));
+}
+
 function resolveTontineAccount(tenantId: string, tontineId: string): AccountRecord | undefined {
   const tontine = tontines.find((item) => item.tenantId === tenantId && item.id === tontineId);
   if (!tontine?.accountId) return undefined;
   return accounts.find((account) => account.id === tontine.accountId && account.tenantId === tenantId);
 }
 
-/** RÈGLE FINANCIÈRE CRITIQUE — distincte de `resolveTontineAccount` : seul le montant d'ACHAT transite par cette caisse, jamais les cotisations/réceptions « nettes ». `undefined` si `withPurchase` est faux (donc jamais de `purchaseAccountId`, cf. `tontines.service.ts`). */
+/**
+ * RÈGLE FINANCIÈRE CRITIQUE — distincte de `resolveTontineAccount` : seul le
+ * montant d'ACHAT transite par cette caisse, jamais les cotisations/
+ * réceptions « nettes ». `undefined` si `withPurchase` est faux (donc jamais
+ * de `purchaseAccountId`, cf. `tontines.service.ts`).
+ *
+ * CORRECTIF (bug « Régler échoue dès que le montant d'achat > 0 ») —
+ * `resolveWithPurchase` ne garantit `purchaseAccountId` que pour les
+ * Tontines créées/modifiées via `tontinesService` ; un enregistrement
+ * existant AVANT cette garantie (ex. seed historique tel que TON-004) peut
+ * légitimement porter `withPurchase: true` sans `purchaseAccountId`. Avant
+ * ce correctif, `recordReception` refusait alors TOUT règlement dès que
+ * `purchaseAmount > 0` (jamais quand il valait 0, d'où le symptôme). On
+ * répare ici la référence via le MÊME résolveur de compte système que
+ * `resolveWithPurchase` (`resolveSystemAccount`, idempotent, jamais une
+ * seconde caisse) — la caisse « Achat tontine » reste un compte système
+ * dédié, jamais transformée en caisse générale de la Tontine.
+ */
 function resolveTontinePurchaseAccount(tenantId: string, tontineId: string): AccountRecord | undefined {
   const tontine = tontines.find((item) => item.tenantId === tenantId && item.id === tontineId);
-  if (!tontine?.purchaseAccountId) return undefined;
+  if (!tontine || tontine.valueType !== 'MONEY' || !tontine.withPurchase) return undefined;
+  if (!tontine.purchaseAccountId) tontine.purchaseAccountId = resolveSystemAccount(tenantId, 'TONTINE_PURCHASE').id;
   return accounts.find((account) => account.id === tontine.purchaseAccountId && account.tenantId === tenantId);
 }
 
@@ -61,31 +221,136 @@ function writeAuditEvent(event: Omit<AuditEvent, 'id' | 'timestamp' | 'actorId' 
 export const tontineOperationsService = {
   // --- Plans de bénéficiaires (SANS-ACHAT uniquement, planification à l'avance) — rattachés DIRECTEMENT à la Tontine ---
 
+  /** Positions du cycle COURANT uniquement — les positions d'un ancien cycle (clos) restent en base pour l'historique mais ne polluent jamais la Planification affichée/actionnable (mandat « transparence du cycle »). */
   listPlans: (tenantId: string, tontineId: string) =>
-    mockRequest(() => tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId).sort((a, b) => a.position - b.position)),
+    mockRequest(() => {
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return [];
+      return tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id).sort((a, b) => a.position - b.position);
+    }),
 
-  /** Ajoute la prochaine position disponible (dernière + 1) — jamais de position dupliquée/choisie librement. Refuse si la Tontine est « Avec achat » (pas de Plan pour ce mode) ou si l'adhésion n'appartient pas à cette Tontine. */
+  /** Ajoute la prochaine position disponible du cycle COURANT (dernière + 1) — jamais de position dupliquée/choisie librement, jamais une position d'un ancien cycle (clos, immuable). Refuse si la Tontine est « Avec achat » (pas de Plan pour ce mode) ou si l'adhésion n'appartient pas à cette Tontine. */
   addPlanEntry: (tenantId: string, tontineId: string, adhesionId: string) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
       if (!tontine || tontine.withPurchase) return undefined;
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return undefined;
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
       if (!adhesion || adhesion.tontineId !== tontineId) return undefined;
-      const existing = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId);
+      const existing = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id);
       if (existing.some((item) => item.adhesionId === adhesionId)) return undefined;
       const nextPosition = existing.reduce((max, item) => Math.max(max, item.position), 0) + 1;
-      const plan: TontineBeneficiaryPlan = { id: uniqueId('PLN'), tenantId, tontineId, position: nextPosition, adhesionId, consumedByOccurrenceId: null };
+      const plan: TontineBeneficiaryPlan = { id: uniqueId('PLN'), tenantId, tontineId, position: nextPosition, adhesionId, consumedByOccurrenceId: null, cycleId: cycle.id };
       tontineBeneficiaryPlans.push(plan);
       return plan;
     }),
 
-  /** Retrait d'une position non encore consommée — une position déjà consommée par un Tour est immuable (retrait refusé), cohérent avec l'immuabilité du passé. */
+  /**
+   * Ajout multiple (refonte UX Planification — remplace l'ancien menu
+   * déroulant un-adhérent-à-la-fois) — même validation unitaire que
+   * `addPlanEntry` (Tontine « Avec achat » refusée, adhésion hors Tontine ou
+   * déjà planifiée ignorée), positions strictement croissantes et JAMAIS
+   * dupliquées même au sein d'un même batch.
+   *
+   * `startPosition` (optionnel, mandat « attribution directe d'une
+   * position » §9/§10) — position de départ de la première participation
+   * ajoutée, les suivantes prenant les positions consécutives ; les
+   * positions déjà occupées à partir de `startPosition` sont automatiquement
+   * décalées vers le bas (jamais de doublon). Omis, ou `undefined` : ajout en
+   * fin de liste (comportement historique, inchangé). Bornes valides :
+   * [nombre de positions déjà CONSOMMÉES + 1, nombre total de positions + 1]
+   * — jamais avant une position consommée (immuabilité du passé), jamais un
+   * trou après la fin. Hors bornes ou non entier : lot entier refusé
+   * (`skipped` = tout le lot) plutôt qu'une position invalide silencieusement
+   * corrigée (mandat §7/§17 : l'intégrité ne repose jamais sur l'UI seule).
+   */
+  addPlanEntries: (tenantId: string, tontineId: string, adhesionIds: string[], startPosition?: number) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine || tontine.withPurchase) return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
+      const existing = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id);
+      const minInsertable = existing.filter((item) => item.consumedByOccurrenceId).length + 1;
+      const maxInsertable = existing.length + 1;
+      if (startPosition !== undefined && (!Number.isInteger(startPosition) || startPosition < minInsertable || startPosition > maxInsertable)) {
+        return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
+      }
+      const insertAt = startPosition ?? maxInsertable;
+      const plannedAdhesionIds = new Set(existing.map((item) => item.adhesionId));
+      const toAdd: string[] = [];
+      for (const adhesionId of adhesionIds) {
+        const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
+        if (!adhesion || adhesion.tontineId !== tontineId || plannedAdhesionIds.has(adhesionId)) continue;
+        plannedAdhesionIds.add(adhesionId);
+        toAdd.push(adhesionId);
+      }
+      if (toAdd.length === 0) return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
+      existing.filter((item) => item.position >= insertAt).forEach((item) => { item.position += toAdd.length; });
+      const added = toAdd.map((adhesionId, index) => {
+        const plan: TontineBeneficiaryPlan = { id: uniqueId('PLN'), tenantId, tontineId, position: insertAt + index, adhesionId, consumedByOccurrenceId: null, cycleId: cycle.id };
+        tontineBeneficiaryPlans.push(plan);
+        return plan;
+      });
+      return { added, skipped: adhesionIds.length - toAdd.length };
+    }),
+
+  /**
+   * Attribution DIRECTE d'une position (refonte UX §3-§7 — remplace le
+   * glisser-déposer) — décale automatiquement les positions intermédiaires
+   * pour que la séquence reste 1..N sans trou ni doublon, en UNE SEULE
+   * opération cohérente (jamais d'aller-retour réseau par position
+   * intermédiaire, mandat §16/§18). Opère UNIQUEMENT sur les positions NON
+   * consommées du cycle courant (immuabilité du passé inchangée, mêmes
+   * garanties que `removePlanEntry`) et sur `adhesionId` (jamais `memberId`).
+   *
+   * `targetPosition` hors de l'intervalle des positions réordonnables
+   * [plus petite position non consommée, plus grande position du cycle], ou
+   * non entier : refus propre (`undefined`), jamais de position invalide
+   * créée — l'UI ne peut pas se reposer sur une correction silencieuse.
+   */
+  setPlanPosition: (tenantId: string, tontineId: string, planId: string, targetPosition: number) =>
+    mockRequest(() => {
+      if (!Number.isInteger(targetPosition)) return undefined;
+      const plan = getTenantScoped(tontineBeneficiaryPlans, (item) => item.id === planId, tenantId);
+      if (!plan || plan.tontineId !== tontineId || plan.consumedByOccurrenceId) return undefined;
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle || plan.cycleId !== cycle.id) return undefined;
+      const reorderable = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id && !item.consumedByOccurrenceId);
+      const minPosition = Math.min(...reorderable.map((item) => item.position));
+      const maxPosition = Math.max(...reorderable.map((item) => item.position));
+      if (targetPosition < minPosition || targetPosition > maxPosition) return undefined;
+      if (targetPosition !== plan.position) {
+        if (targetPosition < plan.position) reorderable.filter((item) => item.id !== plan.id && item.position >= targetPosition && item.position < plan.position).forEach((item) => { item.position += 1; });
+        else reorderable.filter((item) => item.id !== plan.id && item.position <= targetPosition && item.position > plan.position).forEach((item) => { item.position -= 1; });
+        plan.position = targetPosition;
+      }
+      return tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id).sort((a, b) => a.position - b.position);
+    }),
+
+  /**
+   * Retrait d'une position non encore consommée — une position déjà
+   * consommée par un Tour est immuable (retrait refusé), cohérent avec
+   * l'immuabilité du passé. Renumérote ensuite les positions suivantes du
+   * même cycle (mandat refonte UX Planification §12 : jamais de trou dans la
+   * numérotation après un retrait) — SANS RISQUE pour l'immuabilité des
+   * positions déjà consommées : `createOccurrence` ne consomme jamais que la
+   * plus petite position NON consommée (cf. plus bas), donc les positions
+   * consommées forment TOUJOURS un préfixe contigu {1..k} et les positions
+   * retirables sont TOUJOURS strictement supérieures à k — décrémenter les
+   * positions > à celle retirée ne peut donc jamais retoucher une position
+   * déjà consommée.
+   */
   removePlanEntry: (tenantId: string, planId: string) =>
     mockRequest(() => {
       const plan = getTenantScoped(tontineBeneficiaryPlans, (item) => item.id === planId, tenantId);
       if (!plan || plan.consumedByOccurrenceId) return undefined;
       const index = tontineBeneficiaryPlans.findIndex((item) => item.id === planId);
       tontineBeneficiaryPlans.splice(index, 1);
+      tontineBeneficiaryPlans
+        .filter((item) => item.tenantId === tenantId && item.tontineId === plan.tontineId && item.cycleId === plan.cycleId && item.position > plan.position)
+        .forEach((item) => { item.position -= 1; });
       return { removed: true } as const;
     }),
 
@@ -188,18 +453,20 @@ export const tontineOperationsService = {
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
       if (!tontine) return undefined;
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return undefined;
       const existing = tontineOccurrences.filter((item) => item.tontineId === tontineId);
       const nextNumber = existing.reduce((max, item) => Math.max(max, item.occurrenceNumber), 0) + 1;
-      const occurrence: TontineOccurrence = { id: uniqueId('OCC'), tenantId, tontineId, occurrenceNumber: nextNumber, date, status: 'PLANNED', createdAt: new Date().toISOString().slice(0, 10) };
+      const occurrence: TontineOccurrence = { id: uniqueId('OCC'), tenantId, tontineId, occurrenceNumber: nextNumber, date, status: 'PLANNED', createdAt: new Date().toISOString().slice(0, 10), cycleId: cycle.id };
       tontineOccurrences.push(occurrence);
 
       if (!tontine.withPurchase) {
         const nextPlan = tontineBeneficiaryPlans
-          .filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && !item.consumedByOccurrenceId)
+          .filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id && !item.consumedByOccurrenceId)
           .sort((a, b) => a.position - b.position)[0];
         if (nextPlan) {
           const amountDue = tontine.valueType === 'MONEY' ? (tontine.contributionAmount ?? 0) : (tontine.quantity ?? 0);
-          const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId: occurrence.id, adhesionId: nextPlan.adhesionId, amountDue, amountPaid: 0, paidAt: null };
+          const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId: occurrence.id, adhesionId: nextPlan.adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
           occurrenceBeneficiaries.push(beneficiary);
           nextPlan.consumedByOccurrenceId = occurrence.id;
         }
@@ -244,22 +511,99 @@ export const tontineOperationsService = {
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
       if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date)) return undefined;
       if (occurrenceBeneficiaries.some((item) => item.occurrenceId === occurrenceId && item.adhesionId === adhesionId)) return undefined;
-      const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId, adhesionId, amountDue, amountPaid: 0, paidAt: null };
+      if (hasAlreadyBenefitedInCurrentCycle(tenantId, tontine.id, adhesionId)) return undefined;
+      const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId, adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
       occurrenceBeneficiaries.push(beneficiary);
+      writeAuditEvent({ tenantId, action: 'tontines.beneficiaryAdded', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, context: { adhesionId, occurrenceId, amountDue: String(amountDue) } });
       return beneficiary;
+    }),
+
+  /**
+   * Ajout groupé de bénéficiaires (mandat refonte « Tours » — sélection
+   * multiple via checkbox puis « Ajouter → ») — UNE opération batch, jamais
+   * N appels indépendants depuis l'UI. Réutilise strictement
+   * `addOccurrenceBeneficiary` par adhésion (même règles d'éligibilité,
+   * même historisation). `amountDue` par défaut = montant de cotisation de
+   * la Tontine (jamais une nouvelle définition de montant).
+   */
+  addOccurrenceBeneficiaries: (tenantId: string, occurrenceId: string, adhesionIds: string[]) =>
+    mockRequest(() => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      const tontine = occurrence ? getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId) : undefined;
+      if (!occurrence || !tontine) return { added: [] as OccurrenceBeneficiary[], skipped: adhesionIds.length };
+      const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
+      const added: OccurrenceBeneficiary[] = [];
+      let skipped = 0;
+      for (const adhesionId of adhesionIds) {
+        if (occurrence.status === 'REALIZED' || !tontine.withPurchase) { skipped += 1; continue; }
+        const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
+        if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date) || occurrenceBeneficiaries.some((item) => item.occurrenceId === occurrenceId && item.adhesionId === adhesionId)) { skipped += 1; continue; }
+        if (hasAlreadyBenefitedInCurrentCycle(tenantId, tontine.id, adhesionId)) { skipped += 1; continue; }
+        const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId, adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
+        occurrenceBeneficiaries.push(beneficiary);
+        writeAuditEvent({ tenantId, action: 'tontines.beneficiaryAdded', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, context: { adhesionId, occurrenceId, amountDue: String(amountDue), batch: 'true' } });
+        added.push(beneficiary);
+      }
+      return { added, skipped };
+    }),
+
+  /**
+   * Retrait d'un bénéficiaire (mandat refonte « Tours » — « ← Enlever ») —
+   * additif dans son historisation (jamais une suppression silencieuse de
+   * l'historique) : refuse si le Tour est déjà RÉALISÉ, si la Tontine est
+   * sans-achat (bénéficiaire issu du Plan, retrait via la Planification
+   * uniquement — jamais deux voies de retrait pour la même donnée), ou si
+   * une réception a déjà été enregistrée (`amountPaid > 0`, immuabilité
+   * d'un versement déjà effectué).
+   */
+  removeOccurrenceBeneficiary: (tenantId: string, beneficiaryId: string) =>
+    mockRequest(() => {
+      const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+      if (!beneficiary || beneficiary.amountPaid > 0) return undefined;
+      const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.occurrenceId);
+      if (!occurrence || occurrence.status === 'REALIZED') return undefined;
+      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+      if (!tontine || !tontine.withPurchase) return undefined;
+      const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
+      const index = occurrenceBeneficiaries.findIndex((item) => item.id === beneficiaryId);
+      occurrenceBeneficiaries.splice(index, 1);
+      writeAuditEvent({ tenantId, action: 'tontines.beneficiaryRemoved', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion?.memberName ?? beneficiary.adhesionId}`, sensitive: false, correlationId: occurrence.id, context: { adhesionId: beneficiary.adhesionId, occurrenceId: occurrence.id } });
+      return { removed: true } as const;
+    }),
+
+  /** Retrait groupé — même règle par bénéficiaire que `removeOccurrenceBeneficiary`, UNE opération batch. */
+  removeOccurrenceBeneficiaries: (tenantId: string, beneficiaryIds: string[]) =>
+    mockRequest(() => {
+      let removed = 0;
+      for (const beneficiaryId of beneficiaryIds) {
+        const beneficiary = getTenantScoped(occurrenceBeneficiaries, (item) => item.id === beneficiaryId, tenantId);
+        if (!beneficiary || beneficiary.amountPaid > 0) continue;
+        const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.occurrenceId);
+        if (!occurrence || occurrence.status === 'REALIZED') continue;
+        const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+        if (!tontine || !tontine.withPurchase) continue;
+        const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
+        const index = occurrenceBeneficiaries.findIndex((item) => item.id === beneficiaryId);
+        occurrenceBeneficiaries.splice(index, 1);
+        writeAuditEvent({ tenantId, action: 'tontines.beneficiaryRemoved', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion?.memberName ?? beneficiary.adhesionId}`, sensitive: false, correlationId: occurrence.id, context: { adhesionId: beneficiary.adhesionId, occurrenceId: occurrence.id, batch: 'true' } });
+        removed += 1;
+      }
+      return { removed, skipped: beneficiaryIds.length - removed };
     }),
 
   /**
    * Enregistre un versement de contribution — journal-lié : poste
    * immédiatement la Transaction Finance correspondante, best-effort comme
    * partout ailleurs dans ce module (n'annule jamais l'enregistrement
-   * métier si `insertTransaction` refuse).
+   * métier si `insertTransaction` refuse). Refuse sur un Tour déjà RÉALISÉ
+   * (immuabilité du passé, cohérent avec `addOccurrenceBeneficiary`/
+   * `recordReception`).
    */
   recordContribution: (tenantId: string, occurrenceId: string, adhesionId: string, amount: number) =>
     mockRequest(() => {
       if (!(amount > 0)) return undefined;
       const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
-      if (!occurrence) return undefined;
+      if (!occurrence || occurrence.status === 'REALIZED') return undefined;
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
       if (!adhesion || adhesion.tontineId !== occurrence.tontineId || !isAdhesionActiveAt(adhesion, occurrence.date)) return undefined;
       const contribution: TontineContribution = { id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId, amount, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name };
@@ -276,10 +620,124 @@ export const tontineOperationsService = {
     mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId)),
 
   /**
+   * Montant de cotisation attendu par adhésion pour ce Tour — dérivé
+   * exclusivement de la configuration de la Tontine (`contributionAmount`
+   * MONEY / `quantity` GOODS), jamais un second champ dupliqué.
+   */
+  getExpectedContributionAmount: (tontine: { valueType: 'MONEY' | 'GOODS'; contributionAmount?: number; quantity?: number }): number =>
+    tontine.valueType === 'MONEY' ? (tontine.contributionAmount ?? 0) : (tontine.quantity ?? 0),
+
+  /**
+   * Statut de cotisation « ON/OFF » par adhérent pour ce Tour — dérivé à
+   * 100% des `TontineContribution` déjà existants (une désactivation
+   * (`setContributionPayment(..., false)`) enregistre une ligne négative,
+   * jamais une suppression physique de l'historique) : `amountPaid` est la
+   * somme nette, jamais un second compteur stocké séparément.
+   */
+  listContributionStatuses: (tenantId: string, occurrenceId: string) =>
+    mockRequest(() => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence) return [];
+      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+      if (!tontine) return [];
+      const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
+      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date));
+      return eligibleAdhesions.map((adhesion) => {
+        const netPaid = tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0);
+        const amountPaid = Math.max(0, netPaid);
+        return { adhesionId: adhesion.id, memberId: adhesion.memberId, memberName: adhesion.memberName, amountDue, amountPaid, paid: amountPaid >= amountDue && amountDue > 0 };
+      });
+    }),
+
+  /**
+   * Bascule ON/OFF d'une cotisation (mandat refonte « Tours ») — RÉUTILISE
+   * le mécanisme financier existant (`insertTransaction` via
+   * `postTontineTransaction`), jamais un simple champ local modifié :
+   *
+   * - ON  : poste la Cotisation manquante (`amountDue - amountPaid` déjà
+   *   réglé), exactement comme `recordContribution` — jamais une
+   *   ressaisie manuelle du montant, toujours celui de la Tontine.
+   * - OFF : poste une Cotisation NÉGATIVE d'annulation pour le montant
+   *   déjà réglé, plus une Transaction Finance compensatoire (`debit`)
+   *   miroir exact du `credit` initial. AUCUNE ligne historique n'est
+   *   jamais supprimée physiquement — l'annulation est additive, comme
+   *   partout ailleurs dans ce module.
+   *
+   * Refuse sur un Tour déjà RÉALISÉ (immuabilité). Chaque bascule est
+   * historisée (`writeAuditEvent`) avec l'ancien/le nouveau montant réglé.
+   */
+  setContributionPayment: (tenantId: string, occurrenceId: string, adhesionId: string, paid: boolean) =>
+    mockRequest(() => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence || occurrence.status === 'REALIZED') return undefined;
+      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+      if (!tontine) return undefined;
+      const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
+      if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date)) return undefined;
+      const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
+      const currentPaid = Math.max(0, tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesionId).reduce((sum, item) => sum + item.amount, 0));
+      const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+      const description = `Cotisation tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`;
+
+      if (paid) {
+        const missing = amountDue - currentPaid;
+        if (missing <= 0) return { adhesionId, amountDue, amountPaid: currentPaid, paid: true };
+        tontineContributions.push({ id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId, amount: missing, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name });
+        if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: missing, direction: 'credit', category: 'EPARGNE', description });
+        writeAuditEvent({ tenantId, action: 'tontines.contributionPaymentToggled', resourceType: 'tontineContribution', resourceId: adhesionId, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, before: { amountPaid: String(currentPaid), paid: 'false' }, after: { amountPaid: String(amountDue), paid: 'true' }, context: { adhesionId, occurrenceId, amount: missing } });
+        return { adhesionId, amountDue, amountPaid: amountDue, paid: true };
+      }
+
+      if (currentPaid <= 0) return { adhesionId, amountDue, amountPaid: 0, paid: false };
+      tontineContributions.push({ id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId, amount: -currentPaid, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name });
+      if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: currentPaid, direction: 'debit', category: 'EPARGNE', description: `Annulation — ${description}` });
+      writeAuditEvent({ tenantId, action: 'tontines.contributionPaymentToggled', resourceType: 'tontineContribution', resourceId: adhesionId, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: true, correlationId: occurrenceId, before: { amountPaid: String(currentPaid), paid: 'true' }, after: { amountPaid: '0', paid: 'false' }, context: { adhesionId, occurrenceId, amount: currentPaid } });
+      return { adhesionId, amountDue, amountPaid: 0, paid: false };
+    }),
+
+  /**
+   * « Marquer tous comme payés » — UNE opération métier batch (mandat §11 :
+   * jamais N actions UI indépendantes), réutilise exactement
+   * `setContributionPayment(..., true)` par adhésion éligible non encore
+   * intégralement réglée. Jamais de doublon (les adhésions déjà réglées
+   * sont ignorées, `missing <= 0`).
+   */
+  markAllContributionsPaid: (tenantId: string, occurrenceId: string) =>
+    mockRequest(() => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence || occurrence.status === 'REALIZED') return undefined;
+      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+      if (!tontine) return undefined;
+      const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
+      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date));
+      let updated = 0;
+      for (const adhesion of eligibleAdhesions) {
+        const currentPaid = Math.max(0, tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0));
+        if (currentPaid >= amountDue && amountDue > 0) continue;
+        const missing = amountDue - currentPaid;
+        if (missing <= 0) continue;
+        tontineContributions.push({ id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId: adhesion.id, amount: missing, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name });
+        const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+        if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: missing, direction: 'credit', category: 'EPARGNE', description: `Cotisation tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}` });
+        writeAuditEvent({ tenantId, action: 'tontines.contributionPaymentToggled', resourceType: 'tontineContribution', resourceId: adhesion.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, before: { amountPaid: String(currentPaid), paid: 'false' }, after: { amountPaid: String(amountDue), paid: 'true' }, context: { adhesionId: adhesion.id, occurrenceId, amount: missing, batch: 'true' } });
+        updated += 1;
+      }
+      return { updated };
+    }),
+
+  /**
    * Réception d'un bénéficiaire — additive (jamais un remplacement). Refuse
    * si le Tour est déjà RÉALISÉ (immuabilité). `purchaseAmount`
-   * (avec-achat uniquement) poste EXCLUSIVEMENT vers la caisse « Achat
-   * tontine », jamais mélangé au montant net posté vers la caisse générale.
+   * (avec-achat uniquement) poste EXCLUSIVEMENT vers la caisse système
+   * TONTINE_PURCHASE, jamais mélangé au montant net posté vers la caisse
+   * générale.
+   *
+   * DERNIER REMPART — `resolveTontinePurchaseAccount` s'auto-répare
+   * désormais (voir son commentaire) et ne renvoie `undefined` que si le
+   * tenant lui-même n'a aucun compte système résolvable (corruption de
+   * données) : dans ce cas précis, TOUTE l'opération est refusée AVANT toute
+   * mutation — jamais un enregistrement partiel, jamais `purchaseAmount`
+   * perdu silencieusement, jamais un faux succès.
    */
   recordReception: (tenantId: string, beneficiaryId: string, amount: number, purchaseAmount?: number) =>
     mockRequest(() => {
@@ -288,16 +746,31 @@ export const tontineOperationsService = {
       if (!beneficiary) return undefined;
       const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.occurrenceId);
       if (!occurrence || occurrence.status === 'REALIZED') return undefined;
+      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+      if (tontine?.withPurchase && purchaseAmount && purchaseAmount > 0 && !resolveTontinePurchaseAccount(tenantId, occurrence.tontineId)) return undefined;
+      const statusBefore = getBeneficiaryPaymentStatus(beneficiary);
+      const amountPaidBefore = beneficiary.amountPaid;
+      const amountPurchasedBefore = beneficiary.amountPurchased;
       beneficiary.amountPaid += amount;
+      /** Cumul additif, jamais un remplacement — même principe que `amountPaid` (mandat « montant d'achat par bénéficiaire »). Toujours 0 hors avec-achat. */
+      const appliedPurchaseAmount = tontine?.withPurchase && purchaseAmount && purchaseAmount > 0 ? purchaseAmount : 0;
+      beneficiary.amountPurchased += appliedPurchaseAmount;
       beneficiary.paidAt = new Date().toISOString().slice(0, 10);
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
-      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
       if (adhesion && tontine?.valueType === 'MONEY') {
         const account = resolveTontineAccount(tenantId, occurrence.tontineId);
         if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount, direction: 'debit', category: 'AUTRES', subcategory: 'DISTRIBUTION', description: `Réception tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`.trim() });
         const purchaseAccount = resolveTontinePurchaseAccount(tenantId, occurrence.tontineId);
         if (purchaseAccount) postTontineTransaction(tenantId, { account: purchaseAccount, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: purchaseAmount, direction: 'credit', category: 'AUTRES', subcategory: 'AUTRE', description: `Achat tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`.trim() });
       }
+      writeAuditEvent({
+        tenantId, action: 'tontines.beneficiaryPaymentRecorded', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id,
+        resourceLabel: `${tontine?.name ?? ''} — tour ${occurrence.occurrenceNumber} — ${adhesion?.memberName ?? beneficiary.adhesionId}`.trim(),
+        sensitive: true, correlationId: occurrence.id,
+        before: { amountPaid: String(amountPaidBefore), amountPurchased: String(amountPurchasedBefore), status: statusBefore },
+        after: { amountPaid: String(beneficiary.amountPaid), amountPurchased: String(beneficiary.amountPurchased), status: getBeneficiaryPaymentStatus(beneficiary) },
+        context: { adhesionId: beneficiary.adhesionId, occurrenceId: occurrence.id, beneficiaryId: beneficiary.id, amount, purchaseAmount: appliedPurchaseAmount },
+      });
       return beneficiary;
     }),
 
@@ -355,9 +828,61 @@ export const tontineOperationsService = {
       return remainder;
     }),
 
+  // --- Cycle (notion SYSTÈME — mandat « recommencement automatique de la Tontine ») ---
+
+  /**
+   * État du cycle courant, pour piloter l'UI (bouton « + Ajouter un tour »
+   * vs message + « Démarrer un nouveau cycle », mandat §8/§9) — jamais un
+   * numéro de cycle exposé, uniquement `complete`.
+   */
+  getCycleStatus: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      return { complete: isCycleComplete(tenantId, tontineId) };
+    }),
+
+  /** État de la planification du cycle courant (mandat « onglet par défaut selon adhérents et planification ») — pilote UNIQUEMENT le choix de l'onglet par défaut à l'ouverture de la Tontine, réutilise `isPlanningComplete` (seule définition), jamais un second calcul. */
+  getPlanningStatus: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      return { complete: isPlanningComplete(tenantId, tontineId) };
+    }),
+
+  /**
+   * « Démarrer un nouveau cycle » (mandat §11) — L'UTILISATEUR NE FOURNIT
+   * AUCUNE INFORMATION : re-vérifie côté service (jamais seulement l'UI) que
+   * toutes les participations éligibles ont bénéficié, refuse sinon (double
+   * rempart avec `getCycleStatus`, contre une désynchronisation UI/service).
+   * Clôture le cycle courant (`CLOSED`, `closedAt`), crée le suivant
+   * (`OPEN`, `cycleNumber + 1`) — jamais un remplacement, toujours un NOUVEL
+   * enregistrement, l'ancien restant intact et consultable. Ne touche
+   * JAMAIS aux Tours/bénéficiaires/reliquats/transactions déjà existants
+   * (mandat §16/§17 : aucune refonte comptable ici).
+   */
+  startNewCycle: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      const currentCycle = getCurrentCycle(tenantId, tontineId);
+      if (!currentCycle) return undefined;
+      if (!isCycleComplete(tenantId, tontineId)) return undefined;
+      currentCycle.status = 'CLOSED';
+      currentCycle.closedAt = new Date().toISOString();
+      const newCycle: TontineCycle = { id: uniqueId('CYC'), tenantId, tontineId, cycleNumber: currentCycle.cycleNumber + 1, status: 'OPEN', startedAt: new Date().toISOString(), closedAt: null };
+      tontineCycles.push(newCycle);
+      writeAuditEvent({ tenantId, action: 'tontines.cycleStarted', resourceType: 'tontineCycle', resourceId: newCycle.id, resourceLabel: tontine.name, sensitive: false, correlationId: tontineId, before: { previousCycleId: currentCycle.id }, after: { newCycleId: newCycle.id } });
+      return newCycle;
+    }),
+
   // --- Vues transverses (toutes tontines confondues) ---
 
   listAllAdhesions: (tenantId: string) => mockRequest(() => tontineAdhesions.filter((item) => item.tenantId === tenantId)),
   listAllOccurrences: (tenantId: string) => mockRequest(() => tontineOccurrences.filter((item) => item.tenantId === tenantId).sort((a, b) => a.date.localeCompare(b.date))),
   listAllContributions: (tenantId: string) => mockRequest(() => tontineContributions.filter((item) => item.tenantId === tenantId)),
+  /** Vue transverse (mandat « dashboard Tontines ») — sert à composer « Prochains Tours » en UNE seule requête, jamais un fetch par Tour. */
+  listAllBeneficiaries: (tenantId: string) => mockRequest(() => occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId)),
+  /** Vue transverse (mandat « dashboard Tontines ») — sert à composer la colonne « Reliquats » (somme des reliquats OPEN par Tontine) en UNE seule requête, jamais un fetch par Tontine. */
+  listAllRemainders: (tenantId: string) => mockRequest(() => tontineRemainders.filter((item) => item.tenantId === tenantId)),
 };

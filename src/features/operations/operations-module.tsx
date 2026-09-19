@@ -30,7 +30,9 @@ import type { WorkflowDelegation } from '@/mocks/operations/delegations';
 import type { Notification, NotificationPriority } from '@/mocks/operations/notifications';
 import type { DocumentRecord, DocumentCategory, DocumentEntityType } from '@/mocks/operations/documents';
 import type { TableColumn, StatusTone } from '@/types/ui';
-import { formatDate, formatFCFA, formatNumber } from '@/lib/utils';
+import { formatDate, formatNumber } from '@/lib/utils';
+import { formatCurrency } from '@/constants/currencies';
+import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 
 type T = (section: 'operations' | 'nav', key: string, values?: Record<string, string>) => string;
 
@@ -147,6 +149,7 @@ function WorkflowsHub({ t }: { t: T }) {
 
 function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const { id: requestId = '' } = useParams(); const { currentTenant } = useTenant(); const { user } = usePermissions(); const queryClient = useQueryClient(); const navigate = useNavigate();
+  const currency = useOrganizationCurrency();
   const { data: request, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.operations.workflowRequest(requestId), currentTenant.id], queryFn: () => workflowService.getRequest(currentTenant.id, requestId) });
   const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'return' | 'cancel' | null>(null);
   const [comment, setComment] = useState('');
@@ -282,7 +285,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           <Info label={t('operations', 'entity')} value={`${request.entityLabel} (${t('operations', ENTITY_KEY[request.entityType])})`} icon={DomainIcon} />
           <Info label={t('operations', 'requestedBy')} value={request.requestedBy} icon={Users2} />
           <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt, locale)} icon={ClipboardList} />
-          {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatFCFA(request.amount, locale)} icon={Landmark} />}
+          {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatCurrency(request.amount, currency, locale)} icon={Landmark} />}
           {request.justification && <Info label={t('operations', 'justification')} value={request.justification} icon={FileText} />}
           {request.warnings && request.warnings.length > 0 && <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
             <p className="mb-1 font-semibold">{t('operations', 'reopenWarningsLabel')}</p>

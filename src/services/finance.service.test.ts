@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { financeService } from './finance.service';
+import { financeService, ensureSystemAccount, resolveSystemAccount, systemAccountMigrationConflicts } from './finance.service';
 import { fiscalMeetingId } from '@/mocks/settings/meeting-schedule';
-import { accounts, normalizeAccountLabel } from '@/mocks/finance/accounts';
+import { accounts, isSystemAccount, normalizeAccountLabel, type AccountRecord } from '@/mocks/finance/accounts';
 
 describe('financeService — Accounts', () => {
   it('ALLOW: listAccounts returns only accounts of the requesting tenant', async () => {
@@ -682,5 +682,96 @@ describe('financeService — unicité du libellé de caisse (règle métier norm
     expect(normalizeAccountLabel(ac002!.title)).toBe(normalizeAccountLabel(ac009!.title));
     // Le seed n'est pas réécrit : correction métier humaine requise (renommer AC-009,
     // ex. « Épargne volontaire », ou fusionner les deux caisses si doublon réel).
+  });
+});
+
+describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robustifier Achat tontine »)', () => {
+  it('CRÉATION : chaque tenant connu possède déjà son compte système TONTINE_PURCHASE (couverture immédiate, pas seulement T-001/T-002)', () => {
+    for (const tenantId of ['T-001', 'T-002', 'T-003', 'T-004', 'T-005']) {
+      const account = resolveSystemAccount(tenantId, 'TONTINE_PURCHASE');
+      expect(account.tenantId).toBe(tenantId);
+      expect(account.systemCode).toBe('TONTINE_PURCHASE');
+      expect(isSystemAccount(account)).toBe(true);
+    }
+  });
+
+  it('IDEMPOTENCE : des appels répétés (y compris pour un tenant qui n’avait encore aucune caisse « Achat tontine ») ne créent jamais de doublon', () => {
+    const first = ensureSystemAccount('T-003', 'TONTINE_PURCHASE');
+    const second = ensureSystemAccount('T-003', 'TONTINE_PURCHASE');
+    const third = resolveSystemAccount('T-003', 'TONTINE_PURCHASE');
+    expect(second.id).toBe(first.id);
+    expect(third.id).toBe(first.id);
+    expect(accounts.filter((account) => account.tenantId === 'T-003' && account.systemCode === 'TONTINE_PURCHASE')).toHaveLength(1);
+  });
+
+  it('MIGRATION : les caisses historiques AC-015 (T-001) / AC-016 (T-002), nommées « Achat tontine » avant ce chantier, ont été ADOPTÉES par systemCode — jamais dupliquées', () => {
+    expect(resolveSystemAccount('T-001', 'TONTINE_PURCHASE').id).toBe('AC-015');
+    expect(resolveSystemAccount('T-002', 'TONTINE_PURCHASE').id).toBe('AC-016');
+  });
+
+  it('IDENTIFICATION TECHNIQUE : la résolution repose sur systemCode, jamais sur le libellé — un libellé incohérent (hors API, ex. corruption) ne casse pas la résolution', () => {
+    const account = resolveSystemAccount('T-003', 'TONTINE_PURCHASE');
+    const originalTitle = account.title;
+    account.title = 'Libellé incohérent (jamais atteignable via updateAccount, qui protège ce compte)';
+    try {
+      expect(resolveSystemAccount('T-003', 'TONTINE_PURCHASE').id).toBe(account.id);
+    } finally {
+      account.title = originalTitle;
+    }
+  });
+
+  it('ISOLATION MULTI-TENANT : chaque tenant résout un compte système DISTINCT, jamais celui d’un autre', () => {
+    const ids = new Set(['T-001', 'T-002', 'T-003', 'T-004', 'T-005'].map((tenantId) => resolveSystemAccount(tenantId, 'TONTINE_PURCHASE').id));
+    expect(ids.size).toBe(5);
+  });
+
+  it('AMBIGUÏTÉ DE MIGRATION : plusieurs comptes candidats pour un même tenant → aucune adoption arbitraire, l’ambiguïté est tracée, un compte système propre est tout de même créé', () => {
+    const conflictTenantId = `T-TEST-CONFLICT-${Date.now()}`;
+    const dup1: AccountRecord = { id: `AC-TEST-DUP-1-${Date.now()}`, tenantId: conflictTenantId, accountNumber: 'TEST-DUP-1', title: 'achat TONTINE', type: 'LIBRE', amount: null, description: '', openingBalance: 0, tenantName: conflictTenantId, status: 'active', openedOn: '2026-01-01', memberIds: [] };
+    const dup2: AccountRecord = { ...dup1, id: `AC-TEST-DUP-2-${Date.now()}`, accountNumber: 'TEST-DUP-2' };
+    accounts.push(dup1, dup2);
+    const conflictsBefore = systemAccountMigrationConflicts.length;
+    let created: AccountRecord | undefined;
+    try {
+      created = ensureSystemAccount(conflictTenantId, 'TONTINE_PURCHASE');
+      expect(created.systemCode).toBe('TONTINE_PURCHASE');
+      expect(created.id).not.toBe(dup1.id);
+      expect(created.id).not.toBe(dup2.id); // jamais un choix arbitraire parmi les candidats ambigus
+      expect(systemAccountMigrationConflicts.length).toBe(conflictsBefore + 1);
+      expect(systemAccountMigrationConflicts.at(-1)).toMatchObject({ tenantId: conflictTenantId, systemCode: 'TONTINE_PURCHASE', candidateAccountIds: [dup1.id, dup2.id] });
+    } finally {
+      for (const id of [dup1.id, dup2.id, created?.id]) {
+        const index = accounts.findIndex((account) => account.id === id);
+        if (index >= 0) accounts.splice(index, 1);
+      }
+      systemAccountMigrationConflicts.length = conflictsBefore;
+    }
+  });
+
+  it('PROTECTION RENOMMAGE : updateAccount refuse un renommage RÉEL du compte système, mais autorise un ré-enregistrement du même libellé (mandat §10/§26 : ne pas casser l’API pour les comptes ordinaires)', async () => {
+    const account = resolveSystemAccount('T-003', 'TONTINE_PURCHASE');
+    const refused = await financeService.updateAccount('T-003', account.id, { title: 'Caisse générale', type: 'LIBRE', amount: null, description: account.description });
+    expect(refused).toBeNull();
+    expect(accounts.find((item) => item.id === account.id)?.title).toBe('Achat tontine');
+    const allowed = await financeService.updateAccount('T-003', account.id, { title: account.title, type: 'LIBRE', amount: null, description: `Description mise à jour ${Date.now()}` });
+    expect(allowed).toBeTruthy(); // même libellé → jamais un renommage réel, jamais bloqué inutilement
+  });
+
+  it('PROTECTION SUPPRESSION/DÉSACTIVATION : deleteAccount refuse explicitement pour un compte système — jamais un succès silencieux, jamais désactivé', async () => {
+    const account = resolveSystemAccount('T-004', 'TONTINE_PURCHASE');
+    const result = await financeService.deleteAccount('T-004', account.id);
+    expect(result).toMatchObject({ deleted: false, deactivated: false, systemProtected: true });
+    const stillThere = accounts.find((item) => item.id === account.id);
+    expect(stillThere).toBeTruthy();
+    expect(stillThere?.status).toBe('active');
+  });
+
+  it('NON-RÉGRESSION : un compte ORDINAIRE reste renommable et supprimable/désactivable exactement comme avant', async () => {
+    const created = await financeService.createAccount('T-001', 'Coopérative Sutura', { title: `Caisse ordinaire ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    expect(isSystemAccount(created!)).toBe(false);
+    const renamed = await financeService.updateAccount('T-001', created!.id, { title: `Caisse renommée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    expect(renamed).toBeTruthy();
+    const deleted = await financeService.deleteAccount('T-001', created!.id);
+    expect(deleted).toMatchObject({ deleted: true, deactivated: false });
   });
 });

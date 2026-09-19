@@ -10,9 +10,20 @@
  *           → TontineBeneficiaryPlan[] (direct, sans-achat uniquement)
  *           → TontineContribution (occurrenceId, adhesionId, amount — journal-lié)
  *
- * AUCUNE notion de Période/Cycle n'existe plus entre Tontine et Tour — ni
- * sous ce nom, ni sous un synonyme (Cycle/Session/Campagne/Séquence/
- * Exercice) : la relation est directement Tontine → Tour et Tontine → Plan.
+ * AUCUNE notion de Période n'existe entre Tontine et Tour — ni sous ce nom,
+ * ni sous un synonyme (Session/Campagne/Exercice) : la relation reste
+ * directement Tontine → Tour et Tontine → Plan.
+ *
+ * EXCEPTION explicite et volontaire (mandat « recommencement automatique de
+ * la Tontine ») : `TontineCycle` — une notion SYSTÈME, jamais gérée par
+ * l'utilisateur (aucun numéro de cycle saisi/choisi/affiché dans une action),
+ * qui permet à une Tontine de recommencer une nouvelle séquence quand toutes
+ * les participations ont déjà bénéficié d'un Tour. Elle ne porte ni date de
+ * début/fin de Tontine ni durée — seul le Tour porte une date, inchangé.
+ * `TontineOccurrence.cycleId`/`TontineBeneficiaryPlan.cycleId` rattachent
+ * Tours et positions de Plan à leur cycle, sans rien réintroduire de la
+ * Période supprimée (pas de champ date/fréquence sur `TontineCycle`).
+ *
  * La Tontine ne porte AUCUNE date propre (ni `startDate` ni équivalent) :
  * elle définit les RÈGLES (fréquence, montant, avec-achat...), jamais un
  * événement daté — seul le Tour (`TontineOccurrence.date`, obligatoire)
@@ -87,6 +98,8 @@ export type OccurrenceStatus = 'PLANNED' | 'REALIZED';
  * Tour — l'unité opérationnelle de la Tontine, rattachée DIRECTEMENT à elle
  * (plus de Période intermédiaire). `occurrenceNumber` reste l'ordre
  * chronologique des tours de CETTE Tontine (jamais réinitialisé).
+ * `cycleId` rattache le Tour à son `TontineCycle` (notion SYSTÈME, cf.
+ * plus bas) — jamais réattribué une fois créé (immuabilité du passé).
  */
 export type TontineOccurrence = {
   id: string;
@@ -96,12 +109,16 @@ export type TontineOccurrence = {
   date: string;
   status: OccurrenceStatus;
   createdAt: string;
+  cycleId: string;
 };
 
 /**
  * Une ligne PAR bénéficiaire — jamais une chaîne concaténée de plusieurs
  * noms. `amountDue`/`amountPaid` individuellement stockés (pas de champ
- * « montant total » partagé).
+ * « montant total » partagé). `amountPurchased` — MONEY + `withPurchase`
+ * uniquement, toujours 0 sinon — cumule les `purchaseAmount` déjà reversés à
+ * la caisse système « Achat tontine » pour CE bénéficiaire (additif, même
+ * principe que `amountPaid`, jamais un remplacement).
  */
 export type OccurrenceBeneficiary = {
   id: string;
@@ -110,6 +127,7 @@ export type OccurrenceBeneficiary = {
   adhesionId: string;
   amountDue: number;
   amountPaid: number;
+  amountPurchased: number;
   paidAt: string | null;
 };
 
@@ -131,6 +149,37 @@ export type TontineBeneficiaryPlan = {
   position: number;
   adhesionId: string;
   consumedByOccurrenceId: string | null;
+  /** Cycle SYSTÈME auquel cette position appartient (cf. `TontineCycle` plus bas) — une position d'un ancien cycle reste immuable, jamais réutilisée par le cycle suivant. */
+  cycleId: string;
+};
+
+export type TontineCycleStatus = 'OPEN' | 'CLOSED';
+
+/**
+ * Cycle — notion SYSTÈME (mandat « recommencement automatique de la
+ * Tontine ») représentant UNE séquence complète : une participation
+ * (`TontineAdhesion.id`, jamais `memberId`) ne peut bénéficier qu'UNE SEULE
+ * fois par cycle. Le nombre de Tours d'un cycle n'est JAMAIS prédéfini — la
+ * fin d'un cycle est uniquement constatée quand toutes les participations
+ * éligibles ont déjà bénéficié d'un Tour (cf. `isCycleComplete` dans
+ * `tontine-operations.service.ts`), jamais après un nombre fixe de Tours.
+ *
+ * Un seul cycle `OPEN` (« courant ») par Tontine à la fois. `cycleNumber`
+ * est une information purement technique/interne — jamais affichée dans une
+ * action utilisateur ni saisie par lui (mandat §1/§12). Démarrer un nouveau
+ * cycle CLÔTURE le précédent (`CLOSED`, `closedAt` renseigné) et EN CRÉE un
+ * nouveau `OPEN` — l'historique (Tours, bénéficiaires, reliquats,
+ * transactions) de l'ancien cycle reste intact et consultable, jamais
+ * supprimé/déplacé/fusionné.
+ */
+export type TontineCycle = {
+  id: string;
+  tenantId: string;
+  tontineId: string;
+  cycleNumber: number;
+  status: TontineCycleStatus;
+  startedAt: string;
+  closedAt: string | null;
 };
 
 export type RemainderOrigin = 'UNDERDISTRIBUTED_POOL';
@@ -195,22 +244,36 @@ export const tontineAdhesions: TontineAdhesion[] = [
   { id: 'ADH-008', tenantId: 'T-001', tontineId: 'TON-004', memberId: 'M-018', memberName: 'Coumba Thiam', joinedAt: '2026-01-01', leftAt: null, status: 'active' },
 ];
 
+/**
+ * Cycle système initial (« cycle 1 ») de chaque Tontine seed — créé ici pour
+ * que les données historiques existantes ne perdent jamais leur cohérence
+ * (mandat « ne supprime aucune donnée existante ») : tout Tour/Plan seed
+ * ci-dessous rattaché à cette Tontine référence CE cycle.
+ */
+export const tontineCycles: TontineCycle[] = [
+  { id: 'CYC-001', tenantId: 'T-002', tontineId: 'TON-001', cycleNumber: 1, status: 'OPEN', startedAt: '2025-01-15', closedAt: null },
+  { id: 'CYC-002', tenantId: 'T-005', tontineId: 'TON-002', cycleNumber: 1, status: 'OPEN', startedAt: '2025-03-20', closedAt: null },
+  { id: 'CYC-003', tenantId: 'T-003', tontineId: 'TON-003', cycleNumber: 1, status: 'OPEN', startedAt: '2024-11-10', closedAt: null },
+  { id: 'CYC-004', tenantId: 'T-001', tontineId: 'TON-004', cycleNumber: 1, status: 'OPEN', startedAt: '2024-06-01', closedAt: null },
+  { id: 'CYC-005', tenantId: 'T-004', tontineId: 'TON-005', cycleNumber: 1, status: 'OPEN', startedAt: '2025-05-05', closedAt: null },
+];
+
 export const tontineOccurrences: TontineOccurrence[] = [
-  { id: 'OCC-001', tenantId: 'T-002', tontineId: 'TON-001', occurrenceNumber: 1, date: '2026-06-20', status: 'REALIZED', createdAt: '2026-06-15' },
-  { id: 'OCC-002', tenantId: 'T-002', tontineId: 'TON-001', occurrenceNumber: 2, date: '2026-07-20', status: 'PLANNED', createdAt: '2026-07-01' },
-  { id: 'OCC-003', tenantId: 'T-005', tontineId: 'TON-002', occurrenceNumber: 1, date: '2026-08-15', status: 'PLANNED', createdAt: '2026-08-01' },
-  { id: 'OCC-004', tenantId: 'T-001', tontineId: 'TON-004', occurrenceNumber: 1, date: '2026-06-01', status: 'PLANNED', createdAt: '2026-06-01' },
+  { id: 'OCC-001', tenantId: 'T-002', tontineId: 'TON-001', occurrenceNumber: 1, date: '2026-06-20', status: 'REALIZED', createdAt: '2026-06-15', cycleId: 'CYC-001' },
+  { id: 'OCC-002', tenantId: 'T-002', tontineId: 'TON-001', occurrenceNumber: 2, date: '2026-07-20', status: 'PLANNED', createdAt: '2026-07-01', cycleId: 'CYC-001' },
+  { id: 'OCC-003', tenantId: 'T-005', tontineId: 'TON-002', occurrenceNumber: 1, date: '2026-08-15', status: 'PLANNED', createdAt: '2026-08-01', cycleId: 'CYC-002' },
+  { id: 'OCC-004', tenantId: 'T-001', tontineId: 'TON-004', occurrenceNumber: 1, date: '2026-06-01', status: 'PLANNED', createdAt: '2026-06-01', cycleId: 'CYC-004' },
 ];
 
 export const occurrenceBeneficiaries: OccurrenceBeneficiary[] = [
-  { id: 'TB-001', tenantId: 'T-002', occurrenceId: 'OCC-001', adhesionId: 'ADH-001', amountDue: 200_000, amountPaid: 200_000, paidAt: '2026-06-21' },
-  { id: 'TB-002', tenantId: 'T-002', occurrenceId: 'OCC-002', adhesionId: 'ADH-002', amountDue: 200_000, amountPaid: 0, paidAt: null },
+  { id: 'TB-001', tenantId: 'T-002', occurrenceId: 'OCC-001', adhesionId: 'ADH-001', amountDue: 200_000, amountPaid: 200_000, amountPurchased: 0, paidAt: '2026-06-21' },
+  { id: 'TB-002', tenantId: 'T-002', occurrenceId: 'OCC-002', adhesionId: 'ADH-002', amountDue: 200_000, amountPaid: 0, amountPurchased: 0, paidAt: null },
 ];
 
 /** Plan illustrant une tontine SANS-ACHAT (TON-001) : ADH-003/ADH-004 planifiées pour les positions 1/2, aucune encore consommée. TON-004 (avec-achat) n'a volontairement aucun Plan. */
 export const tontineBeneficiaryPlans: TontineBeneficiaryPlan[] = [
-  { id: 'PLN-001', tenantId: 'T-002', tontineId: 'TON-001', position: 1, adhesionId: 'ADH-003', consumedByOccurrenceId: null },
-  { id: 'PLN-002', tenantId: 'T-002', tontineId: 'TON-001', position: 2, adhesionId: 'ADH-004', consumedByOccurrenceId: null },
+  { id: 'PLN-001', tenantId: 'T-002', tontineId: 'TON-001', position: 1, adhesionId: 'ADH-003', consumedByOccurrenceId: null, cycleId: 'CYC-001' },
+  { id: 'PLN-002', tenantId: 'T-002', tontineId: 'TON-001', position: 2, adhesionId: 'ADH-004', consumedByOccurrenceId: null, cycleId: 'CYC-001' },
 ];
 
 export const tontineRemainders: TontineRemainder[] = [];

@@ -1,12 +1,13 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { accounts, hasAccountLabelConflict, resolveAccount, type Account, type AccountRecord, type AccountType } from '@/mocks/finance/accounts';
+import { accounts, hasAccountLabelConflict, isSystemAccount, normalizeAccountLabel, resolveAccount, type Account, type AccountRecord, type AccountType, type SystemAccountCode } from '@/mocks/finance/accounts';
 import { accountMemberships } from '@/mocks/finance/account-memberships';
 import { transactions, type Transaction, type TransactionType } from '@/mocks/finance/transactions';
 import { isClassificationValid, isTransactionCategory, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { contributions, contributionsByMonth } from '@/mocks/finance/contributions';
 import { distributions, type Distribution } from '@/mocks/finance/distributions';
 import { members } from '@/mocks/organization/members';
+import { tenants } from '@/mocks/organization/tenants';
 import { meetingService } from './meeting.service';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
@@ -89,6 +90,89 @@ function isDuplicateTitle(tenantId: string, title: string, excludeAccountId?: st
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
+/**
+ * COMPTES SYSTÈME (mandat « robustifier la caisse système Achat tontine »)
+ * ————————————————————————————————————————————————————————————————————————
+ * Un compte système est identifié par `systemCode`, JAMAIS par son libellé
+ * (`title` reste une pure donnée d'affichage, modifiable — sauf pour un
+ * compte système, cf. `updateAccount`). Garantie : au plus UN compte par
+ * (`tenantId`, `systemCode`) — cf. tests dédiés, aucune contrainte DB dans ce
+ * projet mock, la garantie est donc portée par cette seule fonction d'entrée.
+ */
+const SYSTEM_ACCOUNT_TITLES: Record<SystemAccountCode, string> = { TONTINE_PURCHASE: 'Achat tontine' };
+
+/** Traçabilité des ambiguïtés de migration (mandat §23) — plusieurs comptes candidats pour un même (tenant, code) : jamais choisi arbitrairement, jamais fusionné/supprimé, seulement signalé. */
+export type SystemAccountMigrationConflict = { tenantId: string; systemCode: SystemAccountCode; candidateAccountIds: string[] };
+export const systemAccountMigrationConflicts: SystemAccountMigrationConflict[] = [];
+
+function tenantNameFor(tenantId: string): string {
+  return tenants.find((tenant) => tenant.id === tenantId)?.name ?? tenantId;
+}
+
+/**
+ * GARANTIT (create-or-adopt, jamais de doublon) l'existence du compte système
+ * `code` pour `tenantId` :
+ * 1. déjà marqué `systemCode` → le retourne tel quel (idempotent) ;
+ * 2. sinon, EXACTEMENT UN compte du tenant porte encore le libellé canonique
+ *    sans `systemCode` (héritage de l'ancien mécanisme par libellé, mandat
+ *    §23 migration) → il est ADOPTÉ (le `systemCode` lui est assigné), jamais
+ *    dupliqué ;
+ * 3. plusieurs candidats (ambiguïté) → AUCUNE adoption automatique, l'ambiguïté
+ *    est tracée dans `systemAccountMigrationConflicts` pour résolution
+ *    manuelle, et un compte système neuf et propre est tout de même créé (une
+ *    Tontine « avec achat » ne doit jamais rester sans caisse fonctionnelle
+ *    pour autant) ;
+ * 4. aucun candidat → création d'un compte système neuf.
+ * Pure et synchrone (même convention que `insertTransaction`) : appelable
+ * directement depuis la factory synchrone d'un autre service (`tontines.
+ * service.ts`), jamais via `mockRequest` ici.
+ */
+export function ensureSystemAccount(tenantId: string, code: SystemAccountCode): AccountRecord {
+  const existing = accounts.find((account) => account.tenantId === tenantId && account.systemCode === code);
+  if (existing) return existing;
+
+  const canonicalTitle = normalizeAccountLabel(SYSTEM_ACCOUNT_TITLES[code]);
+  const candidates = accounts.filter((account) => account.tenantId === tenantId && !account.systemCode && normalizeAccountLabel(account.title) === canonicalTitle);
+  if (candidates.length === 1) {
+    candidates[0].systemCode = code;
+    return candidates[0];
+  }
+  if (candidates.length > 1) {
+    systemAccountMigrationConflicts.push({ tenantId, systemCode: code, candidateAccountIds: candidates.map((account) => account.id) });
+  }
+
+  const tenantName = tenantNameFor(tenantId);
+  const created: AccountRecord = {
+    id: `AC-SYS-${tenantId}-${code}`,
+    tenantId,
+    accountNumber: `SYS-${tenantId}-${code}`,
+    title: SYSTEM_ACCOUNT_TITLES[code],
+    type: 'LIBRE',
+    amount: null,
+    description: 'Caisse système gérée automatiquement par Tanzen — ne pas modifier ni supprimer manuellement.',
+    openingBalance: 0,
+    memberIds: [],
+    tenantName,
+    status: 'active',
+    openedOn: todayISO(),
+    systemCode: code,
+  };
+  accounts.push(created);
+  return created;
+}
+
+/** Résolution du compte système `code` de `tenantId`, en le garantissant au passage (`ensureSystemAccount`) — jamais par le libellé. */
+export function resolveSystemAccount(tenantId: string, code: SystemAccountCode): AccountRecord {
+  return ensureSystemAccount(tenantId, code);
+}
+
+// Couverture immédiate de tous les tenants déjà connus (mandat §6) — idempotent,
+// n'écrase ni ne duplique un compte existant (adoption des caisses « Achat
+// tontine » historiques AC-015/AC-016 par libellé, création pour les tenants
+// qui n'en ont encore aucune). Un futur tenant, lui, est couvert paresseusement
+// au premier besoin réel via `resolveSystemAccount`/`ensureSystemAccount`.
+for (const tenant of tenants) ensureSystemAccount(tenant.id, 'TONTINE_PURCHASE');
 
 /** IDs des membres dont l'adhésion à cette caisse est ACTIVE (non clôturée) — source du cache `Account.memberIds`. */
 function activeMemberIdsOf(tenantId: string, accountId: string): string[] {
@@ -216,6 +300,16 @@ export const financeService = {
       if (!isValidAccountType(nextType)) return undefined;
       const nextTitle = (patch.title ?? account.title).trim();
       if (!nextTitle) return undefined;
+      /**
+       * PROTECTION COMPTE SYSTÈME (mandat « robustifier Achat tontine » §10) —
+       * `systemCode` n'est pas dans `AccountUpdateInput` (jamais modifiable via
+       * cette API, par construction du type). Seule son IDENTITÉ VISIBLE
+       * (`title`) reste théoriquement atteignable par ce patch : un renommage
+       * réel (le libellé normalisé change effectivement) est refusé — un
+       * simple ré-enregistrement du MÊME libellé (formulaire non modifié)
+       * reste autorisé, jamais bloqué inutilement.
+       */
+      if (isSystemAccount(account) && normalizeAccountLabel(nextTitle) !== normalizeAccountLabel(account.title)) return undefined;
       if (patch.title && isDuplicateTitle(tenantId, nextTitle, accountId)) return undefined;
       const nextAmount = normalizeAmount(nextType, patch.amount !== undefined ? patch.amount : account.amount);
       if (nextAmount === undefined) return undefined;
@@ -246,11 +340,19 @@ export const financeService = {
    * Ne supprime jamais un compte ayant déjà des mouvements (§8) : bascule sur
    * une désactivation logique à la place. `deleted: true` uniquement si la
    * suppression physique a réellement eu lieu.
+   *
+   * PROTECTION COMPTE SYSTÈME (mandat « robustifier Achat tontine » §11/§12) —
+   * refusée EXPLICITEMENT avant toute autre logique, qu'elle aurait sinon
+   * supprimé physiquement OU désactivé : une Tontine « avec achat » ne doit
+   * jamais se retrouver avec une caisse système absente/inactive suite à une
+   * action utilisateur ordinaire. `systemProtected: true` distingue ce refus
+   * du cas générique (compte introuvable → `undefined`).
    */
   deleteAccount: (tenantId: string, accountId: string) =>
     mockRequest(() => {
       const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
       if (!account) return undefined;
+      if (isSystemAccount(account)) return { deleted: false, deactivated: false, systemProtected: true } as const;
       const hasMovements = transactions.some((transaction) => transaction.fromAccount === account.accountNumber || transaction.toAccount === account.accountNumber);
       if (hasMovements) {
         account.status = 'inactive';

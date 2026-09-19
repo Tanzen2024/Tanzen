@@ -20,6 +20,15 @@
 export type AccountType = 'LIBRE' | 'TAUX_FIXE';
 export type AccountStatus = 'active' | 'inactive';
 
+/**
+ * Code technique d'un compte SYSTÈME (mandat « robustifier Achat tontine »)
+ * — un seul code aujourd'hui, l'union reste ouverte pour un futur compte
+ * système sans devoir changer le mécanisme. Résolu et protégé par
+ * `financeService` (`ensureSystemAccount`/`resolveSystemAccount`,
+ * `updateAccount`, `deleteAccount`) — jamais choisi/modifié par l'utilisateur.
+ */
+export type SystemAccountCode = 'TONTINE_PURCHASE';
+
 export type Account = {
   id: string;
   tenantId: string;
@@ -28,6 +37,15 @@ export type Account = {
   /** Titre métier de la caisse (« Epargne », « Inscription »...). */
   title: string;
   type: AccountType;
+  /**
+   * Identité TECHNIQUE d'un compte système — `undefined` pour un compte
+   * ordinaire. Source de vérité unique de « ceci est le compte système
+   * TONTINE_PURCHASE de ce tenant », JAMAIS son libellé (`title`, une simple
+   * donnée d'affichage) : ne plus dépendre de `normalizeAccountLabel(title)
+   * === "achat tontine"` pour l'identification (mandat « ne pas identifier la
+   * caisse uniquement par son libellé »). Voir `isSystemAccount`.
+   */
+  systemCode?: SystemAccountCode;
   /** Montant de cotisation fixe si TAUX_FIXE ; toujours `null` si LIBRE. */
   amount: number | null;
   description: string;
@@ -87,13 +105,26 @@ export const accounts: AccountRecord[] = [
   { id: 'AC-013', tenantId: 'T-001', accountNumber: 'CS-001-CX-005', title: 'Achat argent', type: 'LIBRE', amount: null, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
   { id: 'AC-014', tenantId: 'T-001', accountNumber: 'CS-001-CX-006', title: 'Fond de solidarité', type: 'TAUX_FIXE', amount: 40_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
 
-  // Caisses « Achat tontine » (mandat « Avec achat ») — une par tenant, identifiée par libellé
-  // normalisé (cf. `normalizeAccountLabel`/`resolvePurchaseAccountId` dans `tontines.service.ts`).
-  // Seule la caisse RÉELLEMENT nommée « Achat tontine » du tenant courant reçoit les montants
-  // d'achat — jamais les cotisations (cf. doc du champ `Tontine.purchaseAccountId`).
-  { id: 'AC-015', tenantId: 'T-001', accountNumber: 'CS-001-CX-008', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
-  { id: 'AC-016', tenantId: 'T-002', accountNumber: 'TH-002-CX-001', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Tontine Horizon', status: 'active', openedOn: '2026-08-01', memberIds: [] },
+  // Caisses système « Achat tontine » (TONTINE_PURCHASE, mandat « robustifier
+  // Achat tontine ») — une par tenant, identifiée par `systemCode`, jamais par
+  // son libellé. Seul le compte marqué `systemCode: 'TONTINE_PURCHASE'` du
+  // tenant courant reçoit les montants d'achat — jamais les cotisations (cf.
+  // doc du champ `Tontine.purchaseAccountId`). T-003/T-004/T-005 n'ont pas
+  // besoin d'être seedés ici : `financeService` les garantit automatiquement
+  // (`ensureSystemAccount`), idempotent, pour tout tenant présent dans
+  // `mocks/organization/tenants.ts`.
+  { id: 'AC-015', tenantId: 'T-001', accountNumber: 'CS-001-CX-008', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'TONTINE_PURCHASE' },
+  { id: 'AC-016', tenantId: 'T-002', accountNumber: 'TH-002-CX-001', title: 'Achat tontine', type: 'LIBRE', amount: null, description: 'Caisse dédiée aux achats de tontines de ce tenant.', openingBalance: 0, tenantName: 'Tontine Horizon', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'TONTINE_PURCHASE' },
 ];
+
+/**
+ * `true` si CE compte est un compte SYSTÈME (identifié par `systemCode`,
+ * jamais par son libellé) — protégé contre le renommage, la suppression et la
+ * désactivation, cf. `financeService.updateAccount`/`deleteAccount`.
+ */
+export function isSystemAccount(account: Pick<AccountRecord, 'systemCode'>): boolean {
+  return Boolean(account.systemCode);
+}
 
 /**
  * RÈGLE MÉTIER PERMANENTE TANZEN — UNICITÉ DU LIBELLÉ DE CAISSE.

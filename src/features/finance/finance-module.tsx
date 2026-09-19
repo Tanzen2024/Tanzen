@@ -35,7 +35,9 @@ import type { Guarantor } from '@/mocks/finance/guarantors';
 import { TRANSACTION_CATEGORIES, AUTRES_SUBCATEGORIES, DEFAULT_DIRECTION, categoryLabelKey, subcategoryLabelKey, subcategoriesFor, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import type { LoanRule, LoanRuleApprovalLevel, LoanRuleGuaranteeType, LoanRuleInterestPeriod, LoanRuleInterestType, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { TableColumn } from '@/types/ui';
-import { formatFCFA, formatNumber } from '@/lib/utils';
+import { formatNumber } from '@/lib/utils';
+import { formatCurrency } from '@/constants/currencies';
+import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 
 type T = (section: 'finance' | 'nav', key: string, values?: Record<string, string>) => string;
 
@@ -98,6 +100,8 @@ const MEMBER_STATUS_TONE: Record<Member['status'], 'success' | 'default' | 'warn
 
 function AccountsList({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const [search, setSearch] = useState('');
+  const { locale } = useLocale();
+  const currency = useOrganizationCurrency();
   const { data: accounts = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
   const [toDelete, setToDelete] = useState<Account | null>(null);
   const deleteMutation = useMockMutation<Awaited<ReturnType<typeof financeService.deleteAccount>>, string>({
@@ -133,7 +137,7 @@ function AccountsList({ t }: { t: T }) {
       <PermissionGate permission="accounts.delete"><button type="button" onClick={() => setToDelete(row)} aria-label={t('finance', 'deleteAccount')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Trash2 size={16} /></button></PermissionGate>
     </div> },
   ];
-  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="accounts.read"><Button variant="outline" onClick={() => navigate('/finance/position')}><TrendingUp size={16} />{t('finance', 'financialPositionTitle')}</Button></PermissionGate><PermissionGate permission="applications.read"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><HandCoins size={16} />{t('finance', 'credit')}</Button></PermissionGate><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatFCFA(totalBalance, 'fr', true)} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
+  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="accounts.read"><Button variant="outline" onClick={() => navigate('/finance/position')}><TrendingUp size={16} />{t('finance', 'financialPositionTitle')}</Button></PermissionGate><PermissionGate permission="applications.read"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><HandCoins size={16} />{t('finance', 'credit')}</Button></PermissionGate><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatCurrency(totalBalance, currency, locale, { compact: true })} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
     {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(toDelete.id)} onCancel={() => setToDelete(null)} />}
   </Page>;
 }
@@ -407,6 +411,8 @@ function transactionJournalColumns(t: T, memberById: Map<string, Member>, accoun
 function TransactionsList({ t }: { t: T }) {
   const navigate = useNavigate();
   const { currentTenant } = useTenant();
+  const { locale } = useLocale();
+  const currency = useOrganizationCurrency();
   const { selectedFiscalYear, fiscalYears, isLoading: isFiscalYearLoading } = useFiscalYear();
   /** `placeholderData: keepPreviousData` — un changement d'exercice change la clé de requête ; sans ça, `isLoading` repasserait à `true` à chaque changement et ferait disparaître la carte Fiscal Year/Adhérent elle-même (plus moyen de rechanger d'exercice pendant le chargement). Les anciennes données restent affichées le temps du rechargement, jamais un écran vide entre deux exercices. */
   const { data: allTransactions = [], isLoading: isTransactionsLoading, isError, refetch } = useQuery({
@@ -599,9 +605,9 @@ function TransactionsList({ t }: { t: T }) {
 
     {isTableLoading ? <div className="mt-5"><TableSkeleton /></div> : isError ? <div className="mt-5"><ErrorState onRetry={refetch} /></div> : <>
       <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Metric label={t('finance', 'totalDebitLabel')} value={formatFCFA(totalDebit)} icon={HandCoins} tone="neutral" />
-        <Metric label={t('finance', 'totalCreditLabel')} value={formatFCFA(totalCredit)} icon={Banknote} tone="success" />
-        <Metric label={t('finance', 'balance')} value={formatFCFA(totalCredit - totalDebit)} icon={WalletCards} tone={totalCredit - totalDebit >= 0 ? 'success' : 'neutral'} />
+        <Metric label={t('finance', 'totalDebitLabel')} value={formatCurrency(totalDebit, currency, locale)} icon={HandCoins} tone="neutral" />
+        <Metric label={t('finance', 'totalCreditLabel')} value={formatCurrency(totalCredit, currency, locale)} icon={Banknote} tone="success" />
+        <Metric label={t('finance', 'balance')} value={formatCurrency(totalCredit - totalDebit, currency, locale)} icon={WalletCards} tone={totalCredit - totalDebit >= 0 ? 'success' : 'neutral'} />
       </div>
 
       <div className="mt-5 space-y-3">
@@ -675,7 +681,7 @@ function guarantorRowsFor(form: TransactionFormState, rule: LoanRule | undefined
 }
 
 /** Compose la description : commentaire libre + détails métier saisis (mandat §5 : aucune entité Loan/Guarantor/Distribution créée, tout est consigné ici). */
-function composeTransactionDescription(form: TransactionFormState, rule: LoanRule | undefined, t: T): string {
+function composeTransactionDescription(form: TransactionFormState, rule: LoanRule | undefined, t: T, currency?: string): string {
   const parts = [form.description.trim()].filter(Boolean);
   if (form.category === 'PRET') {
     if (form.interestRate) parts.push(`${t('finance', 'interestRate')}: ${form.interestRate}%`);
@@ -691,8 +697,8 @@ function composeTransactionDescription(form: TransactionFormState, rule: LoanRul
     const due = Number(form.debtOutstanding);
     const paid = Number(form.amount);
     if (due > 0) {
-      parts.push(`${t('finance', 'amountToRepay')}: ${formatFCFA(due)}`);
-      parts.push(`${t('finance', 'debtCarryover')}: ${formatFCFA(Math.max(0, due - paid))}`);
+      parts.push(`${t('finance', 'amountToRepay')}: ${formatCurrency(due, currency)}`);
+      parts.push(`${t('finance', 'debtCarryover')}: ${formatCurrency(Math.max(0, due - paid), currency)}`);
       parts.push(t('finance', paid >= due ? 'repaymentStatusSettled' : 'repaymentStatusPartial'));
     }
   }
@@ -701,6 +707,7 @@ function composeTransactionDescription(form: TransactionFormState, rule: LoanRul
 }
 
 function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: TransactionFormState; setForm: (patch: Partial<TransactionFormState>) => void; errors: TransactionFormErrors; mode: 'create' | 'edit' }) {
+  const currency = useOrganizationCurrency();
   const { currentTenant } = useTenant();
   const isLoan = mode === 'create' && form.category === 'PRET';
   const isRepayment = mode === 'create' && form.category === 'REMBOURSEMENT';
@@ -819,18 +826,18 @@ function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: T
     {isRepayment && memberDebt && <>
       <FormSection title={t('finance', 'repaymentSection')}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="tx-amount-to-repay">{t('finance', 'amountToRepay')}</Label><Input id="tx-amount-to-repay" value={formatFCFA(memberDebt.outstanding)} readOnly disabled /><p className="text-[11px] text-muted-foreground">{t('finance', 'loanConcerned')}: {memberDebt.id}</p></div>
+          <div className="space-y-2"><Label htmlFor="tx-amount-to-repay">{t('finance', 'amountToRepay')}</Label><Input id="tx-amount-to-repay" value={formatCurrency(memberDebt.outstanding, currency)} readOnly disabled /><p className="text-[11px] text-muted-foreground">{t('finance', 'loanConcerned')}: {memberDebt.id}</p></div>
           <div className="space-y-2"><Label htmlFor="tx-amount-paid">{t('finance', 'amountPaid')} *</Label><Input id="tx-amount-paid" type="number" inputMode="decimal" value={form.amount} onChange={(event) => setForm({ amount: event.target.value })} aria-invalid={Boolean(errors.amount)} /><FieldError message={errors.amount} /></div>
-          <div className="space-y-2"><Label htmlFor="tx-debt-carryover">{t('finance', 'debtCarryover')}</Label><Input id="tx-debt-carryover" value={formatFCFA(Math.max(0, memberDebt.outstanding - paidAmount))} readOnly disabled /></div>
+          <div className="space-y-2"><Label htmlFor="tx-debt-carryover">{t('finance', 'debtCarryover')}</Label><Input id="tx-debt-carryover" value={formatCurrency(Math.max(0, memberDebt.outstanding - paidAmount), currency)} readOnly disabled /></div>
           <div className="space-y-2"><Label>{t('finance', 'status')}</Label><div className="pt-1"><StatusBadge label={t('finance', paidAmount >= memberDebt.outstanding ? 'repaymentStatusSettled' : 'repaymentStatusPartial')} tone={paidAmount >= memberDebt.outstanding ? 'success' : 'warning'} /></div></div>
         </div>
       </FormSection>
       <FormSection title={t('finance', 'summarySection')}>
         <div className="grid gap-3 sm:grid-cols-2">
           <Info label={t('finance', 'adherent')} value={memberFullName} icon={UsersRound} />
-          <Info label={t('finance', 'amountToRepay')} value={formatFCFA(memberDebt.outstanding)} icon={HandCoins} />
-          <Info label={t('finance', 'amountPaid')} value={form.amount ? formatFCFA(paidAmount) : '—'} icon={Banknote} />
-          <Info label={t('finance', 'debtCarryover')} value={formatFCFA(Math.max(0, memberDebt.outstanding - paidAmount))} icon={HandCoins} />
+          <Info label={t('finance', 'amountToRepay')} value={formatCurrency(memberDebt.outstanding, currency)} icon={HandCoins} />
+          <Info label={t('finance', 'amountPaid')} value={form.amount ? formatCurrency(paidAmount, currency) : '—'} icon={Banknote} />
+          <Info label={t('finance', 'debtCarryover')} value={formatCurrency(Math.max(0, memberDebt.outstanding - paidAmount), currency)} icon={HandCoins} />
           <Info label={t('finance', 'status')} value={t('finance', paidAmount >= memberDebt.outstanding ? 'repaymentStatusSettled' : 'repaymentStatusPartial')} icon={Check} />
         </div>
       </FormSection>
@@ -846,7 +853,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: T
         <div className="space-y-2"><Label htmlFor="tx-loan-duration">{t('finance', 'durationMonths')}</Label><Input id="tx-loan-duration" type="number" inputMode="numeric" value={form.durationMonths} onChange={(event) => setForm({ durationMonths: event.target.value })} aria-invalid={Boolean(errors.duration)} /><p className="text-[11px] text-muted-foreground">{t('finance', 'policyMax', { value: String(rule.durationMonths) })}</p><FieldError message={errors.duration} /></div>
         <div className="space-y-2"><Label htmlFor="tx-loan-start">{t('finance', 'startDate')}</Label><Input id="tx-loan-start" type="date" value={form.startDate} onChange={(event) => setForm({ startDate: event.target.value })} /></div>
         <div className="space-y-2"><Label htmlFor="tx-loan-due">{t('finance', 'dueDate')}</Label><Input id="tx-loan-due" type="date" value={form.dueDate} onChange={(event) => setForm({ dueDate: event.target.value })} /></div>
-        <p className="text-[11px] text-muted-foreground sm:col-span-2">{t('finance', 'policyAmountRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) })}</p>
+        <p className="text-[11px] text-muted-foreground sm:col-span-2">{t('finance', 'policyAmountRange', { min: formatCurrency(rule.minAmount, currency), max: formatCurrency(rule.maxAmount, currency) })}</p>
         {activeLoanCount >= rule.maxActiveLoans && form.memberId && <div className="sm:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">{t('finance', 'maxActiveLoansReached', { count: String(rule.maxActiveLoans) })}</div>}
       </div>
     </FormSection>}
@@ -883,7 +890,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: T
   </>;
 }
 
-function validateTransactionForm(form: TransactionFormState, rule: LoanRule | undefined, mode: 'create' | 'edit', t: T, activeLoanCount = 0): TransactionFormErrors {
+function validateTransactionForm(form: TransactionFormState, rule: LoanRule | undefined, mode: 'create' | 'edit', t: T, activeLoanCount = 0, currency?: string): TransactionFormErrors {
   const errors: TransactionFormErrors = {};
   if (!form.accountNumber) errors.accountNumber = t('finance', 'fieldRequired');
   if (!form.category) errors.category = t('finance', 'fieldRequired');
@@ -904,7 +911,7 @@ function validateTransactionForm(form: TransactionFormState, rule: LoanRule | un
   if (form.category === 'PRET') {
     if (!form.memberId) errors.member = t('finance', 'fieldRequired');
     if (!rule) { errors.category = t('finance', 'noLoanPolicyForAccount'); return errors; }
-    if (!errors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) errors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) });
+    if (!errors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) errors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatCurrency(rule.minAmount, currency), max: formatCurrency(rule.maxAmount, currency) });
     // Mandat « Finalisation Finance/Tontines » §10 : `maxActiveLoans` doit RÉELLEMENT bloquer
     // la soumission — avant ce mandat, seul un bandeau d'avertissement était affiché
     // (`activeLoanCount >= rule.maxActiveLoans`, jamais lu par cette fonction de validation).
@@ -920,7 +927,7 @@ function validateTransactionForm(form: TransactionFormState, rule: LoanRule | un
   return errors;
 }
 
-function buildTransactionInput(form: TransactionFormState, rule: LoanRule | undefined, meetingDateById: Map<string, string>, memberNameById: Map<string, string>, fiscalYearId: string | undefined, t: T): TransactionInput {
+function buildTransactionInput(form: TransactionFormState, rule: LoanRule | undefined, meetingDateById: Map<string, string>, memberNameById: Map<string, string>, fiscalYearId: string | undefined, t: T, currency?: string): TransactionInput {
   return {
     accountNumber: form.accountNumber,
     memberId: form.memberId || undefined,
@@ -930,7 +937,7 @@ function buildTransactionInput(form: TransactionFormState, rule: LoanRule | unde
     subcategory: form.category === 'AUTRES' ? (form.subcategory || undefined) : null,
     type: form.type,
     amount: Number(form.amount),
-    description: composeTransactionDescription(form, rule, t),
+    description: composeTransactionDescription(form, rule, t, currency),
     // `meetingId` = réunion de l'exercice fiscal courant (jamais une date libre) ;
     // `fiscalYearId` porte l'isolation §12 vérifiée par `createTransaction`.
     meetingId: form.meetingId || undefined,
@@ -941,6 +948,7 @@ function buildTransactionInput(form: TransactionFormState, rule: LoanRule | unde
 
 function TransactionCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const currency = useOrganizationCurrency();
   const [form, setFormState] = useState<TransactionFormState>(emptyTransactionForm);
   const [errors, setErrors] = useState<TransactionFormErrors>({});
   const setForm = (patch: Partial<TransactionFormState>) => setFormState((current) => ({ ...current, ...patch }));
@@ -1007,11 +1015,11 @@ function TransactionCreate({ t }: { t: T }) {
     },
   });
   const handleSave = () => {
-    const nextErrors = validateTransactionForm(form, rule, 'create', t, activeLoanCount);
+    const nextErrors = validateTransactionForm(form, rule, 'create', t, activeLoanCount, currency);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     const memberNameById = new Map(members.map((member) => [member.id, `${member.firstName} ${member.lastName}`]));
-    mutation.mutate(buildTransactionInput(form, rule, meetingDateById, memberNameById, fiscalYearId, t));
+    mutation.mutate(buildTransactionInput(form, rule, meetingDateById, memberNameById, fiscalYearId, t, currency));
   };
   return <Page title={t('finance', 'newTransaction')} description={t('finance', 'transactionsDescription')} actions={<Back label={t('finance', 'backToTransactions')} />}>
     <div className="max-w-5xl space-y-5">
@@ -1023,6 +1031,7 @@ function TransactionCreate({ t }: { t: T }) {
 
 function TransactionEdit({ t }: { t: T }) {
   const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const currency = useOrganizationCurrency();
   const { data: transaction, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.finance.transaction(id), currentTenant.id], queryFn: () => financeService.getTransaction(currentTenant.id, id) });
   const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
   const { dateById: meetingDateById, fiscalYearId } = useFiscalMeetings();
@@ -1049,11 +1058,11 @@ function TransactionEdit({ t }: { t: T }) {
   };
   const setForm = (patch: Partial<TransactionFormState>) => setFormState({ ...current, ...patch });
   const handleSave = () => {
-    const nextErrors = validateTransactionForm(current, undefined, 'edit', t);
+    const nextErrors = validateTransactionForm(current, undefined, 'edit', t, 0, currency);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     const memberNameById = new Map(members.map((member) => [member.id, `${member.firstName} ${member.lastName}`]));
-    mutation.mutate(buildTransactionInput(current, undefined, meetingDateById, memberNameById, fiscalYearId, t));
+    mutation.mutate(buildTransactionInput(current, undefined, meetingDateById, memberNameById, fiscalYearId, t, currency));
   };
   return <Page title={t('finance', 'editTransaction')} description={transaction.reference} actions={<Back label={t('finance', 'backToTransactions')} />}>
     <div className="max-w-5xl space-y-5">
@@ -1224,6 +1233,7 @@ function LoanRuleCreate({ t }: { t: T }) {
 
 function LoanRuleDetail({ t }: { t: T }) {
   const { id = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
+  const currency = useOrganizationCurrency();
   const [confirmAction, setConfirmAction] = useState<'activate' | 'deactivate' | 'delete' | null>(null);
   const { data: rule, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.credit.loanRule(id), currentTenant.id], queryFn: () => loanRuleService.getLoanRule(currentTenant.id, id) });
   const invalidateKeys = [queryKeys.credit.loanRule(id), queryKeys.credit.loanRules(currentTenant.id)];
@@ -1251,8 +1261,8 @@ function LoanRuleDetail({ t }: { t: T }) {
         <Info label={t('finance', 'loanMode')} value={t('finance', `loanMode${rule.loanMode}`)} icon={SlidersHorizontal} />
       </CardContent></Card>
       <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'loanTerms')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
-        <Info label={t('finance', 'minAmount')} value={formatFCFA(rule.minAmount)} icon={Banknote} />
-        <Info label={t('finance', 'maxAmount')} value={formatFCFA(rule.maxAmount)} icon={Banknote} />
+        <Info label={t('finance', 'minAmount')} value={formatCurrency(rule.minAmount, currency)} icon={Banknote} />
+        <Info label={t('finance', 'maxAmount')} value={formatCurrency(rule.maxAmount, currency)} icon={Banknote} />
         <Info label={t('finance', 'interestRate')} value={`${rule.interestRate}%`} icon={TrendingUp} />
         <Info label={t('finance', 'interestType')} value={t('finance', `interestType${rule.interestType}`)} icon={TrendingUp} />
         <Info label={t('finance', 'interestPeriod')} value={t('finance', `interestPeriod${rule.interestPeriod}`)} icon={CalendarClock} />
@@ -1260,7 +1270,7 @@ function LoanRuleDetail({ t }: { t: T }) {
       </CardContent></Card>
       <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'exposure')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
         <Info label={t('finance', 'maxActiveLoans')} value={String(rule.maxActiveLoans)} icon={HandCoins} />
-        <Info label={t('finance', 'maxLoanExposure')} value={rule.maxLoanExposure !== null ? formatFCFA(rule.maxLoanExposure) : '—'} icon={HandCoins} />
+        <Info label={t('finance', 'maxLoanExposure')} value={rule.maxLoanExposure !== null ? formatCurrency(rule.maxLoanExposure, currency) : '—'} icon={HandCoins} />
       </CardContent></Card>
       <Card><CardHeader><CardTitle className="text-sm">{t('finance', 'guarantees')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
         <Info label={t('finance', 'requiresGuarantor')} value={rule.requiresGuarantor ? t('finance', 'yes') : t('finance', 'no')} icon={ShieldCheck} />
@@ -1374,6 +1384,7 @@ const emptyApplicationForm: ApplicationFormState = { accountId: '', memberId: ''
  */
 function ApplicationCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
+  const currency = useOrganizationCurrency();
   const [form, setFormState] = useState<ApplicationFormState>(emptyApplicationForm);
   const [errors, setErrors] = useState<{ accountId?: string; memberId?: string; amount?: string; guarantors?: string }>({});
   const setForm = (patch: Partial<ApplicationFormState>) => setFormState((current) => ({ ...current, ...patch }));
@@ -1413,7 +1424,7 @@ function ApplicationCreate({ t }: { t: T }) {
     if (!form.memberId) nextErrors.memberId = t('finance', 'fieldRequired');
     const amount = Number(form.requestedAmount);
     if (!form.requestedAmount || amount <= 0) nextErrors.amount = t('finance', 'invalidAmount');
-    if (rule && !nextErrors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) nextErrors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) });
+    if (rule && !nextErrors.amount && (amount < rule.minAmount || amount > rule.maxAmount)) nextErrors.amount = t('finance', 'amountOutOfPolicyRange', { min: formatCurrency(rule.minAmount, currency), max: formatCurrency(rule.maxAmount, currency) });
     if (rule?.requiresGuarantor) {
       const complete = guarantorRows.filter((row) => row.name.trim() && Number(row.amount) > 0).length;
       if (complete < rule.minGuarantors) nextErrors.guarantors = t('finance', 'minGuarantorsNotMet', { count: String(rule.minGuarantors) });
@@ -1441,7 +1452,7 @@ function ApplicationCreate({ t }: { t: T }) {
             </select>
             <FieldError message={errors.memberId} />
           </div>
-          <div className="space-y-2"><Label htmlFor="app-amount">{t('finance', 'requestedAmount')} *</Label><Input id="app-amount" type="number" inputMode="decimal" value={form.requestedAmount} onChange={(event) => setForm({ requestedAmount: event.target.value })} /><FieldError message={errors.amount} />{rule && <p className="text-[11px] text-muted-foreground">{t('finance', 'policyAmountRange', { min: formatFCFA(rule.minAmount), max: formatFCFA(rule.maxAmount) })}</p>}</div>
+          <div className="space-y-2"><Label htmlFor="app-amount">{t('finance', 'requestedAmount')} *</Label><Input id="app-amount" type="number" inputMode="decimal" value={form.requestedAmount} onChange={(event) => setForm({ requestedAmount: event.target.value })} /><FieldError message={errors.amount} />{rule && <p className="text-[11px] text-muted-foreground">{t('finance', 'policyAmountRange', { min: formatCurrency(rule.minAmount, currency), max: formatCurrency(rule.maxAmount, currency) })}</p>}</div>
           <div className="space-y-2 sm:col-span-2"><Label htmlFor="app-purpose">{t('finance', 'purpose')}</Label><Textarea id="app-purpose" value={form.purpose} onChange={(event) => setForm({ purpose: event.target.value })} /></div>
         </div>
       </FormSection>

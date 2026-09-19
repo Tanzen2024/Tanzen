@@ -1,7 +1,16 @@
 import { useLocale } from '@/contexts/locale-context';
+import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
+import { formatCurrency } from '@/constants/currencies';
 
-export function MoneyDisplay({ amount, currency = 'FCFA', compact = false }: { amount: number; currency?: string; compact?: boolean }) {
+/**
+ * Affichage central d'un montant monétaire. `currency` est le code ISO
+ * (ex. `XOF`) — jamais un libellé d'affichage — et reste optionnel : quand
+ * l'appelant ne le connaît pas déjà (la plupart des tableaux/KPI), il est
+ * résolu depuis la devise de l'organisation du tenant courant
+ * (`useOrganizationCurrency`), jamais hardcodé.
+ */
+export function MoneyDisplay({ amount, currency, compact = false }: { amount: number; currency?: string; compact?: boolean }) {
   const { locale } = useLocale();
-  const localeStr = locale === 'en' ? 'en-US' : 'fr-FR';
-  return <span>{new Intl.NumberFormat(localeStr, compact ? { notation: 'compact', maximumFractionDigits: 1 } : { maximumFractionDigits: 0 }).format(amount)} {currency}</span>;
+  const organizationCurrency = useOrganizationCurrency();
+  return <span>{formatCurrency(amount, currency ?? organizationCurrency, locale, { compact })}</span>;
 }

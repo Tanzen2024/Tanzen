@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { tontinesService } from './tontines.service';
+import { settingsService } from './settings.service';
 import { permissionCatalog } from '@/mocks/rbac.mocks';
-import { tontineOccurrences } from '@/mocks/tontines/tontines';
+import { tontineOccurrences, tontines, tontineAdhesions } from '@/mocks/tontines/tontines';
+import { fiscalYears } from '@/mocks/settings/fiscal-years';
 
 describe('tontinesService — Tontine CRUD', () => {
   it('ALLOW: listTontines returns only tontines of the requesting tenant', async () => {
@@ -100,11 +102,18 @@ describe('tontinesService — Adhesions (rattachées directement à la Tontine)'
     expect(adhesion?.status).toBe('active');
   });
 
-  it('DENY: addAdhesion refuses a member already an active adherent of this tontine', async () => {
+  it('ALLOW: a member can hold SEVERAL distinct representations in the SAME tontine (mandat « finalisation ajout multiple » §1/§2) — never blocked by an existing active adhesion', async () => {
     const tontine = await freshTontine('T-001');
-    await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-02');
+    const first = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-02');
     const second = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-03');
-    expect(second).toBeNull();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second?.id).not.toBe(first?.id); // deux représentations distinctes, identifiées par leur propre id
+    expect(second?.memberId).toBe(first?.memberId);
+    expect(second?.status).toBe('active');
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions).toHaveLength(2);
+    expect(adhesions.every((item) => item.memberId === 'M-001' && item.tontineId === tontine!.id)).toBe(true);
   });
 
   it('DENY: listAdhesions of a tenant never leaks another tenant’s adhesions', async () => {
@@ -130,6 +139,139 @@ describe('tontinesService — Adhesions (rattachées directement à la Tontine)'
     await tontinesService.closeAdhesion('T-001', adhesion!.id, '2026-09-20');
     const secondClose = await tontinesService.closeAdhesion('T-001', adhesion!.id, '2026-09-25');
     expect(secondClose).toBeNull();
+  });
+
+  it('DENY: addAdhesion refuses a member belonging to a DIFFERENT tenant — never affiliates across tenants', async () => {
+    const tontine = await freshTontine('T-001');
+    const foreignMemberAdhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-009', '2026-09-01'); // M-009 appartient à T-002
+    expect(foreignMemberAdhesion).toBeNull();
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions).toHaveLength(0);
+  });
+
+  it('ALLOW: a member can belong to SEVERAL different tontines simultaneously (mandat §1) — appartenance évaluée par Tontine, jamais globalement', async () => {
+    const tontineA = await freshTontine('T-001');
+    const tontineB = await freshTontine('T-001');
+    const tontineC = await freshTontine('T-001');
+    const adhesionA = await tontinesService.addAdhesion('T-001', tontineA!.id, 'M-001', '2026-09-01');
+    const adhesionB = await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-001', '2026-09-01');
+    const adhesionC = await tontinesService.addAdhesion('T-001', tontineC!.id, 'M-001', '2026-09-01');
+    expect(adhesionA).toBeTruthy();
+    expect(adhesionB).toBeTruthy();
+    expect(adhesionC).toBeTruthy();
+    expect(new Set([adhesionA!.id, adhesionB!.id, adhesionC!.id]).size).toBe(3);
+    // listAdhesionsByMember n'est pas scopée à une Tontine précise — vérifier ici uniquement que CES trois adhésions y figurent bien, sans présumer que ce soient les seules du membre sur l'ensemble du tenant (d'autres tests créent aussi des adhésions pour M-001).
+    const byMember = await tontinesService.listAdhesionsByMember('T-001', 'M-001');
+    const byMemberIds = byMember.map((item) => item.id);
+    expect(byMemberIds).toEqual(expect.arrayContaining([adhesionA!.id, adhesionB!.id, adhesionC!.id]));
+  });
+});
+
+describe('tontinesService — addAdhesions (ajout multiple, retour structuré, mandat « finalisation ajout multiple »)', () => {
+  it('ALLOW: 10 membres sélectionnés / 10 créés — le résultat structuré reflète exactement ce nombre, jamais déduit de la longueur de l’entrée', async () => {
+    const tontine = await freshTontine('T-001');
+    const memberIds = ['M-001', 'M-006', 'M-016', 'M-018', 'M-001', 'M-006', 'M-016', 'M-018', 'M-001', 'M-006']; // 10 entrées, membres valides de T-001 (répétés — chacun crée sa propre représentation, cf. describe suivant)
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, memberIds, '2026-09-01');
+    expect(created).toHaveLength(10);
+    expect(skipped).toBe(0);
+    expect(created.every((item) => item.tontineId === tontine!.id && item.status === 'active')).toBe(true);
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions).toHaveLength(10);
+  });
+
+  it('ALLOW: adding a single member via the batch method behaves exactly like addAdhesion (mandat §21 — one interface covers both cases)', async () => {
+    const tontine = await freshTontine('T-001');
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001'], '2026-09-01');
+    expect(created).toHaveLength(1);
+    expect(skipped).toBe(0);
+    expect(created[0].memberId).toBe('M-001');
+  });
+
+  it('ALLOW: repeating the same memberId within one batch call creates ONE representation PER occurrence — never deduplicated (mandat §1/§2/§19, la clé d’unicité n’est plus memberId+tontineId)', async () => {
+    const tontine = await freshTontine('T-001');
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001', 'M-001', 'M-001'], '2026-09-01');
+    expect(created).toHaveLength(3);
+    expect(skipped).toBe(0);
+    expect(new Set(created.map((item) => item.id)).size).toBe(3); // trois représentations distinctes, jamais le même id
+    expect(created.every((item) => item.memberId === 'M-001')).toBe(true);
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions).toHaveLength(3);
+  });
+
+  it('ALLOW: a member already an active adherent of this tontine can still receive an additional representation via the batch — coexists with new members in the same call', async () => {
+    const tontine = await freshTontine('T-001');
+    await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-08-01');
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001', 'M-006'], '2026-09-01');
+    expect(created).toHaveLength(2);
+    expect(skipped).toBe(0);
+    expect(created.map((item) => item.memberId).sort()).toEqual(['M-001', 'M-006']);
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions.filter((item) => item.memberId === 'M-001')).toHaveLength(2); // la préexistante + la nouvelle représentation
+  });
+
+  it('DENY (partiel) : 10 demandés / 8 créés / 2 ignorés — le résultat structuré distingue les deux, jamais un succès global trompeur', async () => {
+    const tontine = await freshTontine('T-001');
+    const memberIds = ['M-001', 'M-006', 'M-016', 'M-018', 'M-001', 'M-006', 'M-016', 'M-018', 'M-DOES-NOT-EXIST', 'M-009']; // 8 valides (T-001) + 1 inexistant + 1 d'un autre tenant (T-002)
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, memberIds, '2026-09-01');
+    expect(created).toHaveLength(8);
+    expect(skipped).toBe(2);
+  });
+
+  it('DENY: a member belonging to a DIFFERENT tenant is skipped — never affiliates across tenants, even mixed with valid members', async () => {
+    const tontine = await freshTontine('T-001');
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001', 'M-009'], '2026-09-01'); // M-009 appartient à T-002
+    expect(created).toHaveLength(1);
+    expect(skipped).toBe(1);
+    expect(created[0].memberId).toBe('M-001');
+    const adhesions = await tontinesService.listAdhesions('T-001', tontine!.id);
+    expect(adhesions.some((item) => item.memberId === 'M-009')).toBe(false);
+  });
+
+  it('DENY (total) : 10 demandés / 0 créé — jamais un faux succès, le résultat structuré porte les 10 échecs', async () => {
+    const tontine = await freshTontine('T-001');
+    const memberIds = Array.from({ length: 10 }, (_, index) => `M-DOES-NOT-EXIST-${index}`);
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, memberIds, '2026-09-01');
+    expect(created).toHaveLength(0);
+    expect(skipped).toBe(10);
+  });
+
+  it('DENY: addAdhesions refuses a tontine belonging to a DIFFERENT tenant — returns an all-skipped result, never leaks/creates across tenants', async () => {
+    const tontine = await freshTontine('T-002');
+    const { created, skipped } = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001'], '2026-09-01');
+    expect(created).toHaveLength(0);
+    expect(skipped).toBe(1);
+    const adhesions = await tontinesService.listAdhesions('T-002', tontine!.id);
+    expect(adhesions).toHaveLength(0);
+  });
+});
+
+describe('tontinesService — Continuité fiscale (Tontine/Adhésion ne dépendent d’aucun Exercice fiscal)', () => {
+  it('ALLOW: an adhesion stays active and readable across a fiscal year close — no new Tontine/Adhesion is auto-created', async () => {
+    const tontine = await freshTontine('T-001');
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
+    expect(adhesion?.status).toBe('active');
+    expect('fiscalYearId' in (tontine as object)).toBe(false);
+    expect('fiscalYearId' in (adhesion as object)).toBe(false);
+
+    const tontineCountBefore = tontines.filter((item) => item.tenantId === 'T-001').length;
+    const adhesionCountBefore = tontineAdhesions.filter((item) => item.tenantId === 'T-001').length;
+    const currentYearBefore = fiscalYears.find((item) => item.tenantId === 'T-001' && item.isCurrent);
+    expect(currentYearBefore?.status).toBe('open');
+
+    const outcome = await settingsService.closeCurrentFiscalYear('T-001');
+    expect(outcome.ok).toBe(true);
+    const closedYear = fiscalYears.find((item) => item.id === currentYearBefore!.id);
+    expect(closedYear?.status).toBe('closed');
+    expect(fiscalYears.some((item) => item.tenantId === 'T-001' && item.isCurrent)).toBe(false); // aucune succession automatique
+
+    // La même relation Membre ↔ Tontine reste valide, sans duplication ni recréation.
+    const stillReadable = await tontinesService.getAdhesion('T-001', adhesion!.id);
+    expect(stillReadable?.status).toBe('active');
+    expect(stillReadable?.tontineId).toBe(tontine!.id);
+    expect(tontines.filter((item) => item.tenantId === 'T-001').length).toBe(tontineCountBefore);
+    expect(tontineAdhesions.filter((item) => item.tenantId === 'T-001').length).toBe(adhesionCountBefore);
+    const stillReadableTontine = await tontinesService.getTontine('T-001', tontine!.id);
+    expect(stillReadableTontine?.status).toBe('statusActive');
   });
 });
 

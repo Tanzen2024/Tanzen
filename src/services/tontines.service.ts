@@ -1,13 +1,11 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { tontines, tontineAdhesions, type Tontine, type TontineAdhesion } from '@/mocks/tontines/tontines';
+import { tontines, tontineAdhesions, tontineCycles, type Tontine, type TontineAdhesion, type TontineCycle } from '@/mocks/tontines/tontines';
 import { isValidFrequencyConfig } from '@/mocks/tontines/tontine-frequency';
-import { accounts, normalizeAccountLabel } from '@/mocks/finance/accounts';
+import { accounts } from '@/mocks/finance/accounts';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
 import { members } from '@/mocks/organization/members';
-
-/** Libellé canonique de la caisse « Achat tontine » (mandat « Avec achat ») — comparé normalisé, comme la règle d'unicité des libellés de caisse. */
-const PURCHASE_ACCOUNT_LABEL = 'Achat tontine';
+import { resolveSystemAccount } from './finance.service';
 
 export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'withPurchase' | 'contributionAmount' | 'item' | 'quantity' | 'unit' | 'accountId'
   | 'frequency' | 'weekday' | 'monthlyRule' | 'monthlyDayOfMonth' | 'monthlyOrdinal' | 'monthlyWeekday'
@@ -31,11 +29,6 @@ function isValidTontineConfiguration(input: Pick<Tontine, 'name' | 'valueType' |
   if (!isNonBlankString(input.name)) return false;
   if (input.valueType === 'MONEY') return isStrictlyPositiveNumber(input.contributionAmount);
   return isNonBlankString(input.item) && isStrictlyPositiveNumber(input.quantity) && isNonBlankString(input.unit);
-}
-
-/** Résolution automatique, jamais un choix utilisateur (pas de champ « Caisse liée »). `undefined` si le tenant n'a pas (encore) configuré cette caisse. */
-function resolvePurchaseAccountId(tenantId: string): string | undefined {
-  return accounts.find((account) => account.tenantId === tenantId && normalizeAccountLabel(account.title) === normalizeAccountLabel(PURCHASE_ACCOUNT_LABEL))?.id;
 }
 
 function patchTouchesFrequency(patch: TontineUpdateInput): boolean {
@@ -67,13 +60,49 @@ function getOrganizationCurrency(tenantId: string): string | undefined {
   return organizationSettingsList.find((item) => item.tenantId === tenantId)?.currency;
 }
 
+/**
+ * Résolution automatique de la caisse système TONTINE_PURCHASE — jamais un
+ * choix utilisateur (pas de champ « Caisse liée »), et jamais par le libellé
+ * (`financeService.resolveSystemAccount` identifie par `systemCode`,
+ * garantit/adopte le compte au passage, ne le laisse jamais absent).
+ */
 function resolveWithPurchase(tontine: Tontine): void {
   delete tontine.purchaseAccountId;
   if (tontine.valueType === 'MONEY' && tontine.withPurchase) {
-    const purchaseAccountId = resolvePurchaseAccountId(tontine.tenantId);
-    if (purchaseAccountId) tontine.purchaseAccountId = purchaseAccountId;
+    tontine.purchaseAccountId = resolveSystemAccount(tontine.tenantId, 'TONTINE_PURCHASE').id;
   }
 }
+
+/**
+ * Tentative de création d'une adhésion pour UN membre — logique partagée par
+ * `addAdhesion` (unitaire) et `addAdhesions` (batch), jamais dupliquée. Ne
+ * vérifie PAS l'existence de la Tontine (déjà fait par l'appelant, une seule
+ * fois, avant la boucle pour `addAdhesions`). `undefined` si le membre est
+ * introuvable/hors tenant/inactif.
+ *
+ * PAS de contrôle « déjà adhérent actif de cette Tontine » (mandat
+ * « finalisation ajout multiple d'adhérents » §1/§2/§19) : un membre peut
+ * avoir PLUSIEURS représentations/participations distinctes dans une même
+ * Tontine (ex. Jean Dupont détient 3 positions dans la même tontine), chacune
+ * étant une `TontineAdhesion` à part entière, avec son propre `id` — c'est CET
+ * `id` qui identifie sans ambiguïté une représentation (jamais
+ * `memberId + tontineId`, qui n'a jamais été une clé d'unicité sourcée). Les
+ * Tours/Plans (`TontineBeneficiaryPlan.adhesionId`, `OccurrenceBeneficiary.
+ * adhesionId`) référencent déjà cet `id`, jamais `memberId` — chaque
+ * représentation peut donc déjà, sans aucun changement de modèle, être
+ * planifiée/bénéficier d'un Tour indépendamment des autres représentations du
+ * même membre.
+ */
+function createAdhesionIfEligible(tenantId: string, tontineId: string, memberId: string, joinedAt: string): TontineAdhesion | undefined {
+  const member = getTenantScoped(members, (item) => item.id === memberId, tenantId);
+  if (!member || member.status !== 'active') return undefined;
+  const adhesion: TontineAdhesion = { id: `ADH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, tontineId, memberId, memberName: `${member.firstName} ${member.lastName}`, joinedAt, leftAt: null, status: 'active' };
+  tontineAdhesions.push(adhesion);
+  return adhesion;
+}
+
+/** Résultat structuré d'un ajout groupé — jamais un simple compteur déduit de `memberIds.length` côté UI : `created.length`/`skipped` reflètent EXACTEMENT ce que le service a réellement fait (mandat §12-§17, « ne jamais afficher un succès trompeur »). */
+export type AddAdhesionsResult = { created: TontineAdhesion[]; skipped: number };
 
 export const tontinesService = {
   listTontines: (tenantId: string) => mockRequest(() => tontines.filter((tontine) => tontine.tenantId === tenantId)),
@@ -106,6 +135,15 @@ export const tontinesService = {
       resolveWithPurchase(tontine);
       keepOnlyFieldsForValueType(tontine);
       tontines.push(tontine);
+      /**
+       * Cycle système 1 — créé automatiquement, jamais choisi/saisi par
+       * l'utilisateur (mandat « recommencement automatique de la Tontine »).
+       * Chaque Tontine possède TOUJOURS un cycle `OPEN` dès sa création :
+       * `tontine-operations.service.ts` (`getCurrentCycle`) n'a donc jamais
+       * à en créer un implicitement.
+       */
+      const cycle: TontineCycle = { id: `CYC-${String(tontineCycles.length + 1).padStart(3, '0')}-${Date.now()}`, tenantId: tontine.tenantId, tontineId: tontine.id, cycleNumber: 1, status: 'OPEN', startedAt: new Date().toISOString(), closedAt: null };
+      tontineCycles.push(cycle);
       return tontine;
     }),
 
@@ -168,18 +206,45 @@ export const tontinesService = {
   getAdhesion: (tenantId: string, adhesionId: string) =>
     mockRequest(() => getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId)),
 
-  /** Multi-adhésion illimitée (aucune règle sourcée d'unicité membre/tontine) — refuse un membre invalide/inactif/hors tenant, ou déjà adhérent actif de cette tontine (doublon actif silencieusement ignoré). */
+  /**
+   * Multi-adhésion illimitée — CROSS-tontine (un membre peut adhérer à
+   * autant de Tontines qu'il veut) ET INTRA-tontine (mandat « finalisation
+   * ajout multiple d'adhérents » §1/§2 : un membre peut détenir plusieurs
+   * représentations distinctes dans la MÊME Tontine — chaque appel crée une
+   * nouvelle représentation, jamais bloqué par une adhésion déjà active du
+   * même membre). Refuse uniquement un membre invalide/inactif/hors tenant.
+   */
   addAdhesion: (tenantId: string, tontineId: string, memberId: string, joinedAt: string) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
       if (!tontine) return undefined;
-      const member = getTenantScoped(members, (item) => item.id === memberId, tenantId);
-      if (!member || member.status !== 'active') return undefined;
-      const alreadyActive = tontineAdhesions.some((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.memberId === memberId && item.status === 'active');
-      if (alreadyActive) return undefined;
-      const adhesion: TontineAdhesion = { id: `ADH-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, tontineId, memberId, memberName: `${member.firstName} ${member.lastName}`, joinedAt, leftAt: null, status: 'active' };
-      tontineAdhesions.push(adhesion);
-      return adhesion;
+      return createAdhesionIfEligible(tenantId, tontineId, memberId, joinedAt);
+    }),
+
+  /**
+   * Ajout groupé (mandat « ajout multiple d'adhérents ») — un seul aller-
+   * retour au lieu d'un appel par membre sélectionné dans le Dialog. Réutilise
+   * exactement la même logique d'éligibilité que `addAdhesion` (jamais
+   * dupliquée). Ne déduplique PAS `memberIds` : si le même id apparaît
+   * plusieurs fois (jamais le cas depuis le Dialog actuel, dont la sélection
+   * est un `Set`, mais un appelant futur — ex. « ajouter plusieurs
+   * représentations d'un coup » — doit pouvoir en dépendre), chaque occurrence
+   * crée sa PROPRE représentation, cohérent avec §1/§2 ci-dessus. Retourne un
+   * résultat structuré (`created`/`skipped`), jamais un simple tableau : l'UI
+   * ne doit jamais déduire un compte de succès de `memberIds.length`, mais du
+   * nombre RÉELLEMENT créé (mandat §12-§17).
+   */
+  addAdhesions: (tenantId: string, tontineId: string, memberIds: string[], joinedAt: string): Promise<AddAdhesionsResult> =>
+    mockRequest(() => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return { created: [], skipped: memberIds.length };
+      const created: TontineAdhesion[] = [];
+      let skipped = 0;
+      for (const memberId of memberIds) {
+        const adhesion = createAdhesionIfEligible(tenantId, tontineId, memberId, joinedAt);
+        if (adhesion) created.push(adhesion); else skipped += 1;
+      }
+      return { created, skipped };
     }),
 
   /** Clôture logique (UPDATE, jamais DELETE) — l'historique (Contributions/Bénéfices) reste consultable. Refuse une double clôture. */
