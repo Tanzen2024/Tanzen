@@ -48,38 +48,44 @@ describe('navigationTree — Organization (mandat « Restructuration finale de l
 });
 
 /**
- * Mandat « Refonte module Finances » (groupe [Accounts, Transactions]),
- * étendu par le mandat « Restructuration finale de la navigation »
- * (2026-09-16) : Tontines rejoint Finance comme troisième domaine financier
- * — un enfant direct au même niveau qu'Accounts/Transactions, jamais imbriqué
- * sous l'un des deux. Contribution / Demandes / Prêts / Remboursements /
- * Garants / Distributions restent des TYPES D'OPÉRATION : aucune entrée de
- * menu, aucune route (`credit/loan-rules` mis à part, hors menu).
+ * Mandat « Le Compte comme point d'entrée des Transactions » (2026-09-23) :
+ * Transactions n'est plus un nœud de premier niveau dans le sidebar — le
+ * groupe Finance ne contient plus que [Accounts, Tontines] dans le menu.
+ * La route `/finance/transactions` (vue globale) et `/finance/transactions/create`
+ * restent disponibles techniquement (voir finance-module-routes.test.tsx),
+ * atteignables depuis la page Comptes et le détail d'un compte, mais ne sont
+ * plus un nœud de `navigationTree`. Contribution / Demandes / Prêts /
+ * Remboursements / Garants / Distributions restent des TYPES D'OPÉRATION :
+ * aucune entrée de menu, aucune route (`credit/loan-rules` mis à part, hors
+ * menu).
  */
-describe('navigationTree — Finance (mandat « Refonte module Finances » + « Restructuration finale de la navigation »)', () => {
+describe('navigationTree — Finance (mandat « Le Compte comme point d\'entrée des Transactions »)', () => {
   const finance = navigationTree.find((node) => node.label === 'Finance');
   const paths = flattenNavigation(navigationTree).map((node) => node.path);
 
-  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Transactions, Tontines]', () => {
+  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Tontines] — Transactions is no longer a menu entry', () => {
     expect(finance?.path).toBe('/finance');
-    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Transactions', 'Tontines']);
+    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Tontines']);
     expect(finance?.children?.find((child) => child.label === 'Accounts')?.path).toBe('/finance/accounts');
-    expect(finance?.children?.find((child) => child.label === 'Transactions')?.path).toBe('/finance/transactions');
   });
 
   it('ALLOW: Tontines is a direct child of Finance and keeps its existing /tontines URL — only the sidebar depth changes', () => {
     expect(finance?.children?.find((child) => child.label === 'Tontines')?.path).toBe('/tontines');
   });
 
-  it('DENY: Tontines is not nested under Accounts or Transactions, and no longer a top-level entry', () => {
+  it('DENY: Tontines is not nested under Accounts, and no longer a top-level entry', () => {
     expect(finance?.children?.find((child) => child.label === 'Accounts')?.children).toBeUndefined();
-    expect(finance?.children?.find((child) => child.label === 'Transactions')?.children).toBeUndefined();
     expect(navigationTree.some((node) => node.label === 'Tontines')).toBe(false);
   });
 
-  it('DENY: no duplicate Accounts/Transactions/Tontines entries anywhere in the tree', () => {
+  it('DENY: no "Transactions" sidebar node remains anywhere in the tree', () => {
+    expect(flattenNavigation(navigationTree).some((node) => node.label === 'Transactions')).toBe(false);
+    expect(paths.some((path) => path === '/finance/transactions')).toBe(false);
+  });
+
+  it('DENY: no duplicate Accounts/Tontines entries anywhere in the tree', () => {
     const labels = flattenNavigation(navigationTree).map((node) => node.label);
-    for (const label of ['Accounts', 'Transactions', 'Tontines']) {
+    for (const label of ['Accounts', 'Tontines']) {
       expect(labels.filter((item) => item === label)).toHaveLength(1);
     }
   });

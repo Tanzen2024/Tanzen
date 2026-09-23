@@ -272,7 +272,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
   return <Page title={`${request.id} · ${request.entityLabel}`} description={t('operations', DOMAIN_KEY[request.domain])} actions={<><Back label={t('operations', 'backToWorkflows')} />{link && <Button variant="outline" onClick={() => navigate(link)}><DomainIcon size={15} />{t('operations', 'viewDetail')}</Button>}</>}>
     <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
-      <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'approvalTimeline')}</CardTitle></CardHeader><CardContent className="p-5"><ApprovalTimeline request={request} t={t} locale={locale} /></CardContent></Card>
+      <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'approvalTimeline')}</CardTitle></CardHeader><CardContent className="p-5"><ApprovalTimeline request={request} t={t} /></CardContent></Card>
       <div className="space-y-5">
         {isBeneficiaryPermutation && permutationPreview && (
           <Card><CardContent className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 p-5">
@@ -284,7 +284,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'requestDetail')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
           <Info label={t('operations', 'entity')} value={`${request.entityLabel} (${t('operations', ENTITY_KEY[request.entityType])})`} icon={DomainIcon} />
           <Info label={t('operations', 'requestedBy')} value={request.requestedBy} icon={Users2} />
-          <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt, locale)} icon={ClipboardList} />
+          <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt)} icon={ClipboardList} />
           {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatCurrency(request.amount, currency, locale)} icon={Landmark} />}
           {request.justification && <Info label={t('operations', 'justification')} value={request.justification} icon={FileText} />}
           {request.warnings && request.warnings.length > 0 && <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
@@ -347,7 +347,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
 // ----------------------------------------------------------------------- Notifications
 
-function NotificationRow({ t, locale, notification, onRead }: { t: T; locale: 'fr' | 'en'; notification: Notification; onRead: (id: string) => void }) {
+function NotificationRow({ t, notification, onRead }: { t: T; notification: Notification; onRead: (id: string) => void }) {
   return <div className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${notification.read ? 'border-border/60' : 'border-primary/30 bg-primary/[0.03]'}`}>
     <span aria-hidden="true" className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full ${notification.read ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'}`}>{notification.read ? <CheckCircle2 size={14} /> : <BellRing size={14} />}</span>
     <div className="min-w-0 flex-1">
@@ -359,13 +359,13 @@ function NotificationRow({ t, locale, notification, onRead }: { t: T; locale: 'f
         </div>
       </div>
       <p className="mt-1 text-sm leading-6 text-muted-foreground">{notification.message}</p>
-      <p className="mt-1.5 text-xs text-muted-foreground">{formatDate(notification.createdAt, locale)} · {t('operations', `source${notification.source[0].toUpperCase()}${notification.source.slice(1)}`)}</p>
+      <p className="mt-1.5 text-xs text-muted-foreground">{formatDate(notification.createdAt)} · {t('operations', `source${notification.source[0].toUpperCase()}${notification.source.slice(1)}`)}</p>
     </div>
     {!notification.read && <Button variant="ghost" size="sm" onClick={() => onRead(notification.id)}><Check size={14} />{t('operations', 'markAsRead')}</Button>}
   </div>;
 }
 
-function NotificationsPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function NotificationsPage({ t }: { t: T }) {
   const { currentTenant } = useTenant(); const { user } = usePermissions(); const queryClient = useQueryClient();
   const queryKey = queryKeys.operations.notifications(currentTenant.id, user.id);
   const { data: items = [], isLoading, isError, refetch } = useQuery({ queryKey, queryFn: () => notificationService.list(currentTenant.id, user.id) });
@@ -378,7 +378,7 @@ function NotificationsPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const announcements = items.filter((item) => item.type === 'announcement');
 
   const list = (rows: Notification[], emptyKey: string, emptyIcon: typeof Inbox, emptyDescription?: string) => rows.length
-    ? <div className="space-y-3">{rows.map((row) => <NotificationRow key={row.id} t={t} locale={locale} notification={row} onRead={(id) => markRead.mutate(id)} />)}</div>
+    ? <div className="space-y-3">{rows.map((row) => <NotificationRow key={row.id} t={t} notification={row} onRead={(id) => markRead.mutate(id)} />)}</div>
     : <EmptyState icon={emptyIcon} title={t('operations', emptyKey)} description={emptyDescription} />;
 
   if (isLoading) return <Page title={t('operations', 'notificationsTitle')} description={t('operations', 'notificationsDescription')}><TableSkeleton /></Page>;
@@ -445,7 +445,7 @@ function DocumentUploadForm({ t, tenantId, values, onChange, error }: { t: T; te
   </div>;
 }
 
-function DocumentsPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function DocumentsPage({ t }: { t: T }) {
   const { currentTenant } = useTenant(); const { user } = usePermissions();
   const { data: documents = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.operations.documents(currentTenant.id), queryFn: () => documentService.list(currentTenant.id) });
   const [search, setSearch] = useState(''); const [category, setCategory] = useState('all'); const [entityType, setEntityType] = useState('all');
@@ -514,7 +514,7 @@ function DocumentsPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           <Info label={t('operations', 'fileType')} value={t('operations', CATEGORY_KEY[preview.category])} icon={FileText} />
           <Info label={t('operations', 'fileSize')} value={formatSize(preview.sizeKb)} icon={Paperclip} />
           <Info label={t('operations', 'uploadedBy')} value={preview.uploadedBy} icon={Users2} />
-          <Info label={t('operations', 'uploadedAt')} value={formatDate(preview.uploadedAt, locale)} icon={ClipboardList} />
+          <Info label={t('operations', 'uploadedAt')} value={formatDate(preview.uploadedAt)} icon={ClipboardList} />
           <Info label={t('operations', 'linkedTo')} value={`${preview.entityLabel} (${t('operations', ENTITY_TYPE_KEY[preview.entityType])})`} icon={UserCog} />
         </div>
         <div className="flex gap-2"><Button className="flex-1" onClick={() => downloadDocument(preview)}><Download size={15} />{t('operations', 'download')}</Button><PermissionGate permission="documents.delete"><Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => setToDelete(preview)}><Trash2 size={15} />{t('operations', 'deleteDocument')}</Button></PermissionGate><Button variant="outline" onClick={() => setPreview(null)}><X size={15} />{t('operations', 'cancel')}</Button></div>
@@ -538,8 +538,8 @@ export function OperationsModule() {
       <Route index element={<WorkflowsHub t={t} />} />
       <Route path="workflows" element={<WorkflowsHub t={t} />} />
       <Route path="workflows/:id" element={<WorkflowDetail t={t} locale={typedLocale} />} />
-      <Route path="notifications" element={<NotificationsPage t={t} locale={typedLocale} />} />
-      <Route path="documents" element={<DocumentsPage t={t} locale={typedLocale} />} />
+      <Route path="notifications" element={<NotificationsPage t={t} />} />
+      <Route path="documents" element={<DocumentsPage t={t} />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

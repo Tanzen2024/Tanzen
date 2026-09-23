@@ -40,10 +40,10 @@ describe('FinanceModule — routes toujours supprimées (mandat « Refonte modul
     expect(await screen.findByText('Page introuvable')).toBeInTheDocument();
   });
 
-  it('ALLOW: /finance redirige vers le journal des transactions', async () => {
+  it('ALLOW: /finance redirige vers la liste des comptes (mandat « Le Compte comme point d\'entrée des Transactions »)', async () => {
     renderFinance('/finance');
     expect(await screen.findByRole('table')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Ajouter une transaction/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Nouveau/i })).toBeInTheDocument();
   });
 
   it('ALLOW: /finance/credit/loan-rules reste accessible (éditeur de politique de prêt)', async () => {

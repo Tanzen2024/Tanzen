@@ -48,7 +48,7 @@ function KeyValueGrid({ data }: { data?: Record<string, string | number> }) {
 
 // ----------------------------------------------------------------------- Overview
 
-function AuditOverview({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function AuditOverview({ t }: { t: T }) {
   const { currentTenant } = useTenant();
   const { events, canReadAudit, isLoading, isError, refetch } = useVisibleEvents(currentTenant.id);
 
@@ -73,8 +73,8 @@ function AuditOverview({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const trend = useMemo(() => {
     const counts = new Map<string, number>();
     events.forEach((event) => { const day = event.timestamp.slice(0, 10); counts.set(day, (counts.get(day) ?? 0) + 1); });
-    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, count]) => ({ day: formatDate(day, locale), count }));
-  }, [events, locale]);
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, count]) => ({ day: formatDate(day), count }));
+  }, [events]);
 
   if (isLoading) return <Page title={t('audit', 'overviewTitle')} description={t('audit', 'overviewDescription')}><TableSkeleton /></Page>;
   if (isError) return <Page title={t('audit', 'overviewTitle')} description={t('audit', 'overviewDescription')}><ErrorState onRetry={refetch} /></Page>;
@@ -99,7 +99,7 @@ function AuditOverview({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
 function logColumns(t: T, navigate: (path: string) => void): TableColumn<AuditEvent>[] {
   return [
-    { key: 'timestamp', header: t('audit', 'timestamp'), render: (row) => <button type="button" onClick={() => navigate(`/audit/logs/${row.id}`)} className="text-left font-mono text-xs text-primary">{formatDate(row.timestamp, 'fr')}</button> },
+    { key: 'timestamp', header: t('audit', 'timestamp'), render: (row) => <button type="button" onClick={() => navigate(`/audit/logs/${row.id}`)} className="text-left font-mono text-xs text-primary">{formatDate(row.timestamp)}</button> },
     { key: 'actor', header: t('audit', 'actor'), render: (row) => row.actorName },
     { key: 'tenant', header: t('audit', 'tenant'), render: (row) => row.tenantId },
     { key: 'module', header: t('audit', 'module'), render: (row) => t('audit', AUDIT_MODULE_KEY[row.module] ?? row.module) },
@@ -132,7 +132,7 @@ function AuditLogs({ t }: { t: T }) {
   </Page>;
 }
 
-function AuditLogDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function AuditLogDetail({ t }: { t: T }) {
   const { id: eventId = '' } = useParams(); const { currentTenant } = useTenant();
   const { data: event, isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.audit.event(currentTenant.id, eventId), queryFn: () => auditService.get(currentTenant.id, eventId) });
   if (isLoading) return <Page title={t('audit', 'logDetail')}><DetailSkeleton /></Page>;
@@ -147,7 +147,7 @@ function AuditLogDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         <Info label={t('audit', 'actor')} value={event.actorName} icon={Activity} />
         <Info label={t('audit', 'tenant')} value={event.tenantId} icon={Activity} />
         <Info label={t('audit', 'resource')} value={`${event.resourceLabel} (${event.resourceType})`} icon={Activity} />
-        <Info label={t('audit', 'timestamp')} value={formatDate(event.timestamp, locale)} icon={Activity} />
+        <Info label={t('audit', 'timestamp')} value={formatDate(event.timestamp)} icon={Activity} />
       </CardContent></Card>
       <div className="space-y-5">
         <Card><CardHeader><CardTitle className="text-sm">{t('audit', 'before')}</CardTitle></CardHeader><CardContent className="p-5"><KeyValueGrid data={event.before} /></CardContent></Card>
@@ -160,7 +160,7 @@ function AuditLogDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
 // ----------------------------------------------------------------------- Security events
 
-function SecurityEvents({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function SecurityEvents({ t }: { t: T }) {
   const { currentTenant } = useTenant();
   const { events, canReadAudit, hiddenSensitiveCount, isLoading, isError, refetch } = useVisibleEvents(currentTenant.id);
   const [type, setType] = useState('all');
@@ -176,7 +176,7 @@ function SecurityEvents({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     {hiddenSensitiveCount > 0 && <p className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('audit', 'noPermissionSensitive')}</p>}
     <div role="group" aria-label={t('audit', 'filterByEventType')} className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">{counts.map(({ type: eventType, count }) => { const Icon = EVENT_TYPE_ICON[eventType]; return <button type="button" key={eventType} aria-pressed={type === eventType} onClick={() => setType(eventType === type ? 'all' : eventType)} className={`rounded-xl border p-3 text-left transition-colors ${type === eventType ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}><Icon size={16} className="text-muted-foreground" /><p className="mt-2 text-lg font-semibold">{formatNumber(count)}</p><p className="text-[11px] text-muted-foreground">{t('audit', EVENT_TYPE_KEY[eventType])}</p></button>; })}</div>
     <DataTable columns={[
-      { key: 'timestamp', header: t('audit', 'timestamp'), render: (row) => <span className="font-mono text-xs">{formatDate(row.timestamp, locale)}</span> },
+      { key: 'timestamp', header: t('audit', 'timestamp'), render: (row) => <span className="font-mono text-xs">{formatDate(row.timestamp)}</span> },
       { key: 'type', header: t('audit', 'event'), render: (row) => <span className="flex items-center gap-2">{(() => { const Icon = EVENT_TYPE_ICON[row.eventType]; return <Icon size={14} className="shrink-0 text-muted-foreground" />; })()}<StatusBadge label={t('audit', EVENT_TYPE_KEY[row.eventType])} tone={EVENT_TYPE_TONE[row.eventType]} /></span> },
       { key: 'actor', header: t('audit', 'actor'), render: (row) => row.actorName },
       { key: 'tenant', header: t('audit', 'tenant'), render: (row) => row.tenantId },
@@ -188,7 +188,7 @@ function SecurityEvents({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 
 // ----------------------------------------------------------------------- Activity
 
-function ActivityPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function ActivityPage({ t }: { t: T }) {
   const { currentTenant } = useTenant();
   const { events, canReadAudit, hiddenSensitiveCount, isLoading, isError, refetch } = useVisibleEvents(currentTenant.id);
   const [user, setUser] = useState('all'); const [module, setModule] = useState('all'); const [action, setAction] = useState('all'); const [period, setPeriod] = useState('all'); const [status, setStatus] = useState('all');
@@ -215,7 +215,7 @@ function ActivityPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     id: event.id,
     title: `${event.actorName} · ${t('audit', EVENT_TYPE_KEY[event.eventType])}`,
     description: <span>{event.resourceLabel} <code className="ml-1 rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{event.action}</code></span>,
-    date: formatDate(event.timestamp, locale),
+    date: formatDate(event.timestamp),
     tone: event.status === 'failure' ? ('error' as const) : event.eventType === 'sensitiveAction' ? ('warning' as const) : ('default' as const),
   }));
 
@@ -235,16 +235,15 @@ function ActivityPage({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
 // ----------------------------------------------------------------------- Module entry
 
 export function AuditModule() {
-  const { t, locale } = useLocale();
-  const typedLocale = locale as 'fr' | 'en';
+  const { t } = useLocale();
   return (
     <Routes>
-      <Route index element={<AuditOverview t={t} locale={typedLocale} />} />
-      <Route path="overview" element={<AuditOverview t={t} locale={typedLocale} />} />
+      <Route index element={<AuditOverview t={t} />} />
+      <Route path="overview" element={<AuditOverview t={t} />} />
       <Route path="logs" element={<AuditLogs t={t} />} />
-      <Route path="logs/:id" element={<AuditLogDetail t={t} locale={typedLocale} />} />
-      <Route path="security-events" element={<SecurityEvents t={t} locale={typedLocale} />} />
-      <Route path="activity" element={<ActivityPage t={t} locale={typedLocale} />} />
+      <Route path="logs/:id" element={<AuditLogDetail t={t} />} />
+      <Route path="security-events" element={<SecurityEvents t={t} />} />
+      <Route path="activity" element={<ActivityPage t={t} />} />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

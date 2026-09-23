@@ -196,14 +196,14 @@ function UserEdit({ t }: { t: T }) {
   return <Page title={t('access', 'editUser')} description={existing.name} actions={<Back label={t('access', 'backToUsers')} />}><div className="grid gap-5 lg:grid-cols-2"><UserFormFields t={t} values={current} onChange={(patch) => setValues({ ...current, ...patch })} errors={errors} tenants={tenants} roles={roles} currentUserScope={currentUser.scope} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/access-security/users/${userId}`)}>{t('access', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('access', 'saving') : t('access', 'save')}</Button></div></div></Page>;
 }
 
-function ProfileTab({ t, locale, user }: { t: T; locale: 'fr' | 'en'; user: SystemUser }) {
+function ProfileTab({ t, user }: { t: T; user: SystemUser }) {
   return <Card><CardHeader><CardTitle className="text-sm">{t('access', 'profileInfo')}</CardTitle></CardHeader><CardContent className="grid gap-5 p-5 sm:grid-cols-2">
     <Info label={t('access', 'name')} value={user.name} icon={Users} />
     <Info label={t('access', 'email')} value={user.email} icon={Mail} />
     <Info label={t('access', 'tenant')} value={user.tenantName} icon={UserCog} />
     <Info label={t('access', 'status')} value={t('access', userStatusKey(user.isActive))} icon={ShieldCheck} />
-    <Info label={t('access', 'createdAt')} value={formatDate(user.createdAt, locale)} icon={UserCog} />
-    <Info label={t('access', 'lastLogin')} value={user.lastLoginAt ? formatDate(user.lastLoginAt, locale) : t('access', 'never')} icon={UserCog} />
+    <Info label={t('access', 'createdAt')} value={formatDate(user.createdAt)} icon={UserCog} />
+    <Info label={t('access', 'lastLogin')} value={user.lastLoginAt ? formatDate(user.lastLoginAt) : t('access', 'never')} icon={UserCog} />
   </CardContent></Card>;
 }
 
@@ -246,7 +246,7 @@ function UserSessionsTab({ t, userId }: { t: T; userId: string }) {
   </>;
 }
 
-function UserMfaTab({ t, locale, user }: { t: T; locale: 'fr' | 'en'; user: SystemUser }) {
+function UserMfaTab({ t, user }: { t: T; user: SystemUser }) {
   return <div className="grid gap-5 lg:grid-cols-2">
     <Card><CardHeader><CardTitle className="text-sm">{t('access', 'mfaStatus')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
       <StatusBadge label={t('access', MFA_KEY[user.mfaStatus])} tone={MFA_TONE[user.mfaStatus]} />
@@ -255,19 +255,19 @@ function UserMfaTab({ t, locale, user }: { t: T; locale: 'fr' | 'en'; user: Syst
     </CardContent></Card>
     <Card><CardHeader><CardTitle className="text-sm">{t('access', 'registeredDevices')}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
       {user.mfaDevices.length === 0 && <EmptyState icon={ShieldOff} title={t('access', 'noDevices')} />}
-      {user.mfaDevices.map((device) => { const Icon = DEVICE_ICON[device.type] ?? Smartphone; return <div key={device.id} className="flex items-center gap-3 rounded-lg border border-border p-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={16} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium" title={device.name}>{device.name}</p><p className="text-xs text-muted-foreground">{formatDate(device.registeredAt, locale)}</p></div></div>; })}
+      {user.mfaDevices.map((device) => { const Icon = DEVICE_ICON[device.type] ?? Smartphone; return <div key={device.id} className="flex items-center gap-3 rounded-lg border border-border p-3"><span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={16} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium" title={device.name}>{device.name}</p><p className="text-xs text-muted-foreground">{formatDate(device.registeredAt)}</p></div></div>; })}
     </CardContent></Card>
   </div>;
 }
 
-function UserActivityTab({ t, locale, user }: { t: T; locale: 'fr' | 'en'; user: SystemUser }) {
+function UserActivityTab({ t, user }: { t: T; user: SystemUser }) {
   const { data: history = [] } = useQuery({ queryKey: queryKeys.operations.history(user.tenantId), queryFn: () => workflowService.listHistory(user.tenantId) });
   const activity = history.filter((action) => action.actorName === user.name);
   if (activity.length === 0) return <EmptyState icon={UserCog} title={t('access', 'noActivity')} />;
-  return <div className="space-y-3">{activity.map((action) => <Card key={action.id}><CardContent className="flex items-center gap-3 p-4"><span aria-hidden="true" className={`grid size-9 shrink-0 place-items-center rounded-lg ${action.action === 'approved' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : action.action === 'rejected' ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}><ShieldCheck size={16} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium" title={`${action.entityLabel} · ${action.stepName}`}>{action.entityLabel} · {action.stepName}</p><p className="text-xs text-muted-foreground">{formatDate(action.date, locale)}{action.comment ? ` — ${action.comment}` : ''}</p></div></CardContent></Card>)}</div>;
+  return <div className="space-y-3">{activity.map((action) => <Card key={action.id}><CardContent className="flex items-center gap-3 p-4"><span aria-hidden="true" className={`grid size-9 shrink-0 place-items-center rounded-lg ${action.action === 'approved' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : action.action === 'rejected' ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'}`}><ShieldCheck size={16} /></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium" title={`${action.entityLabel} · ${action.stepName}`}>{action.entityLabel} · {action.stepName}</p><p className="text-xs text-muted-foreground">{formatDate(action.date)}{action.comment ? ` — ${action.comment}` : ''}</p></div></CardContent></Card>)}</div>;
 }
 
-function UserDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function UserDetail({ t }: { t: T }) {
   const navigate = useNavigate(); const { id: userId = '' } = useParams(); const { currentTenant } = useTenant();
   /** D1 : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur. */
   const { data: user, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.access.user(userId), currentTenant.id], queryFn: () => userService.get(currentTenant.id, userId, 'tenant') });
@@ -303,12 +303,12 @@ function UserDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
           <TabsTrigger value="mfa">{t('access', 'tabMfa')}</TabsTrigger>
           <TabsTrigger value="activity">{t('access', 'tabActivity')}</TabsTrigger>
         </TabsList>
-        <TabsContent value="profile"><ProfileTab t={t} locale={locale} user={user} /></TabsContent>
+        <TabsContent value="profile"><ProfileTab t={t} user={user} /></TabsContent>
         <TabsContent value="roles"><RolesTab t={t} user={user} /></TabsContent>
         <TabsContent value="permissions"><UserPermissionsTab t={t} user={user} /></TabsContent>
         <TabsContent value="sessions"><UserSessionsTab t={t} userId={user.id} /></TabsContent>
-        <TabsContent value="mfa"><UserMfaTab t={t} locale={locale} user={user} /></TabsContent>
-        <TabsContent value="activity"><UserActivityTab t={t} locale={locale} user={user} /></TabsContent>
+        <TabsContent value="mfa"><UserMfaTab t={t} user={user} /></TabsContent>
+        <TabsContent value="activity"><UserActivityTab t={t} user={user} /></TabsContent>
       </Tabs>
     </div>
   </Page>;
@@ -511,15 +511,14 @@ function MfaPage({ t }: { t: T }) {
 // ----------------------------------------------------------------------- Module entry
 
 export function AccessModule() {
-  const { t, locale } = useLocale();
-  const typedLocale = locale as 'fr' | 'en';
+  const { t } = useLocale();
   return (
     <Routes>
       <Route index element={<UsersList t={t} />} />
       <Route path="users" element={<UsersList t={t} />} />
       <Route path="users/create" element={<UserCreate t={t} />} />
       <Route path="users/:id/edit" element={<UserEdit t={t} />} />
-      <Route path="users/:id" element={<UserDetail t={t} locale={typedLocale} />} />
+      <Route path="users/:id" element={<UserDetail t={t} />} />
       <Route path="roles" element={<RolesList t={t} />} />
       <Route path="roles/create" element={<RoleCreate t={t} />} />
       <Route path="roles/:id/edit" element={<RoleEdit t={t} />} />

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { ArrowLeft, Ban, Banknote, CalendarClock, Check, ChevronRight, Clock3, CreditCard, FileText, HandCoins, Landmark, ListChecks, Pencil, Plus, ReceiptText, RotateCcw, ShieldCheck, SlidersHorizontal, Trash2, TrendingUp, UserCheck, UsersRound, WalletCards } from 'lucide-react';
-import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, FormSection, MoneyDisplay, DateDisplay, EmptyState, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, ConfirmDialog, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -137,7 +137,7 @@ function AccountsList({ t }: { t: T }) {
       <PermissionGate permission="accounts.delete"><button type="button" onClick={() => setToDelete(row)} aria-label={t('finance', 'deleteAccount')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><Trash2 size={16} /></button></PermissionGate>
     </div> },
   ];
-  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="accounts.read"><Button variant="outline" onClick={() => navigate('/finance/position')}><TrendingUp size={16} />{t('finance', 'financialPositionTitle')}</Button></PermissionGate><PermissionGate permission="applications.read"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><HandCoins size={16} />{t('finance', 'credit')}</Button></PermissionGate><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatCurrency(totalBalance, currency, locale, { compact: true })} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
+  return <Page title={t('finance', 'accountsTitle')} description={t('finance', 'accountsDescription')} actions={<><PermissionGate permission="transactions.read"><Button variant="outline" onClick={() => navigate('/finance/transactions')}><ReceiptText size={16} />{t('finance', 'allTransactions')}</Button></PermissionGate><PermissionGate permission="accounts.read"><Button variant="outline" onClick={() => navigate('/finance/position')}><TrendingUp size={16} />{t('finance', 'financialPositionTitle')}</Button></PermissionGate><PermissionGate permission="applications.read"><Button variant="outline" onClick={() => navigate('/finance/credit/applications')}><HandCoins size={16} />{t('finance', 'credit')}</Button></PermissionGate><PermissionGate permission="loanRules.manage"><Button variant="outline" onClick={() => navigate('/finance/credit/loan-rules')}><ListChecks size={16} />{t('finance', 'creditPolicies')}</Button></PermissionGate><PermissionGate permission="accounts.create"><Button onClick={() => navigate('/finance/accounts/create')}><Plus size={16} />{t('finance', 'newAccount')}</Button></PermissionGate></>}><div className="grid gap-4 sm:grid-cols-3"><Metric label={t('finance', 'totalBalance')} value={formatCurrency(totalBalance, currency, locale, { compact: true })} icon={Landmark} tone="success" /><Metric label={t('finance', 'activeAccounts')} value={formatNumber(activeCount)} icon={WalletCards} /><Metric label={t('finance', 'accounts')} value={formatNumber(accounts.length)} icon={CreditCard} tone="neutral" /></div><FilterBar search={search} onSearchChange={setSearch} placeholder={t('finance', 'searchAccountPlaceholder')} /><DataTable columns={columns} rows={filtered} empty={<EmptyState icon={Landmark} title={t('finance', 'noAccounts')} />} />
     {toDelete && <ConfirmDialog open title={t('finance', 'deleteAccount')} description={t('finance', 'deleteAccountConfirm')} confirmLabel={t('finance', 'confirm')} cancelLabel={t('finance', 'cancel')} onConfirm={() => deleteMutation.mutate(toDelete.id)} onCancel={() => setToDelete(null)} />}
   </Page>;
 }
@@ -260,6 +260,8 @@ function AccountDetail({ t }: { t: T }) {
   const columns = transactionJournalColumns(t, memberById, account.accountNumber);
   return <Page title={account.title} description={account.tenantName} actions={<>
     <Back label={t('finance', 'backToAccounts')} />
+    {/* Mandat « Le Compte comme point d'entrée des Transactions » (2026-09-23) : le compte pré-sélectionne son propre numéro via `?accountId=`, l'utilisateur n'a jamais à le ressaisir dans `TransactionFormBody` (voir `accountLocked`). */}
+    <PermissionGate permission="transactions.create"><Button onClick={() => navigate(`/finance/transactions/create?accountId=${id}`)}><Plus size={15} />{t('finance', 'newTransaction')}</Button></PermissionGate>
     <PermissionGate permission="accounts.manage"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/members`)}><UsersRound size={15} />{t('finance', 'manageMembers')}</Button></PermissionGate>
     <PermissionGate permission="accounts.update"><Button variant="outline" onClick={() => navigate(`/finance/accounts/${id}/edit`)}><Pencil size={15} />{t('finance', 'edit')}</Button></PermissionGate>
     {account.status === 'inactive' && <PermissionGate permission="accounts.manage"><Button variant="outline" disabled={reactivateMutation.isPending} onClick={() => reactivateMutation.mutate(id)}><RotateCcw size={15} />{t('finance', 'reactivateAccount')}</Button></PermissionGate>}
@@ -706,7 +708,7 @@ function composeTransactionDescription(form: TransactionFormState, rule: LoanRul
   return parts.join(' · ');
 }
 
-function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: TransactionFormState; setForm: (patch: Partial<TransactionFormState>) => void; errors: TransactionFormErrors; mode: 'create' | 'edit' }) {
+function TransactionFormBody({ t, form, setForm, errors, mode, accountLocked = false }: { t: T; form: TransactionFormState; setForm: (patch: Partial<TransactionFormState>) => void; errors: TransactionFormErrors; mode: 'create' | 'edit'; accountLocked?: boolean }) {
   const currency = useOrganizationCurrency();
   const { currentTenant } = useTenant();
   const isLoan = mode === 'create' && form.category === 'PRET';
@@ -757,7 +759,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode }: { t: T; form: T
     <FormSection title={t('finance', 'general')}>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2"><Label htmlFor="tx-account">{t('finance', 'accountOrCash')} *</Label>
-          <select id="tx-account" value={form.accountNumber} disabled={readOnlyIdentity} onChange={(event) => setForm({ accountNumber: event.target.value })} className={selectClass} aria-invalid={Boolean(errors.accountNumber)}>
+          <select id="tx-account" value={form.accountNumber} disabled={readOnlyIdentity || accountLocked} onChange={(event) => setForm({ accountNumber: event.target.value })} className={selectClass} aria-invalid={Boolean(errors.accountNumber)}>
             <option value="">{t('finance', 'selectAccountPlaceholder')}</option>
             {accounts.map((account) => <option key={account.id} value={account.accountNumber}>{account.title} · {account.accountNumber}</option>)}
           </select><FieldError message={errors.accountNumber} />
@@ -946,13 +948,32 @@ function buildTransactionInput(form: TransactionFormState, rule: LoanRule | unde
   };
 }
 
+/**
+ * Point d'entrée « + Nouvelle transaction » depuis la fiche caisse (mandat
+ * « Le Compte comme point d'entrée des Transactions », 2026-09-23) : `id` de
+ * l'`Account` transmis en query param (`?accountId=`), jamais son
+ * `accountNumber` (identifiant interne du journal, pas une clé d'URL stable).
+ * Dès que `accounts` est chargé, on résout et on préremplit `accountNumber`
+ * dans le formulaire — le champ Compte reste alors verrouillé
+ * (`accountLocked`), sans dupliquer aucune règle de validation : la même
+ * `TransactionFormBody`/`validateTransactionForm`/`buildTransactionInput` que
+ * la création « libre » depuis `/finance/transactions/create`.
+ */
 function TransactionCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   const currency = useOrganizationCurrency();
+  const [searchParams] = useSearchParams();
+  const presetAccountId = searchParams.get('accountId') ?? '';
   const [form, setFormState] = useState<TransactionFormState>(emptyTransactionForm);
   const [errors, setErrors] = useState<TransactionFormErrors>({});
   const setForm = (patch: Partial<TransactionFormState>) => setFormState((current) => ({ ...current, ...patch }));
   const { data: accounts = [] } = useQuery({ queryKey: queryKeys.finance.accounts(currentTenant.id), queryFn: () => financeService.listAccounts(currentTenant.id) });
+  const presetAccount = presetAccountId ? accounts.find((account) => account.id === presetAccountId) : undefined;
+  const accountLocked = Boolean(presetAccountId);
+  useEffect(() => {
+    if (presetAccount && form.accountNumber !== presetAccount.accountNumber) setForm({ accountNumber: presetAccount.accountNumber });
+  }, [presetAccount?.accountNumber]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cancelTarget = presetAccountId ? `/finance/accounts/${presetAccountId}` : '/finance/transactions';
   const { data: members = [] } = useQuery({ queryKey: queryKeys.members.list(currentTenant.id), queryFn: () => organizationService.listMembers(currentTenant.id) });
   const { dateById: meetingDateById, nearestId: nearestMeetingId, fiscalYearId } = useFiscalMeetings();
   const { data: loanRules = [] } = useQuery({ queryKey: queryKeys.credit.loanRules(currentTenant.id), queryFn: () => loanRuleService.listLoanRules(currentTenant.id), enabled: form.category === 'PRET' });
@@ -1011,7 +1032,8 @@ function TransactionCreate({ t }: { t: T }) {
     onSuccess: (transaction) => {
       if (!transaction) { notify.error(t('finance', 'transactionActionFailed')); return; }
       notify.success(t('finance', 'transactionCreated'));
-      navigate(`/finance/transactions/${transaction.id}`);
+      // Créée depuis une fiche caisse → retour sur cette fiche (solde/journal à jour, invalidation ci-dessus) ; sinon comportement inchangé (fiche transaction).
+      navigate(presetAccountId ? `/finance/accounts/${presetAccountId}` : `/finance/transactions/${transaction.id}`);
     },
   });
   const handleSave = () => {
@@ -1021,10 +1043,10 @@ function TransactionCreate({ t }: { t: T }) {
     const memberNameById = new Map(members.map((member) => [member.id, `${member.firstName} ${member.lastName}`]));
     mutation.mutate(buildTransactionInput(form, rule, meetingDateById, memberNameById, fiscalYearId, t, currency));
   };
-  return <Page title={t('finance', 'newTransaction')} description={t('finance', 'transactionsDescription')} actions={<Back label={t('finance', 'backToTransactions')} />}>
+  return <Page title={t('finance', 'newTransaction')} description={t('finance', 'transactionsDescription')} actions={<Back label={t('finance', presetAccountId ? 'backToAccount' : 'backToTransactions')} />}>
     <div className="max-w-5xl space-y-5">
-      <TransactionFormBody t={t} form={form} setForm={setForm} errors={errors} mode="create" />
-      <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/finance/transactions')}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
+      <TransactionFormBody t={t} form={form} setForm={setForm} errors={errors} mode="create" accountLocked={accountLocked} />
+      <div className="flex justify-end gap-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(cancelTarget)}>{t('finance', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('finance', 'saving') : t('finance', 'save')}</Button></div>
     </div>
   </Page>;
 }
@@ -1632,8 +1654,14 @@ export function FinanceModule() {
        * cf. `creditService`) — Contributions/Garants/Distributions dédiés
        * restent hors périmètre (types d'opération du journal, pas des
        * modules). `credit/loan-rules` reste atteignable depuis Comptes.
+       *
+       * Mandat « Le Compte comme point d'entrée des Transactions »
+       * (2026-09-23) : Comptes devient la page d'atterrissage de `/finance`
+       * (Transactions n'étant plus un nœud de menu, `/finance/transactions`
+       * ne doit plus être la redirection par défaut — elle reste une route à
+       * part entière, atteignable depuis Comptes/le détail d'un compte).
        */}
-      <Route index element={<Navigate to="transactions" replace />} />
+      <Route index element={<Navigate to="accounts" replace />} />
       <Route path="accounts" element={<AccountsList t={t} />} />
       <Route path="accounts/create" element={<AccountCreate t={t} />} />
       <Route path="accounts/:id" element={<AccountDetail t={t} />} />

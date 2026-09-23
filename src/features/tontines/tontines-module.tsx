@@ -344,12 +344,12 @@ function AdhesionsPanel({ t, tontineId }: { t: T; tontineId: string }) {
   const groups = groupAdhesionsByMember(adhesions);
   const closeMutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.closeAdhesion>>, string>({
     mutationFn: (adhesionId) => tontinesService.closeAdhesion(currentTenant.id, adhesionId, new Date().toISOString().slice(0, 10)),
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses()],
     onSuccess: (result) => { if (result) notify.success(t('tontines', 'adhesionClosed')); },
   });
   const addRepresentationMutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.addAdhesion>>, string>({
     mutationFn: (memberId) => tontinesService.addAdhesion(currentTenant.id, tontineId, memberId, new Date().toISOString().slice(0, 10)),
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses()],
     onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'adhesionAddFailed')); return; } notify.success(t('tontines', 'representationAdded')); },
   });
   return <div className="space-y-4">
@@ -509,6 +509,7 @@ function TontineDetail({ t }: { t: T }) {
         </CardContent></Card>
       </TabsContent>
 
+      {/* Sans achat : ordre de passage prédéfini (AdherentsOrderPanel). Avec achat : pas d'ordre, simple adhésion (AdhesionsPanel) — la détermination du bénéficiaire se fait ultérieurement via les règles d'achat. */}
       <TabsContent value="adherents" className="mt-4"><Card><CardContent className="p-5">{tontine.withPurchase ? <AdhesionsPanel t={t} tontineId={tontine.id} /> : <AdherentsOrderPanel t={t} tontineId={tontine.id} />}</CardContent></Card></TabsContent>
 
       <TabsContent value="tours" className="mt-4"><Card><CardContent className="p-5"><OccurrenceSection t={t} tontine={tontine} /></CardContent></Card></TabsContent>

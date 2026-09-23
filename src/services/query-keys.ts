@@ -92,8 +92,14 @@ export const queryKeys = {
     occurrences: (tontineId: string) => ['tontines', 'occurrences', tontineId] as const,
     occurrence: (occurrenceId: string) => ['tontines', 'occurrence', occurrenceId] as const,
     beneficiaries: (occurrenceId: string) => ['tontines', 'beneficiaries', occurrenceId] as const,
+    /** Bénéficiaires de TOUS les Tours du cycle courant (historique), jamais un seul Tour : sert à verrouiller les participations déjà « passées » dans les Tours suivants (sans achat ET avec achat). */
+    cycleBeneficiaries: (tontineId: string) => ['tontines', 'cycle-beneficiaries', tontineId] as const,
+    /** AVEC ACHAT — ordre chronologique global des bénéficiaires du cycle : sert à numéroter le panneau « Bénéficiaires du Tour » en continu, jamais réinitialisé à 1 à chaque Tour. */
+    cycleBeneficiaryOrder: (tontineId: string) => ['tontines', 'cycle-beneficiary-order', tontineId] as const,
     contributions: (occurrenceId: string) => ['tontines', 'contributions', occurrenceId] as const,
     contributionStatuses: (occurrenceId: string) => ['tontines', 'contribution-statuses', occurrenceId] as const,
+    /** Préfixe d'invalidation : un ajout/une sortie d'adhésion rafraîchit les Tours déjà ouverts. */
+    allContributionStatuses: () => ['tontines', 'contribution-statuses'] as const,
     remainders: (tontineId: string) => ['tontines', 'remainders', tontineId] as const,
     distributions: (tontineId: string) => ['tontines', 'distributions', tontineId] as const,
     contributionsByTontine: (tontineId: string) => ['tontines', 'contributions-by-tontine', tontineId] as const,

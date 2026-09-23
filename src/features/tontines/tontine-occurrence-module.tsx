@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, ArrowLeft as ArrowLeftIcon, CalendarDays, CheckCircle2, Download, HandCoins, MoreVertical, ShoppingCart, Trash2, UsersRound, Wallet } from 'lucide-react';
+import { ArrowRight, ArrowLeft as ArrowLeftIcon, CalendarDays, CheckCircle2, Download, HandCoins, Lock, MoreVertical, ShoppingCart, Trash2, UsersRound, Wallet } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DataTable, StatusBadge, EmptyState, MoneyDisplay, PermissionGate, DetailSkeleton, ErrorState, MemberAvatar, FilterBar, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -62,24 +62,48 @@ function HeaderStat({ label, value }: { label: string; value: ReactNode }) {
 
 /** Colonne gauche — cotisations des adhérents (checkbox, avatar, montant, statut, toggle ON/OFF). */
 function ContributionsColumn({
-  t, contributions, memberById, beneficiaryAdhesionIds, selectedToAdd, onToggleSelect, onTogglePayment, onMarkAllPaid, onAdd, closed, togglePendingId, markAllPending, addPending,
+  t, contributions, memberById, beneficiaryAdhesionIds, historicalBeneficiaryAdhesionIds, selectedToAdd, onToggleSelect, onTogglePayment, onMarkAllPaid, onAdd, closed, togglePendingId, markAllPending, addPending, withPurchase,
 }: {
-  t: T; contributions: ContributionStatus[]; memberById: Map<string, MemberInfo>; beneficiaryAdhesionIds: Set<string>;
+  t: T; contributions: ContributionStatus[]; memberById: Map<string, MemberInfo>; beneficiaryAdhesionIds: Set<string>; historicalBeneficiaryAdhesionIds: Set<string>;
   selectedToAdd: Set<string>; onToggleSelect: (adhesionId: string) => void; onTogglePayment: (adhesionId: string, paid: boolean) => void; onMarkAllPaid: () => void; onAdd: () => void;
-  closed: boolean; togglePendingId: string | null; markAllPending: boolean; addPending: boolean;
+  closed: boolean; togglePendingId: string | null; markAllPending: boolean; addPending: boolean; withPurchase: boolean;
 }) {
   const [search, setSearch] = useState('');
   const query = normalizeSearchText(search);
   const filtered = contributions.filter((row) => !query || row.memberName.toLowerCase().includes(query));
   const anyUnpaid = contributions.some((row) => !row.paid);
-  const addableFiltered = filtered.filter((row) => !beneficiaryAdhesionIds.has(row.adhesionId));
-  const selectedFilteredCount = addableFiltered.filter((row) => selectedToAdd.has(row.adhesionId)).length;
-  const allFilteredSelected = addableFiltered.length > 0 && selectedFilteredCount === addableFiltered.length;
-  const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
-  const toggleSelectAllFiltered = () => addableFiltered.forEach((row) => { if (allFilteredSelected) { if (selectedToAdd.has(row.adhesionId)) onToggleSelect(row.adhesionId); } else if (!selectedToAdd.has(row.adhesionId)) onToggleSelect(row.adhesionId); });
+  /**
+   * SANS ACHAT uniquement (mandat « sélection séquentielle des bénéficiaires »,
+   * 2026-09-23, étendu par « historique des bénéficiaires entre Tours ») —
+   * `contributions` est déjà trié par `rank` (source de vérité : l'ordre
+   * défini dans l'onglet Adhérents, `TontineBeneficiaryPlan.position`), jamais
+   * retrié ici par nom/date/sélection/API. Une position N n'est sélectionnable
+   * que si TOUTES les positions précédentes sont déjà bénéficiaires de CE Tour,
+   * OU déjà bénéficiaires d'un Tour PRÉCÉDENT (historique), OU déjà
+   * sélectionnées dans ce lot — jamais un trou dans la séquence 1→2→3→4→5.
+   * Avec achat, aucune contrainte : toujours vrai.
+   */
+  const orderedAdhesionIds = contributions.map((row) => row.adhesionId);
+  const isSelectableInOrder = (adhesionId: string): boolean => {
+    if (withPurchase) return true;
+    const index = orderedAdhesionIds.indexOf(adhesionId);
+    return orderedAdhesionIds.slice(0, index).every((id) => beneficiaryAdhesionIds.has(id) || historicalBeneficiaryAdhesionIds.has(id) || selectedToAdd.has(id));
+  };
 
   const columns: TableColumn<ContributionStatus & { id: string }>[] = [
-    { key: 'select', header: '', className: 'w-8', render: (row) => { const isBeneficiary = beneficiaryAdhesionIds.has(row.adhesionId); return <Checkbox checked={isBeneficiary || selectedToAdd.has(row.adhesionId)} onCheckedChange={() => onToggleSelect(row.adhesionId)} disabled={closed || isBeneficiary} aria-label={t('tontines', 'selectMember')} />; } },
+    // Sans achat uniquement : le rang reflète l'ordre de passage prédéfini (`TontineBeneficiaryPlan.position`). Avec achat, aucun ordre n'est prédéfini — la colonne n'a pas de sens et disparaît entièrement (jamais un « — » à la place).
+    ...(withPurchase ? [] : [{ key: 'rank', header: '#', className: 'w-10', render: (row: ContributionStatus) => row.rank === Number.MAX_SAFE_INTEGER ? '—' : String(row.rank) } as TableColumn<ContributionStatus & { id: string }>]),
+    {
+      key: 'select', header: '', className: 'w-8', render: (row) => {
+        const isBeneficiary = beneficiaryAdhesionIds.has(row.adhesionId);
+        // Deux raisons de verrouillage distinctes côté code (mandat §5/§11), même rendu visuel (cadenas) : historique (déjà bénéficiaire d'un AUTRE Tour de ce cycle) vs séquence du Tour courant pas encore atteinte.
+        const isHistorical = !isBeneficiary && historicalBeneficiaryAdhesionIds.has(row.adhesionId);
+        const isSequenceLocked = !isBeneficiary && !isHistorical && !isSelectableInOrder(row.adhesionId);
+        if (isHistorical) return <Lock size={14} className="text-muted-foreground" aria-label={t('tontines', 'positionAlreadyBeneficiary')} />;
+        if (isSequenceLocked) return <Lock size={14} className="text-muted-foreground" aria-label={t('tontines', 'positionLocked')} />;
+        return <Checkbox checked={isBeneficiary || selectedToAdd.has(row.adhesionId)} onCheckedChange={() => onToggleSelect(row.adhesionId)} disabled={closed || isBeneficiary} aria-label={t('tontines', 'selectMember')} />;
+      },
+    },
     { key: 'member', header: t('tontines', 'memberColumn'), render: (row) => { const member = memberById.get(row.memberId); return <span className="flex items-center gap-2"><MemberAvatar member={member ?? { firstName: row.memberName, lastName: '' }} size="sm" />{row.memberName}</span>; } },
     { key: 'amountDue', header: t('tontines', 'amountDue'), render: (row) => <MoneyDisplay amount={row.amountDue} /> },
     { key: 'status', header: t('tontines', 'paymentStatus'), render: (row) => <StatusBadge label={t('tontines', row.paid ? 'paidStatus' : 'unpaidStatus')} tone={row.paid ? 'success' : 'error'} /> },
@@ -100,10 +124,7 @@ function ContributionsColumn({
       <FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'searchAdherentPlaceholder')} />
       <DataTable columns={columns} rows={filtered.map((row) => ({ ...row, id: row.adhesionId }))} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noAdhesions')} />} />
 
-      {addableFiltered.length > 0 && <label className="flex w-fit cursor-pointer items-center gap-2 text-sm font-medium text-foreground">
-        <Checkbox checked={allFilteredSelected ? true : someFilteredSelected ? 'indeterminate' : false} onCheckedChange={toggleSelectAllFiltered} disabled={closed} />
-        {t('tontines', 'selectAllContributions', { count: String(contributions.length) })}
-      </label>}
+      {/* Mandat « sélection individuelle des bénéficiaires » (2026-09-23) : le nombre de bénéficiaires d'un Tour reste volontairement faible (1 à 3 en pratique) — la sélection reste explicite adhérent par adhérent, jamais un « Tout sélectionner » global. */}
 
       {anyUnpaid && <PermissionGate permission="contributions.manage"><Button variant="outline" className="w-full justify-center border-primary/40 text-primary hover:bg-primary/5" disabled={closed || markAllPending} onClick={onMarkAllPaid}><CheckCircle2 size={15} />{t('tontines', 'markAllPaid')}</Button></PermissionGate>}
 
@@ -159,12 +180,19 @@ function SettleBeneficiaryDialog({ t, open, memberName, remaining, withPurchase,
   </ConfirmDialog>;
 }
 
-/** Colonne droite — bénéficiaires du Tour (plusieurs par Tour, chacun sa propre ligne, chaque paiement indépendant des autres). */
-function BeneficiariesColumn({ t, beneficiaries, memberById, selected, onToggleSelect, onRemoveOne, onRemoveSelected, onSettle, closed, withPurchase, removePendingId, removeSelectedPending, settlePendingId }: {
-  t: T; beneficiaries: OccurrenceBeneficiaryRow[]; memberById: Map<string, MemberInfo>;
-  selected: Set<string>; onToggleSelect: (beneficiaryId: string) => void; onRemoveOne: (beneficiaryId: string) => void; onRemoveSelected: () => void;
+/**
+ * Colonne droite — bénéficiaires du Tour (plusieurs par Tour, chacun sa
+ * propre ligne, chaque paiement indépendant des autres). Aucune checkbox de
+ * sélection ici (mandat « suppression de la colonne checkbox », 2026-09-23) :
+ * ce panneau n'est qu'un affichage des bénéficiaires déjà sélectionnés depuis
+ * Cotisations. Le retrait est exclusivement individuel, via `onRemoveOne`
+ * (menu ⋮ de la ligne, `row.id` — jamais une sélection groupée).
+ */
+function BeneficiariesColumn({ t, beneficiaries, memberById, positionByAdhesionId, globalBeneficiaryNumberByAdhesionId, onRemoveOne, onSettle, closed, withPurchase, removePendingId, settlePendingId }: {
+  t: T; beneficiaries: OccurrenceBeneficiaryRow[]; memberById: Map<string, MemberInfo>; positionByAdhesionId: Map<string, number>; globalBeneficiaryNumberByAdhesionId: Map<string, number>;
+  onRemoveOne: (beneficiaryId: string) => void;
   onSettle: (beneficiaryId: string, amount: number, purchaseAmount?: number) => void;
-  closed: boolean; withPurchase: boolean; removePendingId: string | null; removeSelectedPending: boolean; settlePendingId: string | null;
+  closed: boolean; withPurchase: boolean; removePendingId: string | null; settlePendingId: string | null;
 }) {
   const [search, setSearch] = useState('');
   const [settlingBeneficiaryId, setSettlingBeneficiaryId] = useState<string | null>(null);
@@ -173,7 +201,7 @@ function BeneficiariesColumn({ t, beneficiaries, memberById, selected, onToggleS
   const settlingBeneficiary = beneficiaries.find((b) => b.id === settlingBeneficiaryId);
 
   const columns: TableColumn<OccurrenceBeneficiaryRow & { id: string; index: number }>[] = [
-    { key: 'select', header: '', className: 'w-8', render: (row) => <Checkbox checked={selected.has(row.id)} onCheckedChange={() => onToggleSelect(row.id)} disabled={closed || !withPurchase} aria-label={t('tontines', 'selectMember')} /> },
+    // Sans achat : le « # » est le RANG D'ORIGINE dans l'ordre maître Adhérents (mandat « # = rang d'origine », 2026-09-23). Avec achat : numéro GLOBAL et CONTINU du bénéficiaire depuis le début du cycle (mandat « numérotation globale des bénéficiaires », 2026-09-23) — jamais l'index dans ce tableau, jamais réinitialisé à 1 par Tour.
     { key: 'index', header: '#', className: 'w-8', render: (row) => String(row.index) },
     { key: 'member', header: t('tontines', 'beneficiaryColumn'), render: (row) => { const member = memberById.get(row.adhesionId); const label = member?.memberName ?? row.adhesionId; return <span className="flex items-center gap-2"><MemberAvatar member={member ?? { firstName: label, lastName: '' }} size="sm" />{label}</span>; } },
     /** « Achat » — avec-achat uniquement (mandat « montant d'achat par bénéficiaire ») : une Tontine sans achat n'affiche jamais cette colonne, jamais un montant fictif à 0. */
@@ -185,7 +213,8 @@ function BeneficiariesColumn({ t, beneficiaries, memberById, selected, onToggleS
     {
       key: 'actions', header: '', className: 'w-10', render: (row) => {
         const status = getBeneficiaryPaymentStatus(row);
-        const canRemove = withPurchase && row.amountPaid === 0 && !closed;
+        // Sans achat : le retrait est autorisé (mandat « retrait en cascade », 2026-09-23) — le service retire aussi, côté serveur, toute position supérieure déjà bénéficiaire de ce même Tour, jamais uniquement côté UI.
+        const canRemove = row.amountPaid === 0 && !closed;
         const canSettle = status !== 'PAID' && !closed;
         if (!canRemove && !canSettle) return null;
         return <PermissionGate permission="beneficiaries.manage">
@@ -200,7 +229,19 @@ function BeneficiariesColumn({ t, beneficiaries, memberById, selected, onToggleS
       },
     },
   ];
-  const rows = filtered.map((row, index) => ({ ...row, id: row.id, index: index + 1 }));
+  /**
+   * SANS ACHAT : trie ET numérote par le rang d'origine (`positionByAdhesionId`,
+   * source unique `TontineBeneficiaryPlan.position`) — jamais l'ordre de
+   * recherche/sélection/ajout au Tour.
+   * AVEC ACHAT (mandat « numérotation globale des bénéficiaires »,
+   * 2026-09-23) : numérote par `globalBeneficiaryNumberByAdhesionId` (ordre
+   * chronologique de TOUS les Tours du cycle) — jamais réinitialisé à 1 à
+   * l'ouverture d'un nouveau Tour. L'ordre d'ajout au sein de ce Tour est
+   * DÉJÀ l'ordre chronologique global (les numéros y sont donc déjà
+   * croissants) : aucun retri nécessaire, contrairement à sans achat.
+   */
+  const orderedFiltered = withPurchase ? filtered : [...filtered].sort((a, b) => (positionByAdhesionId.get(a.adhesionId) ?? Number.MAX_SAFE_INTEGER) - (positionByAdhesionId.get(b.adhesionId) ?? Number.MAX_SAFE_INTEGER));
+  const rows = orderedFiltered.map((row, index) => ({ ...row, id: row.id, index: withPurchase ? (globalBeneficiaryNumberByAdhesionId.get(row.adhesionId) ?? index + 1) : (positionByAdhesionId.get(row.adhesionId) ?? index + 1) }));
 
   return <Card className="lg:basis-[42%]">
     <CardHeader className="border-b border-border pb-4">
@@ -210,12 +251,6 @@ function BeneficiariesColumn({ t, beneficiaries, memberById, selected, onToggleS
     <CardContent className="space-y-4 p-5">
       <FilterBar search={search} onSearchChange={setSearch} placeholder={t('tontines', 'searchBeneficiaryPlaceholder')} />
       <DataTable columns={columns} rows={rows} empty={<EmptyState icon={HandCoins} title={t('tontines', 'noBeneficiaries')} />} />
-      {withPurchase && <PermissionGate permission="beneficiaries.manage">
-        <Button variant="outline" className="h-auto w-full flex-col gap-0.5 border-destructive/30 py-3 text-destructive hover:bg-destructive/5" disabled={closed || selected.size === 0 || removeSelectedPending} onClick={onRemoveSelected}>
-          <span className="flex items-center gap-1.5 text-sm font-semibold"><ArrowLeftIcon size={15} />{t('tontines', 'removeAction')}</span>
-          <span className="text-[11px] font-normal opacity-90">{t('tontines', 'removeBeneficiariesHint')}</span>
-        </Button>
-      </PermissionGate>}
     </CardContent>
 
     {settlingBeneficiary && <SettleBeneficiaryDialog
@@ -277,13 +312,16 @@ export function OccurrenceDetail({ t }: { t: T }) {
   const { currentTenant } = useTenant();
   const navigate = useNavigate();
   const [selectedToAdd, setSelectedToAdd] = useState<Set<string>>(new Set());
-  const [selectedToRemove, setSelectedToRemove] = useState<Set<string>>(new Set());
 
   const { data: occurrence, isPending: isOccurrencePending, isError: isOccurrenceError, isSuccess: isOccurrenceSuccess, refetch } = useQuery({ queryKey: queryKeys.tontines.occurrence(occurrenceId), queryFn: () => tontineOperationsService.getOccurrence(currentTenant.id, occurrenceId) });
   /** Requête dépendante (`enabled: Boolean(occurrence)`) — tant qu'elle n'a pas elle-même abouti, le Tour n'est PAS « introuvable » : il attend encore sa Tontine parente (sinon flash 404 le temps de ce second aller-retour). */
   const { data: tontine, isPending: isTontinePending, isError: isTontineError, isSuccess: isTontineSuccess, refetch: refetchTontine } = useQuery({ queryKey: queryKeys.tontines.detail(tontineId), queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId), enabled: Boolean(occurrence) });
   const { data: contributions = [] } = useQuery({ queryKey: queryKeys.tontines.contributionStatuses(occurrenceId), queryFn: () => tontineOperationsService.listContributionStatuses(currentTenant.id, occurrenceId), enabled: Boolean(occurrence) });
   const { data: beneficiaries = [] } = useQuery({ queryKey: queryKeys.tontines.beneficiaries(occurrenceId), queryFn: () => tontineOperationsService.listBeneficiaries(currentTenant.id, occurrenceId), enabled: Boolean(occurrence) });
+  /** Sans achat ET avec achat (mandat « historique des bénéficiaires entre Tours », étendu 2026-09-23 aux tontines avec achat, au niveau de la PARTICIPATION/`adhesionId`, jamais du membre) — bénéficiaires de TOUS les Tours du cycle, jamais uniquement de celui-ci ; sert à verrouiller les participations déjà « passées » dans un Tour précédent. */
+  const { data: cycleBeneficiaryAdhesionIds = [] } = useQuery({ queryKey: queryKeys.tontines.cycleBeneficiaries(tontineId), queryFn: () => tontineOperationsService.listCycleBeneficiaryAdhesionIds(currentTenant.id, tontineId), enabled: Boolean(occurrence) && Boolean(tontine) });
+  /** AVEC ACHAT uniquement (mandat « numérotation globale des bénéficiaires », 2026-09-23) — ordre chronologique de TOUS les bénéficiaires du cycle, jamais réinitialisé par Tour. Sans achat : non utilisé (le rang du Plan reste la seule source, inchangée). */
+  const { data: cycleBeneficiaryOrder = [] } = useQuery({ queryKey: queryKeys.tontines.cycleBeneficiaryOrder(tontineId), queryFn: () => tontineOperationsService.listCycleBeneficiaryGlobalOrder(currentTenant.id, tontineId), enabled: Boolean(occurrence) && Boolean(tontine?.withPurchase === true) });
   const { data: remainders = [] } = useQuery({ queryKey: queryKeys.tontines.remainders(tontineId), queryFn: () => tontineOperationsService.listRemainders(currentTenant.id, tontineId), enabled: Boolean(occurrence) });
   const { data: allMembers = [] } = useQuery({ queryKey: ['organization', 'members', currentTenant.id], queryFn: () => Promise.resolve(members.filter((m) => m.tenantId === currentTenant.id)) });
 
@@ -308,19 +346,15 @@ export function OccurrenceDetail({ t }: { t: T }) {
 
   const addMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.addOccurrenceBeneficiaries>>, void>({
     mutationFn: () => tontineOperationsService.addOccurrenceBeneficiaries(currentTenant.id, occurrenceId, Array.from(selectedToAdd)),
-    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId)],
+    // `cycleBeneficiaries` (historique inter-Tours, sans/avec achat) et `cycleBeneficiaryOrder` (numérotation globale, avec achat) doivent rester en phase avec `beneficiaries` de ce Tour, sinon un bénéficiaire tout juste ajouté ICI apparaîtrait à tort comme « historique » (verrouillé) ou son numéro serait incorrect avant le prochain refetch.
+    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId), queryKeys.tontines.cycleBeneficiaries(tontineId), queryKeys.tontines.cycleBeneficiaryOrder(tontineId)],
     onSuccess: (result) => { if (!result || result.added.length === 0) { notify.error(t('tontines', 'beneficiaryAddFailed')); return; } notify.success(t('tontines', 'beneficiariesAddedCount', { count: String(result.added.length) })); setSelectedToAdd(new Set()); },
-  });
-
-  const removeMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.removeOccurrenceBeneficiaries>>, string[]>({
-    mutationFn: (beneficiaryIds) => tontineOperationsService.removeOccurrenceBeneficiaries(currentTenant.id, beneficiaryIds),
-    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId)],
-    onSuccess: (result) => { if (!result || result.removed === 0) { notify.error(t('tontines', 'beneficiaryRemoveFailed')); return; } notify.success(t('tontines', 'beneficiariesRemovedCount', { count: String(result.removed) })); setSelectedToRemove(new Set()); },
   });
 
   const removeOneMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.removeOccurrenceBeneficiary>>, string>({
     mutationFn: (beneficiaryId) => tontineOperationsService.removeOccurrenceBeneficiary(currentTenant.id, beneficiaryId),
-    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId)],
+    // Sans achat : le retrait libère aussi des positions du Plan (`consumedByOccurrenceId` réinitialisé) — l'onglet Adhérents ET l'historique inter-Tours doivent refléter cette disponibilité retrouvée sans reload complet. Avec achat : la numérotation globale change aussi dès qu'une participation quitte le cycle.
+    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId), queryKeys.tontines.plans(tontineId), queryKeys.tontines.cycleBeneficiaries(tontineId), queryKeys.tontines.cycleBeneficiaryOrder(tontineId)],
     onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'beneficiaryRemoveFailed')); return; } notify.success(t('tontines', 'beneficiaryRemoved')); },
   });
   const removePendingId = removeOneMutation.isPending ? removeOneMutation.variables ?? null : null;
@@ -371,19 +405,63 @@ export function OccurrenceDetail({ t }: { t: T }) {
     return [row.adhesionId, member ?? { memberName: status?.memberName ?? row.adhesionId, firstName: status?.memberName ?? row.adhesionId, lastName: '', photoUrl: undefined }];
   }));
   const beneficiaryAdhesionIds = new Set(beneficiaries.map((b) => b.adhesionId));
+  /**
+   * SANS ACHAT (mandat « historique des bénéficiaires entre Tours »,
+   * 2026-09-23) — adhésions déjà bénéficiaires d'un Tour PRÉCÉDENT (jamais de
+   * celui-ci, exclu explicitement) : par construction, une adhésion ne
+   * bénéficie jamais de deux Tours du même cycle simultanément, donc
+   * `cycleBeneficiaryAdhesionIds \ beneficiaryAdhesionIds` = exactement les
+   * positions « déjà passées » ailleurs.
+   */
+  const historicalBeneficiaryAdhesionIds = new Set(cycleBeneficiaryAdhesionIds.filter((id) => !beneficiaryAdhesionIds.has(id)));
+  /**
+   * SANS ACHAT (mandat « # = rang d'origine dans Adhérents », 2026-09-23) —
+   * `contributions[].rank` porte déjà exactement cette information (source
+   * de vérité unique : `TontineBeneficiaryPlan.position`, jamais retrié ici),
+   * réutilisée telle quelle pour le panneau « Bénéficiaires du Tour » — un
+   * même `adhesionId` (une même représentation) garde toujours le même rang,
+   * jamais l'index dans `beneficiaries[]` ni l'ordre d'ajout au Tour.
+   */
+  const positionByAdhesionId = new Map(contributions.map((row) => [row.adhesionId, row.rank]));
+  /**
+   * AVEC ACHAT (mandat « numérotation globale des bénéficiaires »,
+   * 2026-09-23) — numéro 1..N dans `cycleBeneficiaryOrder` (déjà l'ordre
+   * chronologique de tous les Tours du cycle) : ne recommence jamais à 1 à
+   * l'ouverture d'un nouveau Tour, jamais l'index dans `beneficiaries[]`.
+   */
+  const globalBeneficiaryNumberByAdhesionId = new Map(cycleBeneficiaryOrder.map((id, index) => [id, index + 1]));
 
+  /**
+   * SANS ACHAT (mandat « sélection séquentielle des bénéficiaires »,
+   * 2026-09-23) — l'ordre défini dans l'onglet Adhérents (`rank`, déjà
+   * l'ordre de tri de `contributions`) est la SOURCE DE VÉRITÉ : on ne peut
+   * cocher une position que si toutes les précédentes sont déjà bénéficiaires
+   * de ce Tour ou déjà sélectionnées dans ce lot (garde-fou en plus du
+   * verrouillage visuel de `ContributionsColumn`, jamais uniquement côté UI).
+   * Décocher une position retire aussi, en cascade, toutes les positions
+   * SUIVANTES du lot — jamais un trou dans la séquence 1→2→3→4→5. Avec
+   * achat, comportement historique inchangé (toggle indépendant).
+   */
   const toggleSelectAdd = (adhesionId: string) => setSelectedToAdd((current) => {
-    if (beneficiaryAdhesionIds.has(adhesionId)) return current; // déjà bénéficiaire — retrait uniquement via le panneau droit
+    if (beneficiaryAdhesionIds.has(adhesionId) || historicalBeneficiaryAdhesionIds.has(adhesionId)) return current; // déjà bénéficiaire (ce Tour ou un Tour précédent) — jamais re-sélectionnable ici
     const next = new Set(current);
-    if (next.has(adhesionId)) next.delete(adhesionId); else next.add(adhesionId);
+    if (next.has(adhesionId)) {
+      next.delete(adhesionId);
+      if (!withPurchase) {
+        const orderedIds = contributions.map((row) => row.adhesionId);
+        for (const id of orderedIds.slice(orderedIds.indexOf(adhesionId) + 1)) next.delete(id);
+      }
+      return next;
+    }
+    if (!withPurchase) {
+      const orderedIds = contributions.map((row) => row.adhesionId);
+      const index = orderedIds.indexOf(adhesionId);
+      const precedingReady = orderedIds.slice(0, index).every((id) => beneficiaryAdhesionIds.has(id) || historicalBeneficiaryAdhesionIds.has(id) || next.has(id));
+      if (!precedingReady) return current;
+    }
+    next.add(adhesionId);
     return next;
   });
-  const toggleSelectRemove = (beneficiaryId: string) => setSelectedToRemove((current) => {
-    const next = new Set(current);
-    if (next.has(beneficiaryId)) next.delete(beneficiaryId); else next.add(beneficiaryId);
-    return next;
-  });
-
   return <div className="mx-auto max-w-[1600px] space-y-6 p-5 sm:p-7">
     <Breadcrumb>
       <BreadcrumbList>
@@ -456,16 +534,19 @@ export function OccurrenceDetail({ t }: { t: T }) {
     <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
       <ContributionsColumn
         t={t} contributions={contributions} memberById={contributionMemberById} beneficiaryAdhesionIds={beneficiaryAdhesionIds}
+        historicalBeneficiaryAdhesionIds={historicalBeneficiaryAdhesionIds}
         selectedToAdd={selectedToAdd} onToggleSelect={toggleSelectAdd}
         onTogglePayment={(adhesionId, paid) => toggleMutation.mutate({ adhesionId, paid })} onMarkAllPaid={() => markAllMutation.mutate()}
         onAdd={() => addMutation.mutate()}
         closed={closed} togglePendingId={togglePendingId} markAllPending={markAllMutation.isPending} addPending={addMutation.isPending}
+        withPurchase={withPurchase}
       />
       <BeneficiariesColumn
-        t={t} beneficiaries={beneficiaries} memberById={beneficiaryMemberById} selected={selectedToRemove} onToggleSelect={toggleSelectRemove}
-        onRemoveOne={(beneficiaryId) => removeOneMutation.mutate(beneficiaryId)} onRemoveSelected={() => removeMutation.mutate(Array.from(selectedToRemove))}
+        t={t} beneficiaries={beneficiaries} memberById={beneficiaryMemberById} positionByAdhesionId={positionByAdhesionId}
+        globalBeneficiaryNumberByAdhesionId={globalBeneficiaryNumberByAdhesionId}
+        onRemoveOne={(beneficiaryId) => removeOneMutation.mutate(beneficiaryId)}
         onSettle={(beneficiaryId, amount, purchaseAmount) => settleMutation.mutate({ beneficiaryId, amount, purchaseAmount })}
-        closed={closed} withPurchase={withPurchase} removePendingId={removePendingId} removeSelectedPending={removeMutation.isPending} settlePendingId={settlePendingId}
+        closed={closed} withPurchase={withPurchase} removePendingId={removePendingId} settlePendingId={settlePendingId}
       />
     </div>
 

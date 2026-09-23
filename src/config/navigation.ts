@@ -13,7 +13,6 @@ import {
   LayoutDashboard,
   ListChecks,
   LockKeyhole,
-  ReceiptText,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -52,24 +51,27 @@ export const navigationTree: NavigationNode[] = [
     ],
   },
   /**
-   * Mandat « Transactions = journal financier central » : le groupe Finances ne
-   * contient QUE deux entrées — Comptes (gestion des caisses) et Transactions
-   * (journal financier, point d'entrée unique de toute opération via le bouton
-   * « + Ajouter une transaction »). Contributions / Demandes de prêts / Prêts /
-   * Remboursements / Garants / Distributions ne sont pas des modules autonomes
-   * mais des TYPES D'OPÉRATION : leurs écrans et routes ont été supprimés. Seule
-   * `/finance/credit/loan-rules` subsiste comme route (éditeur de politique de
-   * prêt), atteignable depuis la page Comptes — jamais depuis le menu.
+   * Mandat « Le Compte comme point d'entrée des Transactions » (2026-09-23) :
+   * le groupe Finances ne contient plus que Comptes et Tontines dans le menu.
+   * Transactions n'est plus un nœud de premier niveau, mais la fonctionnalité
+   * (journal financier, point d'entrée unique de toute opération via le
+   * bouton « + Ajouter une transaction ») reste entièrement disponible :
+   * `/finance/transactions` (vue globale, filtrable par compte/type/date) et
+   * `/finance/transactions/create` existent toujours, atteignables depuis la
+   * page Comptes et depuis le détail d'un compte (`AccountDetail`), jamais
+   * depuis le menu. Contributions / Demandes de prêts / Prêts / Remboursements /
+   * Garants / Distributions restent des TYPES D'OPÉRATION, pas des modules
+   * autonomes. `/finance/credit/loan-rules` reste atteignable depuis la page
+   * Comptes.
    *
    * Mandat « Restructuration finale de la navigation » (2026-09-16) : Tontines
-   * rejoint ce groupe comme troisième domaine financier — déplacement de nœud
+   * rejoint ce groupe comme domaine financier — déplacement de nœud
    * uniquement, l'URL `/tontines` et toute la logique métier Tontines restent
    * inchangées.
    */
   {
     label: 'Finance', path: '/finance', icon: Landmark, children: [
       { label: 'Accounts', path: '/finance/accounts', icon: WalletCards },
-      { label: 'Transactions', path: '/finance/transactions', icon: ReceiptText },
       { label: 'Tontines', path: '/tontines', icon: Sparkles },
     ],
   },

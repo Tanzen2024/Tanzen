@@ -92,7 +92,7 @@ export function AdherentsOrderPanel({ t, tontineId }: { t: T; tontineId: string 
 
   const closeMutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.closeAdhesion>>, string>({
     mutationFn: (adhesionId) => tontinesService.closeAdhesion(currentTenant.id, adhesionId, new Date().toISOString().slice(0, 10)),
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses()],
     onSuccess: (result) => { if (result) notify.success(t('tontines', 'adhesionClosed')); },
   });
 
@@ -103,7 +103,7 @@ export function AdherentsOrderPanel({ t, tontineId }: { t: T; tontineId: string 
       if (adhesion) await tontineOperationsService.addPlanEntries(currentTenant.id, tontineId, [adhesion.id]);
       return adhesion;
     },
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.plans(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses(), queryKeys.tontines.plans(tontineId)],
     onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'adhesionAddFailed')); return; } notify.success(t('tontines', 'representationAdded')); },
   });
 
@@ -115,7 +115,7 @@ export function AdherentsOrderPanel({ t, tontineId }: { t: T; tontineId: string 
 
   const setPositionMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.setPlanPosition>>, { planId: string; targetPosition: number }>({
     mutationFn: ({ planId, targetPosition }) => tontineOperationsService.setPlanPosition(currentTenant.id, tontineId, planId, targetPosition),
-    invalidateKeys: [queryKeys.tontines.plans(tontineId)],
+    invalidateKeys: [queryKeys.tontines.plans(tontineId), queryKeys.tontines.allContributionStatuses()],
     onSuccess: (result) => { if (!result) notify.error(t('tontines', 'planReorderFailed')); },
   });
 

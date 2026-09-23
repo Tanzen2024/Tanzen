@@ -147,7 +147,7 @@ export function AddAdherentsDialog({ t, open, onOpenChange, tenantId, tontineId,
 
   const addOnlyMutation = useMockMutation<Awaited<ReturnType<typeof tontinesService.addAdhesions>>, string[]>({
     mutationFn: (memberIds) => tontinesService.addAdhesions(tenantId, tontineId, memberIds, new Date().toISOString().slice(0, 10)),
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses()],
     /**
      * Retour EXACT du résultat réel (mandat §12-§17) — jamais déduit de
      * `order.length` : `created.length` peut être strictement inférieur au
@@ -180,7 +180,7 @@ export function AddAdherentsDialog({ t, open, onOpenChange, tenantId, tontineId,
       const planned = await tontineOperationsService.addPlanEntries(tenantId, tontineId, created.map((adhesion) => adhesion.id));
       return { created, skipped, planned };
     },
-    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.plans(tontineId)],
+    invalidateKeys: [queryKeys.tontines.adhesions(tontineId), queryKeys.tontines.summary(tontineId), queryKeys.tontines.planningStatus(tontineId), queryKeys.tontines.allContributionStatuses(), queryKeys.tontines.plans(tontineId)],
     onSuccess: ({ created, skipped, planned }) => {
       if (created.length === 0) { notify.error(skipped === 1 ? t('tontines', 'noAdherentsAddedOne') : t('tontines', 'noAdherentsAdded')); return; }
       notify.success(created.length === 1 ? t('tontines', 'adhesionAddedAndPlanned') : t('tontines', 'adhesionsAddedAndPlannedCount', { count: String(created.length) }));

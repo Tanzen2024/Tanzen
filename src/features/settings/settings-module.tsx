@@ -218,7 +218,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1">
       <StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} />
       {pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}
-      {row.status === 'closed' && row.closedAt && <p className="text-[11px] text-muted-foreground">{t('settings', 'closedAtBy', { date: formatDate(row.closedAt, locale), actor: row.closedBy ?? '—' })}</p>}
+      {row.status === 'closed' && row.closedAt && <p className="text-[11px] text-muted-foreground">{t('settings', 'closedAtBy', { date: formatDate(row.closedAt), actor: row.closedBy ?? '—' })}</p>}
     </div> },
     { key: 'meetingSchedule', header: t('settings', 'meetingCalendar'), render: (row) => (
       <span className="text-xs text-muted-foreground">{row.meetingSchedule ? formatMeetingScheduleDescription(row.meetingSchedule, locale) : t('settings', 'noMeetingSchedule')}</span>
@@ -251,7 +251,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         <p className="text-xs text-muted-foreground">{t('settings', 'reopenApprovalNotice')}</p>
       </div>
     </ConfirmDialog>}
-    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: extendTarget.label, current: formatDate(extendTarget.endDate, locale) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
+    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: extendTarget.label, current: formatDate(extendTarget.endDate) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
       <div className="mt-4 space-y-1 text-left">
         <Label htmlFor="fy-extend-end-date">{t('settings', 'newEndDate')}</Label>
         <Input id="fy-extend-end-date" type="date" value={extendEndDate} onChange={(event) => setExtendEndDate(event.target.value)} aria-invalid={Boolean(extendError)} />
@@ -285,7 +285,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
             <div>
               <p className="mb-1 text-xs font-semibold text-foreground">{t('settings', 'meetingCalDates')}</p>
               <div className="flex flex-wrap gap-1.5">
-                {meetings.map((meeting) => <span key={meeting.id} className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium">{formatDate(meeting.date, locale)}</span>)}
+                {meetings.map((meeting) => <span key={meeting.id} className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium">{formatDate(meeting.date)}</span>)}
               </div>
             </div>
           </>}
@@ -490,12 +490,12 @@ function SettingsModules({ t }: { t: T }) {
 
 // ----------------------------------------------------------------------- Integrations
 
-function SettingsIntegrations({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
+function SettingsIntegrations({ t }: { t: T }) {
   const { currentTenant } = useTenant();
   const { data: integrations = [] } = useQuery({ queryKey: queryKeys.settings.integrations(currentTenant.id), queryFn: () => settingsService.listIntegrations(currentTenant.id) });
   const groups = (['api', 'storage', 'sync', 'external'] as IntegrationCategory[]).map((category) => ({ category, items: integrations.filter((integration) => integration.category === category) }));
   return <Page title={t('settings', 'integrationsTitle')} description={t('settings', 'integrationsDescription')}>
-    <div className="space-y-6">{groups.map(({ category, items }) => { const Icon = CATEGORY_ICON[category]; return items.length > 0 ? <div key={category}><h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground"><Icon size={16} className="text-primary" />{t('settings', CATEGORY_KEY[category])}</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map((integration: Integration) => <Card key={integration.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold">{integration.name}</p><StatusBadge label={t('settings', INTEGRATION_STATUS_KEY[integration.status])} tone={INTEGRATION_STATUS_TONE[integration.status]} /></div><p className="text-xs leading-5 text-muted-foreground">{integration.description}</p><p className="text-[11px] text-muted-foreground">{t('settings', 'lastSync')}: {integration.lastSyncAt ? formatDate(integration.lastSyncAt, locale) : t('settings', 'never')}</p><PermissionGate permission="integrations.manage"><Button variant="outline" size="sm"><Plug size={14} />{t('settings', 'configure')}</Button></PermissionGate></CardContent></Card>)}</div></div> : null; })}</div>
+    <div className="space-y-6">{groups.map(({ category, items }) => { const Icon = CATEGORY_ICON[category]; return items.length > 0 ? <div key={category}><h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground"><Icon size={16} className="text-primary" />{t('settings', CATEGORY_KEY[category])}</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map((integration: Integration) => <Card key={integration.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold">{integration.name}</p><StatusBadge label={t('settings', INTEGRATION_STATUS_KEY[integration.status])} tone={INTEGRATION_STATUS_TONE[integration.status]} /></div><p className="text-xs leading-5 text-muted-foreground">{integration.description}</p><p className="text-[11px] text-muted-foreground">{t('settings', 'lastSync')}: {integration.lastSyncAt ? formatDate(integration.lastSyncAt) : t('settings', 'never')}</p><PermissionGate permission="integrations.manage"><Button variant="outline" size="sm"><Plug size={14} />{t('settings', 'configure')}</Button></PermissionGate></CardContent></Card>)}</div></div> : null; })}</div>
   </Page>;
 }
 
@@ -514,7 +514,7 @@ export function SettingsModule() {
       <Route path="notifications" element={<SettingsNotifications t={t} />} />
       <Route path="security-policies" element={<SettingsSecurityPolicies t={t} />} />
       <Route path="modules" element={<SettingsModules t={t} />} />
-      <Route path="integrations" element={<SettingsIntegrations t={t} locale={typedLocale} />} />
+      <Route path="integrations" element={<SettingsIntegrations t={t} />} />
       <Route path="validation-workflows" element={<ValidationWorkflowsList t={t} />} />
       <Route path="validation-workflows/new" element={<ValidationWorkflowCreate t={t} />} />
       <Route path="validation-workflows/:id" element={<ValidationWorkflowDetail t={t} />} />

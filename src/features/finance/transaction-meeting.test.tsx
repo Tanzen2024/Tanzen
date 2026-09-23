@@ -68,6 +68,6 @@ describe('Finance → Transactions — « Date de réunion » alimentée par l\'
     expect(screen.getByText('Date réunion')).toBeInTheDocument();
     expect(screen.getByText('Date transaction')).toBeInTheDocument();
     // « Date réunion » = la date de la réunion sélectionnée (meeting.meeting_date)
-    expect(screen.getAllByText(formatDate(expectedNearest.date, 'fr')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(formatDate(expectedNearest.date)).length).toBeGreaterThan(0);
   });
 });

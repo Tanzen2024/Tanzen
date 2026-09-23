@@ -16,7 +16,7 @@ const STEP_ICON: Record<WorkflowStepStatus, typeof CheckCircle2> = {
 };
 
 /** Vue générique de la progression d'une demande d'approbation — utilisée par tous les domaines (Crédit, Tontines, Gouvernance, Finance) via WorkflowRequest, sans moteur dédié par domaine. */
-export function ApprovalTimeline({ request, t, locale }: { request: WorkflowRequest; t: T; locale: 'fr' | 'en' }) {
+export function ApprovalTimeline({ request, t }: { request: WorkflowRequest; t: T }) {
   const items = request.steps.map((step) => {
     const Icon = STEP_ICON[step.status];
     const isCurrent = step.order === request.currentStepOrder && step.status === 'pending';
@@ -29,7 +29,7 @@ export function ApprovalTimeline({ request, t, locale }: { request: WorkflowRequ
         {step.actedByName && <span> · {step.actedByName}</span>}
         {step.comment && <span> — {step.comment}</span>}
       </>,
-      date: step.actedAt ? formatDate(step.actedAt, locale) : undefined,
+      date: step.actedAt ? formatDate(step.actedAt) : undefined,
       tone: STEP_TONE[step.status],
     };
   });

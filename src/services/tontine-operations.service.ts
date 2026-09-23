@@ -4,7 +4,7 @@ import { currentUser } from '@/mocks/rbac.mocks';
 import {
   tontines, tontineAdhesions, tontineOccurrences, occurrenceBeneficiaries,
   tontineBeneficiaryPlans, tontineRemainders, tontineContributions, tontineCycles, isAdhesionActiveAt,
-  type TontineOccurrence, type OccurrenceBeneficiary, type TontineBeneficiaryPlan, type TontineRemainder, type TontineContribution, type TontineCycle,
+  type TontineOccurrence, type TontineAdhesion, type OccurrenceBeneficiary, type TontineBeneficiaryPlan, type TontineRemainder, type TontineContribution, type TontineCycle,
 } from '@/mocks/tontines/tontines';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
@@ -117,6 +117,38 @@ function hasAlreadyBenefitedInCurrentCycle(tenantId: string, tontineId: string, 
 }
 
 /**
+ * SANS ACHAT uniquement (mandat « sélection séquentielle des bénéficiaires »,
+ * 2026-09-23) — une adhésion ne peut devenir bénéficiaire d'un Tour QUE si
+ * elle a une position dans le Plan du cycle courant (`cyclePlans`, trié par
+ * position), non déjà consommée, ET si TOUTES les positions de rang
+ * INFÉRIEUR sont déjà consommées (bénéficiaires d'un Tour, quel qu'il soit —
+ * `consumedByOccurrenceId`) ou déjà mises en file dans le même lot
+ * (`queuedInBatch`, alimenté au fil du traitement de `addOccurrenceBeneficiaries`).
+ * Jamais un saut de position (1→3 sans 2), jamais une vérification côté UI
+ * seule — source de vérité identique à `ContributionsColumn`/`toggleSelectAdd`
+ * côté client, ici imposée côté service.
+ */
+function sansAchatBeneficiaryEligible(cyclePlans: TontineBeneficiaryPlan[], adhesionId: string, queuedInBatch: Set<string>): boolean {
+  const plan = cyclePlans.find((item) => item.adhesionId === adhesionId);
+  if (!plan || plan.consumedByOccurrenceId) return false;
+  return cyclePlans.filter((item) => item.position < plan.position).every((item) => Boolean(item.consumedByOccurrenceId) || queuedInBatch.has(item.adhesionId));
+}
+
+/**
+ * Une planification ne regarde pas la date historique du Tour : elle regarde
+ * les adhésions ACTIVES du cycle courant. Ainsi, une adhésion créée après la
+ * création d'un Tour déjà planifié devient immédiatement sélectionnable,
+ * sans toucher aux Tours/cycles déjà clos.
+ */
+function isAvailableForOccurrencePlanning(tenantId: string, occurrence: TontineOccurrence, adhesion: TontineAdhesion): boolean {
+  const currentCycle = getCurrentCycle(tenantId, occurrence.tontineId);
+  return adhesion.tontineId === occurrence.tontineId
+    && adhesion.status === 'active'
+    && currentCycle?.id === occurrence.cycleId
+    && occurrence.status === 'PLANNED';
+}
+
+/**
  * Le cycle courant est terminé quand TOUTES les participations éligibles ont
  * RÉELLEMENT bénéficié — réglé intégralement, `getBeneficiaryPaymentStatus
  * === 'PAID'` — d'un Tour dans ce cycle (mandat §4, précisé par l'audit
@@ -219,7 +251,7 @@ function writeAuditEvent(event: Omit<AuditEvent, 'id' | 'timestamp' | 'actorId' 
 }
 
 export const tontineOperationsService = {
-  // --- Plans de bénéficiaires (SANS-ACHAT uniquement, planification à l'avance) — rattachés DIRECTEMENT à la Tontine ---
+  // --- Classement des adhérents (toutes Tontines) — rattaché DIRECTEMENT à la Tontine ---
 
   /** Positions du cycle COURANT uniquement — les positions d'un ancien cycle (clos) restent en base pour l'historique mais ne polluent jamais la Planification affichée/actionnable (mandat « transparence du cycle »). */
   listPlans: (tenantId: string, tontineId: string) =>
@@ -229,7 +261,7 @@ export const tontineOperationsService = {
       return tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id).sort((a, b) => a.position - b.position);
     }),
 
-  /** Ajoute la prochaine position disponible du cycle COURANT (dernière + 1) — jamais de position dupliquée/choisie librement, jamais une position d'un ancien cycle (clos, immuable). Refuse si la Tontine est « Avec achat » (pas de Plan pour ce mode) ou si l'adhésion n'appartient pas à cette Tontine. */
+  /** Ajoute la prochaine position du classement courant — SANS ACHAT uniquement : l'ordre de passage n'a de sens que si la Tontine en a un prédéfini. Une Tontine « Avec achat » refuse toute entrée de Plan (`withPurchase` → `undefined`), la détermination du bénéficiaire s'y fait via les règles d'achat, jamais un classement. */
   addPlanEntry: (tenantId: string, tontineId: string, adhesionId: string) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
@@ -249,7 +281,7 @@ export const tontineOperationsService = {
   /**
    * Ajout multiple (refonte UX Planification — remplace l'ancien menu
    * déroulant un-adhérent-à-la-fois) — même validation unitaire que
-   * `addPlanEntry` (Tontine « Avec achat » refusée, adhésion hors Tontine ou
+   * `addPlanEntry` (adhésion hors Tontine ou
    * déjà planifiée ignorée), positions strictement croissantes et JAMAIS
    * dupliquées même au sein d'un même batch.
    *
@@ -268,6 +300,7 @@ export const tontineOperationsService = {
   addPlanEntries: (tenantId: string, tontineId: string, adhesionIds: string[], startPosition?: number) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      // SANS ACHAT uniquement — même règle que `addPlanEntry` : une Tontine « Avec achat » refuse le lot entier (aucun ordre de passage prédéfini).
       if (!tontine || tontine.withPurchase) return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
       const cycle = getCurrentCycle(tenantId, tontineId);
       if (!cycle) return { added: [] as TontineBeneficiaryPlan[], skipped: adhesionIds.length };
@@ -442,12 +475,14 @@ export const tontineOperationsService = {
   getOccurrence: (tenantId: string, occurrenceId: string) => mockRequest(() => getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId)),
 
   /**
-   * « Ajouter un tour » — un acte manuel, unitaire (aucune génération en
-   * masse). SANS-ACHAT (`!tontine.withPurchase`, y compris GOODS) : consomme
-   * automatiquement la PROCHAINE position de Plan non consommée de la
-   * Tontine et crée l'`OccurrenceBeneficiary` correspondant. AVEC-ACHAT
-   * (MONEY + `withPurchase`) : ne crée aucun bénéficiaire — l'utilisateur
-   * les choisit ensuite via `addOccurrenceBeneficiary`.
+   * « Ajouter un tour » — un acte manuel, unitaire. Le panneau Bénéficiaires
+   * commence TOUJOURS vide, sans achat comme avec achat (mandat « historique
+   * des bénéficiaires entre Tours », 2026-09-23 — remplace l'ancien
+   * comportement où sans achat auto-consommait la prochaine position non
+   * consommée : désormais chaque bénéficiaire, à chaque position, dans
+   * chaque Tour, est ajouté explicitement via checkbox + « Ajouter »,
+   * jamais automatiquement — cohérent avec la sélection séquentielle
+   * manuelle déjà en place pour les positions suivantes).
    */
   createOccurrence: (tenantId: string, tontineId: string, date: string) =>
     mockRequest(() => {
@@ -459,23 +494,61 @@ export const tontineOperationsService = {
       const nextNumber = existing.reduce((max, item) => Math.max(max, item.occurrenceNumber), 0) + 1;
       const occurrence: TontineOccurrence = { id: uniqueId('OCC'), tenantId, tontineId, occurrenceNumber: nextNumber, date, status: 'PLANNED', createdAt: new Date().toISOString().slice(0, 10), cycleId: cycle.id };
       tontineOccurrences.push(occurrence);
-
-      if (!tontine.withPurchase) {
-        const nextPlan = tontineBeneficiaryPlans
-          .filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id && !item.consumedByOccurrenceId)
-          .sort((a, b) => a.position - b.position)[0];
-        if (nextPlan) {
-          const amountDue = tontine.valueType === 'MONEY' ? (tontine.contributionAmount ?? 0) : (tontine.quantity ?? 0);
-          const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId: occurrence.id, adhesionId: nextPlan.adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
-          occurrenceBeneficiaries.push(beneficiary);
-          nextPlan.consumedByOccurrenceId = occurrence.id;
-        }
-      }
       return occurrence;
     }),
 
   listBeneficiaries: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId)),
+
+  /**
+   * SANS ACHAT — `adhesionId` déjà bénéficiaire d'un Tour QUELCONQUE du cycle
+   * courant (mandat « historique des bénéficiaires entre Tours », 2026-09-23)
+   * — réutilise `getBeneficiaryAdhesionIdsInCycle` (source déjà existante,
+   * jamais un second calcul). Sert à verrouiller, dans un Tour donné, les
+   * positions déjà « passées » dans un AUTRE Tour du même cycle : par
+   * construction (`hasAlreadyBenefitedInCurrentCycle`), une adhésion ne
+   * bénéficie jamais de deux Tours différents du même cycle simultanément,
+   * donc « historique relatif au Tour courant » = cet ensemble MOINS les
+   * bénéficiaires du Tour lui-même (calculé côté appelant).
+   */
+  listCycleBeneficiaryAdhesionIds: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return [];
+      return Array.from(getBeneficiaryAdhesionIdsInCycle(tenantId, tontineId, cycle.id));
+    }),
+
+  /**
+   * AVEC ACHAT — ordre chronologique GLOBAL des bénéficiaires du cycle
+   * courant (mandat « numérotation globale des bénéficiaires », 2026-09-23)
+   * : parcourt tous les Tours du cycle par `occurrenceNumber` croissant
+   * (jamais l'ordre de retour d'une requête), et au sein de chaque Tour dans
+   * l'ordre d'ajout déjà porté par `occurrenceBeneficiaries` (aucun ordre
+   * prédéfini n'existe avec achat — l'ordre d'ajout EST l'ordre métier).
+   * Le rang d'un `adhesionId` dans le tableau retourné + 1 = son numéro
+   * global — jamais réinitialisé à 1 à chaque nouveau Tour. Sans achat,
+   * cette notion ne s'applique pas : le rang du Plan (`listPlans`) reste la
+   * seule source de vérité, inchangée.
+   */
+  listCycleBeneficiaryGlobalOrder: (tenantId: string, tontineId: string) =>
+    mockRequest(() => {
+      const cycle = getCurrentCycle(tenantId, tontineId);
+      if (!cycle) return [];
+      const cycleOccurrenceIds = tontineOccurrences
+        .filter((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.cycleId === cycle.id)
+        .sort((a, b) => a.occurrenceNumber - b.occurrenceNumber)
+        .map((item) => item.id);
+      return cycleOccurrenceIds.flatMap((occurrenceId) => occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId).map((item) => item.adhesionId));
+    }),
+
+  /** Source de vérité du panneau « Planifier le Tour » : chaque adhésion active
+   * est une participation distincte, identifiée par son `adhesionId`. */
+  listOccurrencePlanningCandidates: (tenantId: string, occurrenceId: string) =>
+    mockRequest(() => {
+      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+      if (!occurrence) return [];
+      return tontineAdhesions.filter((adhesion) => adhesion.tenantId === tenantId && isAvailableForOccurrencePlanning(tenantId, occurrence, adhesion));
+    }),
 
   /**
    * Vue « Distributions » consolidée, transverse à tous les Tours de la
@@ -494,26 +567,42 @@ export const tontineOperationsService = {
     }),
 
   /**
-   * AVEC-ACHAT uniquement — sélection du/des bénéficiaire(s) au moment de la
-   * création du tour. Plusieurs bénéficiaires par Tour possibles, chacun sa
-   * propre ligne (jamais une chaîne concaténée). Refuse si la Tontine est
-   * sans-achat (le Plan est alors l'unique voie), si le Tour est déjà
-   * RÉALISÉ, si l'adhésion n'appartient pas à cette Tontine ou n'est pas
-   * active à la date du Tour, ou si l'adhésion est déjà bénéficiaire de ce
-   * Tour.
+   * Sélection explicite du/des bénéficiaire(s) au moment de la création du
+   * tour. Plusieurs bénéficiaires par Tour possibles, chacun sa propre ligne
+   * (jamais une chaîne concaténée). Refuse si le Tour est déjà RÉALISÉ, si
+   * l'adhésion n'appartient pas à cette Tontine ou n'est pas active à la
+   * date du Tour, ou si l'adhésion est déjà bénéficiaire de ce Tour.
+   *
+   * SANS ACHAT (mandat « sélection séquentielle des bénéficiaires »,
+   * 2026-09-23) : contrairement au comportement historique (refus total),
+   * cette voie est désormais AUSSI utilisée pour ajouter manuellement des
+   * bénéficiaires supplémentaires à un Tour déjà ouvert (`createOccurrence`
+   * continue d'auto-consommer la position 1 à l'ouverture — inchangé) —
+   * mais gardée par `sansAchatBeneficiaryEligible` : l'adhésion doit avoir
+   * une position dans le Plan du cycle courant, ET toutes les positions
+   * PRÉCÉDENTES doivent déjà être consommées (bénéficiaires d'un Tour,
+   * quel qu'il soit) — jamais un saut de position, jamais uniquement côté
+   * UI. La position correspondante est marquée consommée par CE Tour.
    */
   addOccurrenceBeneficiary: (tenantId: string, occurrenceId: string, adhesionId: string, amountDue: number) =>
     mockRequest(() => {
       const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
       if (!occurrence || occurrence.status === 'REALIZED') return undefined;
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
-      if (!tontine || !tontine.withPurchase) return undefined;
+      if (!tontine) return undefined;
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
-      if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date)) return undefined;
+      if (!adhesion || !isAvailableForOccurrencePlanning(tenantId, occurrence, adhesion)) return undefined;
       if (occurrenceBeneficiaries.some((item) => item.occurrenceId === occurrenceId && item.adhesionId === adhesionId)) return undefined;
       if (hasAlreadyBenefitedInCurrentCycle(tenantId, tontine.id, adhesionId)) return undefined;
+      let consumedPlan: TontineBeneficiaryPlan | undefined;
+      if (!tontine.withPurchase) {
+        const cyclePlans = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && item.cycleId === occurrence.cycleId).sort((a, b) => a.position - b.position);
+        consumedPlan = cyclePlans.find((item) => item.adhesionId === adhesionId);
+        if (!sansAchatBeneficiaryEligible(cyclePlans, adhesionId, new Set())) return undefined;
+      }
       const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId, adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
       occurrenceBeneficiaries.push(beneficiary);
+      if (consumedPlan) consumedPlan.consumedByOccurrenceId = occurrenceId;
       writeAuditEvent({ tenantId, action: 'tontines.beneficiaryAdded', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, context: { adhesionId, occurrenceId, amountDue: String(amountDue) } });
       return beneficiary;
     }),
@@ -521,10 +610,13 @@ export const tontineOperationsService = {
   /**
    * Ajout groupé de bénéficiaires (mandat refonte « Tours » — sélection
    * multiple via checkbox puis « Ajouter → ») — UNE opération batch, jamais
-   * N appels indépendants depuis l'UI. Réutilise strictement
-   * `addOccurrenceBeneficiary` par adhésion (même règles d'éligibilité,
-   * même historisation). `amountDue` par défaut = montant de cotisation de
-   * la Tontine (jamais une nouvelle définition de montant).
+   * N appels indépendants depuis l'UI. Mêmes règles d'éligibilité que
+   * `addOccurrenceBeneficiary` (y compris, sans achat, la contrainte de
+   * séquence position par position — voir `sansAchatBeneficiaryEligible`,
+   * appliquée dans l'ORDRE de `adhesionIds` : le client envoie déjà les
+   * positions dans l'ordre où elles ont été cochées, c.-à-d. l'ordre du
+   * Plan). `amountDue` par défaut = montant de cotisation de la Tontine
+   * (jamais une nouvelle définition de montant).
    */
   addOccurrenceBeneficiaries: (tenantId: string, occurrenceId: string, adhesionIds: string[]) =>
     mockRequest(() => {
@@ -532,15 +624,24 @@ export const tontineOperationsService = {
       const tontine = occurrence ? getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId) : undefined;
       if (!occurrence || !tontine) return { added: [] as OccurrenceBeneficiary[], skipped: adhesionIds.length };
       const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
+      const cyclePlans = tontine.withPurchase ? [] : tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && item.cycleId === occurrence.cycleId).sort((a, b) => a.position - b.position);
+      const queuedInBatch = new Set<string>();
       const added: OccurrenceBeneficiary[] = [];
       let skipped = 0;
       for (const adhesionId of adhesionIds) {
-        if (occurrence.status === 'REALIZED' || !tontine.withPurchase) { skipped += 1; continue; }
+        if (occurrence.status === 'REALIZED') { skipped += 1; continue; }
         const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
-        if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date) || occurrenceBeneficiaries.some((item) => item.occurrenceId === occurrenceId && item.adhesionId === adhesionId)) { skipped += 1; continue; }
+        if (!adhesion || !isAvailableForOccurrencePlanning(tenantId, occurrence, adhesion) || occurrenceBeneficiaries.some((item) => item.occurrenceId === occurrenceId && item.adhesionId === adhesionId)) { skipped += 1; continue; }
         if (hasAlreadyBenefitedInCurrentCycle(tenantId, tontine.id, adhesionId)) { skipped += 1; continue; }
+        let consumedPlan: TontineBeneficiaryPlan | undefined;
+        if (!tontine.withPurchase) {
+          consumedPlan = cyclePlans.find((item) => item.adhesionId === adhesionId);
+          if (!sansAchatBeneficiaryEligible(cyclePlans, adhesionId, queuedInBatch)) { skipped += 1; continue; }
+        }
         const beneficiary: OccurrenceBeneficiary = { id: uniqueId('TB'), tenantId, occurrenceId, adhesionId, amountDue, amountPaid: 0, amountPurchased: 0, paidAt: null };
         occurrenceBeneficiaries.push(beneficiary);
+        if (consumedPlan) consumedPlan.consumedByOccurrenceId = occurrenceId;
+        queuedInBatch.add(adhesionId);
         writeAuditEvent({ tenantId, action: 'tontines.beneficiaryAdded', resourceType: 'occurrenceBeneficiary', resourceId: beneficiary.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, context: { adhesionId, occurrenceId, amountDue: String(amountDue), batch: 'true' } });
         added.push(beneficiary);
       }
@@ -550,11 +651,26 @@ export const tontineOperationsService = {
   /**
    * Retrait d'un bénéficiaire (mandat refonte « Tours » — « ← Enlever ») —
    * additif dans son historisation (jamais une suppression silencieuse de
-   * l'historique) : refuse si le Tour est déjà RÉALISÉ, si la Tontine est
-   * sans-achat (bénéficiaire issu du Plan, retrait via la Planification
-   * uniquement — jamais deux voies de retrait pour la même donnée), ou si
-   * une réception a déjà été enregistrée (`amountPaid > 0`, immuabilité
-   * d'un versement déjà effectué).
+   * l'historique) : refuse si le Tour est déjà RÉALISÉ, ou si une réception
+   * a déjà été enregistrée (`amountPaid > 0`, immuabilité d'un versement
+   * déjà effectué).
+   *
+   * SANS ACHAT (mandat « retrait en cascade », 2026-09-23, étendu par
+   * « historique des bénéficiaires entre Tours ») : les bénéficiaires d'un
+   * Tour forment TOUJOURS un préfixe continu de l'ordre maître défini dans
+   * l'onglet Adhérents (`TontineBeneficiaryPlan.position`, jamais modifié
+   * ici) — retirer la position N retire donc EN CASCADE toutes les
+   * positions > N déjà bénéficiaires de CE MÊME Tour (jamais un trou :
+   * `1,2,4` ou `2,3` sont des états interdits). Refuse tout le retrait
+   * (jamais un retrait partiel silencieux) si l'une de ces positions a déjà
+   * un versement enregistré (immuabilité), OU si un Tour SUIVANT a déjà
+   * consommé une position >= N (le retrait ne peut agir que sur le Tour le
+   * plus récent de la séquence — §16, éviter un trou entre deux Tours).
+   * Chaque position ainsi libérée voit son `consumedByOccurrenceId`
+   * réinitialisé à `null` — son NUMÉRO de position, lui, ne change jamais
+   * (l'ordre maître reste intact), et redevient donc immédiatement
+   * sélectionnable. Avec achat, comportement historique inchangé (retrait
+   * strictement individuel).
    */
   removeOccurrenceBeneficiary: (tenantId: string, beneficiaryId: string) =>
     mockRequest(() => {
@@ -563,7 +679,41 @@ export const tontineOperationsService = {
       const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.occurrenceId);
       if (!occurrence || occurrence.status === 'REALIZED') return undefined;
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
-      if (!tontine || !tontine.withPurchase) return undefined;
+      if (!tontine) return undefined;
+
+      if (!tontine.withPurchase) {
+        const cyclePlans = tontineBeneficiaryPlans.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && item.cycleId === occurrence.cycleId);
+        const targetPlan = cyclePlans.find((item) => item.adhesionId === beneficiary.adhesionId);
+        if (!targetPlan) return undefined;
+        /**
+         * Garde-fou inter-Tours (mandat « historique des bénéficiaires entre
+         * Tours », 2026-09-23 §16) : le retrait en cascade ne peut agir que
+         * sur CE Tour. Si une position >= N est déjà consommée par un AUTRE
+         * Tour (un Tour suivant a déjà pris la suite de la séquence), retirer
+         * N créerait un trou global (position N libre, position > N déjà
+         * prise ailleurs) — refus total plutôt qu'un état incohérent.
+         * Concrètement, seul le Tour le plus récent de la séquence consommée
+         * peut voir ses bénéficiaires retirés.
+         */
+        const blockedByOtherOccurrence = cyclePlans.some((item) => item.position >= targetPlan.position && item.consumedByOccurrenceId && item.consumedByOccurrenceId !== occurrence.id);
+        if (blockedByOtherOccurrence) return undefined;
+        const toRemove = occurrenceBeneficiaries.filter((item) => {
+          if (item.tenantId !== tenantId || item.occurrenceId !== occurrence.id) return false;
+          const plan = cyclePlans.find((p) => p.adhesionId === item.adhesionId);
+          return Boolean(plan) && plan!.position >= targetPlan.position;
+        });
+        if (toRemove.some((item) => item.amountPaid > 0)) return undefined;
+        for (const item of toRemove) {
+          const index = occurrenceBeneficiaries.findIndex((row) => row.id === item.id);
+          occurrenceBeneficiaries.splice(index, 1);
+          const plan = cyclePlans.find((p) => p.adhesionId === item.adhesionId);
+          if (plan) plan.consumedByOccurrenceId = null;
+          const itemAdhesion = getTenantScoped(tontineAdhesions, (a) => a.id === item.adhesionId, tenantId);
+          writeAuditEvent({ tenantId, action: 'tontines.beneficiaryRemoved', resourceType: 'occurrenceBeneficiary', resourceId: item.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${itemAdhesion?.memberName ?? item.adhesionId}`, sensitive: false, correlationId: occurrence.id, context: { adhesionId: item.adhesionId, occurrenceId: occurrence.id, cascade: String(item.id !== beneficiary.id) } });
+        }
+        return { removed: true } as const;
+      }
+
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
       const index = occurrenceBeneficiaries.findIndex((item) => item.id === beneficiaryId);
       occurrenceBeneficiaries.splice(index, 1);
@@ -641,12 +791,21 @@ export const tontineOperationsService = {
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
       if (!tontine) return [];
       const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
-      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date));
+      // Sur un Tour planifié du cycle courant, l'écran affiche les adhésions
+      // actives maintenant : un adhérent ajouté après la création du Tour est
+      // donc immédiatement visible et sélectionnable. L'historique conserve
+      // sa lecture à la date du Tour.
+      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && (isAvailableForOccurrencePlanning(tenantId, occurrence, item) || (occurrence.status === 'REALIZED' && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date))));
+      const positionByAdhesionId = new Map(
+        tontineBeneficiaryPlans
+          .filter((plan) => plan.tenantId === tenantId && plan.tontineId === tontine.id && plan.cycleId === occurrence.cycleId)
+          .map((plan) => [plan.adhesionId, plan.position]),
+      );
       return eligibleAdhesions.map((adhesion) => {
         const netPaid = tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0);
         const amountPaid = Math.max(0, netPaid);
-        return { adhesionId: adhesion.id, memberId: adhesion.memberId, memberName: adhesion.memberName, amountDue, amountPaid, paid: amountPaid >= amountDue && amountDue > 0 };
-      });
+        return { adhesionId: adhesion.id, memberId: adhesion.memberId, memberName: adhesion.memberName, rank: positionByAdhesionId.get(adhesion.id) ?? Number.MAX_SAFE_INTEGER, amountDue, amountPaid, paid: amountPaid >= amountDue && amountDue > 0 };
+      }).sort((a, b) => a.rank - b.rank || a.memberName.localeCompare(b.memberName));
     }),
 
   /**
@@ -673,7 +832,8 @@ export const tontineOperationsService = {
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
       if (!tontine) return undefined;
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
-      if (!adhesion || adhesion.tontineId !== tontine.id || !isAdhesionActiveAt(adhesion, occurrence.date)) return undefined;
+      // Même règle d'éligibilité que `listContributionStatuses` (mandat « un adhérent ajouté après la création du Tour est immédiatement visible ET sélectionnable ») : `isAdhesionActiveAt(adhesion, occurrence.date)` comparait à tort à la date du Tour, ce qui refusait le paiement d'un adhérent (ou d'une représentation supplémentaire) rejoint APRÈS cette date bien que déjà listé — jamais l'historique d'un Tour REALIZED ici, cette branche est déjà exclue ligne 702.
+      if (!adhesion || !isAvailableForOccurrencePlanning(tenantId, occurrence, adhesion)) return undefined;
       const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
       const currentPaid = Math.max(0, tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesionId).reduce((sum, item) => sum + item.amount, 0));
       const account = resolveTontineAccount(tenantId, occurrence.tontineId);
@@ -709,7 +869,8 @@ export const tontineOperationsService = {
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
       if (!tontine) return undefined;
       const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
-      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date));
+      // Même éligibilité que `listContributionStatuses`/`setContributionPayment` (voir ce dernier) — jamais `isAdhesionActiveAt(item, occurrence.date)` seule, qui exclurait à tort un adhérent rejoint après la création du Tour.
+      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && isAvailableForOccurrencePlanning(tenantId, occurrence, item));
       let updated = 0;
       for (const adhesion of eligibleAdhesions) {
         const currentPaid = Math.max(0, tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0));

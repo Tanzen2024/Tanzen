@@ -52,7 +52,8 @@ describe('tontineOperationsService — Planification (sans-achat), rattachée DI
     expect(removed).toEqual({ removed: true });
 
     const plan2 = await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // consomme plan2
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]); // consomme plan2
     const refused = await tontineOperationsService.removePlanEntry('T-001', plan2!.id);
     expect(refused).toBeNull();
   });
@@ -186,7 +187,8 @@ describe('tontineOperationsService — Planification (sans-achat), rattachée DI
 
     it('TEST 13 — DENY: never touches an already-consumed position, and never lets another position take its slot', async () => {
       const { tontineId, planA, planB } = await makePlannedTontine();
-      await tontineOperationsService.createOccurrence('T-001', tontineId, '2026-09-05'); // consomme planA (#1)
+      const occurrence = await tontineOperationsService.createOccurrence('T-001', tontineId, '2026-09-05');
+      await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [planA.adhesionId]); // consomme planA (#1)
       const refused = await tontineOperationsService.setPlanPosition('T-001', tontineId, planA.id, 2);
       expect(refused).toBeNull();
       // Une position non consommée ne peut pas non plus revendiquer le créneau consommé #1 (immuabilité du passé).
@@ -248,6 +250,7 @@ describe('isPlanningComplete (mandat « onglet par défaut selon adhérents et p
 
     // Réalise intégralement le cycle courant (seule façon d'ouvrir « Démarrer un nouveau cycle », règles existantes inchangées).
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
     const [beneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
     await tontineOperationsService.recordReception('T-001', beneficiary.id, beneficiary.amountDue);
     expect(isCycleComplete('T-001', tontine!.id)).toBe(true);
@@ -263,7 +266,16 @@ describe('isPlanningComplete (mandat « onglet par défaut selon adhérents et p
 });
 
 describe('tontineOperationsService — Tours progressifs (« Ajouter un tour »), rattachés DIRECTEMENT à la Tontine', () => {
-  it('ALLOW: sans-achat — createOccurrence auto-consumes the next unconsumed plan position and creates one beneficiary', async () => {
+  /**
+   * Mandat « historique des bénéficiaires entre Tours » (2026-09-23) —
+   * remplace l'ancien comportement (`createOccurrence` auto-consommait la
+   * prochaine position non consommée) : désormais, sans achat comme avec
+   * achat, le panneau Bénéficiaires commence TOUJOURS vide à l'ouverture
+   * d'un Tour — chaque bénéficiaire est ajouté explicitement via
+   * `addOccurrenceBeneficiaries` (checkbox + « Ajouter » côté UI), y
+   * compris la toute première position.
+   */
+  it('ALLOW: sans-achat — createOccurrence never auto-creates a beneficiary; addOccurrenceBeneficiaries lets the manager choose manually, respecting the Plan order', async () => {
     const tontine = await makeMoneyTontine('T-001', { contributionAmount: 30_000 });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
@@ -271,6 +283,10 @@ describe('tontineOperationsService — Tours progressifs (« Ajouter un tour »)
     expect(occurrence?.occurrenceNumber).toBe(1);
     expect(occurrence?.status).toBe('PLANNED');
     expect(occurrence?.tontineId).toBe(tontine!.id);
+    expect(await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id)).toHaveLength(0);
+
+    const result = await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
+    expect(result?.added).toHaveLength(1);
     const beneficiaries = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
     expect(beneficiaries).toHaveLength(1);
     expect(beneficiaries[0].adhesionId).toBe(adhesion!.id);
@@ -362,8 +378,11 @@ describe('tontineOperationsService — Représentations multiples d’un même m
     expect([plan1!.position, plan2!.position, plan3!.position]).toEqual([1, 2, 3]);
 
     const occurrence1 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-05');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence1!.id, [rep1!.id]);
     const occurrence2 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-03-05');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence2!.id, [rep2!.id]);
     const occurrence3 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-04-05');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence3!.id, [rep3!.id]);
     const [beneficiary1] = await tontineOperationsService.listBeneficiaries('T-001', occurrence1!.id);
     const [beneficiary2] = await tontineOperationsService.listBeneficiaries('T-001', occurrence2!.id);
     const [beneficiary3] = await tontineOperationsService.listBeneficiaries('T-001', occurrence3!.id);
@@ -493,7 +512,8 @@ describe('tontineOperationsService — Clôture et Reliquat', () => {
     const tontine = await makeMoneyTontine('T-001', { accountId: 'AC-002' });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
-    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // sans-achat, bénéficiaire auto (amountDue = contributionAmount)
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // sans-achat (amountDue = contributionAmount)
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
     const [beneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
     await tontineOperationsService.recordReception('T-001', beneficiary.id, 10_000);
@@ -561,7 +581,8 @@ describe('tontineOperationsService — Permutation de positions planifiées (wor
     const crossTontine = await tontineOperationsService.requestPlanPermutation('T-001', { planAId: planA!.id, planBId: planB!.id, requestedBy: 'Test' });
     expect(crossTontine).toBeUndefined(); // pas de mockRequest ici (moteur Workflow générique) — undefined, jamais null
 
-    await tontineOperationsService.createOccurrence('T-001', tontineA!.id, '2026-09-05'); // consomme planA
+    const occurrenceA = await tontineOperationsService.createOccurrence('T-001', tontineA!.id, '2026-09-05');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrenceA!.id, [adhesionA!.id]); // consomme planA
     const adhesionC = await tontinesService.addAdhesion('T-001', tontineA!.id, 'M-016', '2026-09-01');
     const planC = await tontineOperationsService.addPlanEntry('T-001', tontineA!.id, adhesionC!.id);
     const consumedSide = await tontineOperationsService.requestPlanPermutation('T-001', { planAId: planA!.id, planBId: planC!.id, requestedBy: 'Test' });
@@ -729,6 +750,7 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
       const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
       await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
       const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+      await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
       const [beneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
       const result = await tontineOperationsService.recordReception('T-001', beneficiary.id, 10_000, 500);
       expect(result).toBeTruthy();
@@ -764,7 +786,8 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
     expect(tontine?.purchaseAccountId).toBeUndefined();
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
-    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // sans-achat : bénéficiaire auto via le Plan
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // sans-achat
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
     const [beneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
     const before = transactions.length;
     await tontineOperationsService.recordReception('T-001', beneficiary.id, 10_000, 999); // purchaseAmount fourni par erreur
@@ -1203,6 +1226,22 @@ describe('tontineOperationsService — Refonte « Tours » : Ajouter/Enlever des
   });
 });
 
+describe('tontineOperationsService — candidats de planification de Tour', () => {
+  it('un adhérent ajouté après la création du Tour devient candidat par adhesionId, sans bénéficiaire automatique', async () => {
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-06-01');
+    const added = await tontinesService.addAdhesions('T-001', tontine!.id, ['M-001', 'M-006', 'M-016', 'M-018'], '2026-09-21');
+
+    const candidates = await tontineOperationsService.listOccurrencePlanningCandidates('T-001', occurrence!.id);
+    expect(candidates.map((adhesion) => adhesion.id)).toEqual(added.created.map((adhesion) => adhesion.id));
+    expect(await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id)).toEqual([]);
+
+    const addedBeneficiaries = await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [added.created[0].id]);
+    expect(addedBeneficiaries.added).toHaveLength(1);
+    expect(addedBeneficiaries.added[0].adhesionId).toBe(added.created[0].id);
+  });
+});
+
 describe('tontineOperationsService — Statut automatique du bénéficiaire (getBeneficiaryPaymentStatus)', () => {
   it('CAS 1 : amountPaid = 0 → PENDING (En attente)', () => {
     expect(getBeneficiaryPaymentStatus({ amountDue: 25_000, amountPaid: 0 })).toBe('PENDING');
@@ -1391,14 +1430,15 @@ describe('tontineOperationsService — Cycle système (mandat « recommencement 
     expect(isCycleComplete('T-001', tontine!.id)).toBe(true);
   });
 
-  it('AUDIT TEST 9 — SANS-ACHAT : même principe — la désignation automatique via le Plan (`amountPaid = 0` à la création) ne suffit pas, seul le règlement compte', async () => {
+  it('AUDIT TEST 9 — SANS-ACHAT : même principe — une désignation (`amountPaid = 0` à la création) ne suffit pas, seul le règlement compte', async () => {
     const tontine = await makeMoneyTontine('T-001', { withPurchase: false });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence!.id, [adhesion!.id]);
     const [beneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
     expect(beneficiary.adhesionId).toBe(adhesion!.id);
-    expect(beneficiary.amountPaid).toBe(0); // auto-désigné par le Plan, mais pas encore réglé
+    expect(beneficiary.amountPaid).toBe(0); // désigné, mais pas encore réglé
     expect(isCycleComplete('T-001', tontine!.id)).toBe(false);
     await tontineOperationsService.recordReception('T-001', beneficiary.id, beneficiary.amountDue);
     expect(isCycleComplete('T-001', tontine!.id)).toBe(true);
@@ -1538,13 +1578,16 @@ describe('tontineOperationsService — Cycle système (mandat « recommencement 
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
     const occurrence1 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
+    await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence1!.id, [adhesion!.id]);
     const [beneficiary1] = await tontineOperationsService.listBeneficiaries('T-001', occurrence1!.id);
     expect(beneficiary1?.adhesionId).toBe(adhesion!.id);
-    expect(isCycleComplete('T-001', tontine!.id)).toBe(false); // auto-désignée par le Plan, pas encore réglée
+    expect(isCycleComplete('T-001', tontine!.id)).toBe(false); // désignée, pas encore réglée
     await tontineOperationsService.recordReception('T-001', beneficiary1.id, beneficiary1.amountDue);
     expect(isCycleComplete('T-001', tontine!.id)).toBe(true);
-    // le Plan du cycle courant est épuisé : un nouveau Tour n'auto-désigne plus aucun bénéficiaire
+    // le Plan du cycle courant est épuisé : plus aucune position à désigner (refus explicite, jamais silencieux)
     const occurrence2 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-03-01');
+    const result2 = await tontineOperationsService.addOccurrenceBeneficiaries('T-001', occurrence2!.id, [adhesion!.id]);
+    expect(result2?.added).toEqual([]);
     const beneficiaries2 = await tontineOperationsService.listBeneficiaries('T-001', occurrence2!.id);
     expect(beneficiaries2).toHaveLength(0);
   });
