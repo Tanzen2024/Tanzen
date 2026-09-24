@@ -250,6 +250,37 @@ function writeAuditEvent(event: Omit<AuditEvent, 'id' | 'timestamp' | 'actorId' 
   });
 }
 
+type ContributionStatusRow = { adhesionId: string; memberId: string; memberName: string; rank: number; amountDue: number; amountPaid: number; paid: boolean };
+
+/**
+ * Calcul PUR du statut de cotisation par adhésion pour un Tour — extrait
+ * (jamais dupliqué) de l'ancien corps de `listContributionStatuses` (mandat
+ * « renforcement des règles de clôture d'un Tour », 2026-09-24) pour être
+ * réutilisé TEL QUEL par `closeOccurrence` (Condition 1 de clôture : toutes
+ * les participations éligibles doivent avoir intégralement cotisé) — SEULE
+ * définition de « cotisé » du projet, jamais une seconde redéfinie en
+ * parallèle. Retourne `[]` si le Tour/la Tontine est introuvable.
+ */
+function computeContributionStatuses(tenantId: string, occurrenceId: string): ContributionStatusRow[] {
+  const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
+  if (!occurrence) return [];
+  const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
+  if (!tontine) return [];
+  const amountDue = tontine.valueType === 'MONEY' ? (tontine.contributionAmount ?? 0) : (tontine.quantity ?? 0);
+  // Même éligibilité que partout ailleurs dans ce module (voir `listContributionStatuses` historique) : adhésions actives disponibles pour ce Tour, plus l'historique à la date du Tour une fois RÉALISÉ.
+  const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && (isAvailableForOccurrencePlanning(tenantId, occurrence, item) || (occurrence.status === 'REALIZED' && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date))));
+  const positionByAdhesionId = new Map(
+    tontineBeneficiaryPlans
+      .filter((plan) => plan.tenantId === tenantId && plan.tontineId === tontine.id && plan.cycleId === occurrence.cycleId)
+      .map((plan) => [plan.adhesionId, plan.position]),
+  );
+  return eligibleAdhesions.map((adhesion) => {
+    const netPaid = tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0);
+    const amountPaid = Math.max(0, netPaid);
+    return { adhesionId: adhesion.id, memberId: adhesion.memberId, memberName: adhesion.memberName, rank: positionByAdhesionId.get(adhesion.id) ?? Number.MAX_SAFE_INTEGER, amountDue, amountPaid, paid: amountPaid >= amountDue && amountDue > 0 };
+  }).sort((a, b) => a.rank - b.rank || a.memberName.localeCompare(b.memberName));
+}
+
 export const tontineOperationsService = {
   // --- Classement des adhérents (toutes Tontines) — rattaché DIRECTEMENT à la Tontine ---
 
@@ -782,31 +813,12 @@ export const tontineOperationsService = {
    * 100% des `TontineContribution` déjà existants (une désactivation
    * (`setContributionPayment(..., false)`) enregistre une ligne négative,
    * jamais une suppression physique de l'historique) : `amountPaid` est la
-   * somme nette, jamais un second compteur stocké séparément.
+   * somme nette, jamais un second compteur stocké séparément. Calcul délégué
+   * à `computeContributionStatuses` (module-level), réutilisé tel quel par
+   * `closeOccurrence` — SEULE définition de « cotisé », jamais dupliquée.
    */
   listContributionStatuses: (tenantId: string, occurrenceId: string) =>
-    mockRequest(() => {
-      const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
-      if (!occurrence) return [];
-      const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
-      if (!tontine) return [];
-      const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
-      // Sur un Tour planifié du cycle courant, l'écran affiche les adhésions
-      // actives maintenant : un adhérent ajouté après la création du Tour est
-      // donc immédiatement visible et sélectionnable. L'historique conserve
-      // sa lecture à la date du Tour.
-      const eligibleAdhesions = tontineAdhesions.filter((item) => item.tenantId === tenantId && (isAvailableForOccurrencePlanning(tenantId, occurrence, item) || (occurrence.status === 'REALIZED' && item.tontineId === tontine.id && isAdhesionActiveAt(item, occurrence.date))));
-      const positionByAdhesionId = new Map(
-        tontineBeneficiaryPlans
-          .filter((plan) => plan.tenantId === tenantId && plan.tontineId === tontine.id && plan.cycleId === occurrence.cycleId)
-          .map((plan) => [plan.adhesionId, plan.position]),
-      );
-      return eligibleAdhesions.map((adhesion) => {
-        const netPaid = tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesion.id).reduce((sum, item) => sum + item.amount, 0);
-        const amountPaid = Math.max(0, netPaid);
-        return { adhesionId: adhesion.id, memberId: adhesion.memberId, memberName: adhesion.memberName, rank: positionByAdhesionId.get(adhesion.id) ?? Number.MAX_SAFE_INTEGER, amountDue, amountPaid, paid: amountPaid >= amountDue && amountDue > 0 };
-      }).sort((a, b) => a.rank - b.rank || a.memberName.localeCompare(b.memberName));
-    }),
+    mockRequest(() => computeContributionStatuses(tenantId, occurrenceId)),
 
   /**
    * Bascule ON/OFF d'une cotisation (mandat refonte « Tours ») — RÉUTILISE
@@ -936,19 +948,36 @@ export const tontineOperationsService = {
     }),
 
   /**
-   * Clôture (PLANNED → REALIZED) — exige au moins un bénéficiaire, tous
-   * intégralement payés (`amountPaid >= amountDue`). Calcule et enregistre
-   * automatiquement le reliquat : si le total réellement collecté
-   * (Contributions de ce tour) dépasse le total effectivement distribué aux
-   * bénéficiaires, l'écart devient un `TontineRemainder` `OPEN` — jamais
-   * silencieusement perdu.
+   * Clôture (PLANNED → REALIZED) — mandat « renforcement des règles de
+   * clôture d'un Tour », 2026-09-24. DEUX conditions, TOUTES DEUX requises :
+   *
+   * CONDITION 1 — Cotisations : TOUTES les participations éligibles de ce
+   * Tour doivent avoir intégralement cotisé (`computeContributionStatuses`,
+   * SEULE définition de « cotisé » du projet, jamais recréée ici — même
+   * fonction que celle qui alimente `listContributionStatuses`/l'écran
+   * Cotisations). Aucune participation éligible du tout → refusé (rien à
+   * clôturer n'est jamais « complet »).
+   *
+   * CONDITION 2 — Bénéficiaires : AU MOINS UN bénéficiaire du Tour a le
+   * statut exact `PAID` (`getBeneficiaryPaymentStatus`, même fonction
+   * centralisée déjà utilisée partout ailleurs dans ce module, jamais
+   * redéfinie) — remplace l'ancienne exigence « TOUS les bénéficiaires
+   * payés », désormais trop stricte (un Tour peut légitimement clôturer dès
+   * qu'au moins un bénéfice a été réellement versé).
+   *
+   * Calcule et enregistre ensuite automatiquement le reliquat : si le total
+   * réellement collecté (Contributions de ce tour) dépasse le total
+   * effectivement distribué aux bénéficiaires, l'écart devient un
+   * `TontineRemainder` `OPEN` — jamais silencieusement perdu.
    */
   closeOccurrence: (tenantId: string, occurrenceId: string) =>
     mockRequest(() => {
       const occurrence = getTenantScoped(tontineOccurrences, (item) => item.id === occurrenceId, tenantId);
       if (!occurrence || occurrence.status === 'REALIZED') return undefined;
+      const contributionStatuses = computeContributionStatuses(tenantId, occurrence.id);
+      if (contributionStatuses.length === 0 || !contributionStatuses.every((item) => item.paid)) return undefined;
       const beneficiaries = occurrenceBeneficiaries.filter((item) => item.occurrenceId === occurrence.id);
-      if (beneficiaries.length === 0 || !beneficiaries.every((item) => item.amountPaid >= item.amountDue)) return undefined;
+      if (beneficiaries.length === 0 || !beneficiaries.some((item) => getBeneficiaryPaymentStatus(item) === 'PAID')) return undefined;
       occurrence.status = 'REALIZED';
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
       if (tontine) {

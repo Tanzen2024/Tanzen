@@ -61,7 +61,7 @@ export function AdherentsOrderPanel({ t, tontineId }: { t: T; tontineId: string 
   const planByAdhesionId = useMemo(() => new Map(plans.map((p) => [p.adhesionId, p])), [plans]);
   const availableMembers = useMemo(() => allMembers.filter((m) => !adhesions.some((a) => a.memberId === m.id && a.status === 'active')), [allMembers, adhesions]);
 
-  /** Nombre de représentations ACTIVES par membre — n'affiche `adhesionId` sur une ligne que si ce membre en a plusieurs (mandat §15 : jamais fusionner deux participations distinctes, mais jamais non plus encombrer l'affichage quand ce n'est pas nécessaire). */
+  /** Nombre de représentations ACTIVES par membre — n'affiche la date d'adhésion (jamais l'identifiant technique de l'adhésion, mandat « suppression des identifiants techniques de l'UI ») sur une ligne que si ce membre en a plusieurs (mandat §15 : jamais fusionner deux participations distinctes, mais jamais non plus encombrer l'affichage quand ce n'est pas nécessaire). */
   const activeCountByMemberId = useMemo(() => {
     const counts = new Map<string, number>();
     adhesions.forEach((adhesion) => { if (adhesion.status === 'active') counts.set(adhesion.memberId, (counts.get(adhesion.memberId) ?? 0) + 1); });
@@ -151,7 +151,7 @@ export function AdherentsOrderPanel({ t, tontineId }: { t: T; tontineId: string 
           <MemberAvatar member={member ?? { firstName: label, lastName: '' }} size="sm" />
           <span className="flex min-w-0 flex-col">
             <span className="flex items-center gap-1.5 truncate">{label}{row.adhesion.status !== 'active' && <StatusBadge label={t('tontines', 'exited')} tone="default" />}</span>
-            {showAdhesionId && <span className="truncate text-[11px] text-muted-foreground">{row.adhesion.id}</span>}
+            {showAdhesionId && <span className="truncate text-[11px] text-muted-foreground">{t('tontines', 'joinedAtShort')} <TourDateDisplay value={row.adhesion.joinedAt} /></span>}
           </span>
         </span>;
       },
@@ -231,13 +231,18 @@ export function OccurrenceSection({ t, tontine }: { t: T; tontine: Tontine }) {
   const { data: cycleStatus } = useQuery({ queryKey: queryKeys.tontines.cycleStatus(tontine.id), queryFn: () => tontineOperationsService.getCycleStatus(currentTenant.id, tontine.id) });
   /**
    * La Tontine ne porte aucune date propre (mandat suppression `startDate`) :
-   * s'il n'existe encore AUCUN Tour, aucune date n'est jamais suggérée ni
-   * inventée — l'utilisateur saisit librement la date du premier Tour. La
-   * suggestion ne dérive QUE du dernier Tour déjà réellement créé + la
-   * fréquence de la Tontine.
+   * la suggestion dérive du dernier Tour déjà réellement créé + la fréquence
+   * de la Tontine. Au Tour 0 (aucun Tour existant), aucune date réelle de
+   * référence n'existe — la suggestion part alors d'AUJOURD'HUI (mandat
+   * « préremplissage Date du tour au Tour 0 », 2026-09-24) : première date
+   * strictement future respectant la règle de fréquence configurée, jamais
+   * une date passée ni inventée hors de cette règle. Reste une simple
+   * PRÉ-suggestion du champ, jamais un Tour créé automatiquement — l'utilisateur
+   * garde toujours la main pour la modifier avant de cliquer « Ajouter un tour ».
    */
   const lastDate = occurrences.length > 0 ? occurrences[occurrences.length - 1].date : undefined;
-  const suggested = lastDate ? suggestNextOccurrenceDate(tontine as FrequencyConfig, lastDate) : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const suggested = suggestNextOccurrenceDate(tontine as FrequencyConfig, lastDate ?? today);
   const [date, setDate] = useState('');
   const effectiveDate = date || suggested || '';
   const addMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.createOccurrence>>, void>({
@@ -247,7 +252,8 @@ export function OccurrenceSection({ t, tontine }: { t: T; tontine: Tontine }) {
   });
   const startCycleMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.startNewCycle>>, void>({
     mutationFn: () => tontineOperationsService.startNewCycle(currentTenant.id, tontine.id),
-    invalidateKeys: [queryKeys.tontines.occurrences(tontine.id), queryKeys.tontines.plans(tontine.id), queryKeys.tontines.cycleStatus(tontine.id), queryKeys.tontines.planningStatus(tontine.id)],
+    // `cycleBeneficiaries`/`cycleBeneficiaryOrder` restent, sans invalidation, l'historique de l'ANCIEN cycle en cache (mandat « historique par cycle », 2026-09-24) : un nouveau cycle démarre avec un historique de bénéficiaires vide, jamais celui du cycle précédent. Sans cette invalidation explicite, le `staleTime: 30_000` de production (src/app/providers.tsx) laisserait la donnée du cycle précédent en cache visible tant qu'aucun refetch naturel ne survient.
+    invalidateKeys: [queryKeys.tontines.occurrences(tontine.id), queryKeys.tontines.plans(tontine.id), queryKeys.tontines.cycleStatus(tontine.id), queryKeys.tontines.planningStatus(tontine.id), queryKeys.tontines.cycleBeneficiaries(tontine.id), queryKeys.tontines.cycleBeneficiaryOrder(tontine.id)],
     onSuccess: (result) => { setConfirmOpen(false); if (!result) { notify.error(t('tontines', 'startNewCycleFailed')); return; } notify.success(t('tontines', 'startNewCycleSuccess')); },
   });
   return <div className="space-y-3">

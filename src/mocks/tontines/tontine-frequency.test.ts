@@ -38,6 +38,41 @@ describe('tontine-frequency — suggestNextOccurrenceDate (jamais de génératio
   it('DENY: an incomplete frequency never suggests a date', () => {
     expect(suggestNextOccurrenceDate({ frequency: 'WEEKLY' }, '2026-06-01')).toBeNull();
   });
+
+  /**
+   * Mandat « préremplissage Date du tour au Tour 0 », 2026-09-24 —
+   * `afterDate` = date du jour (aucun Tour existant), jamais celle d'un Tour
+   * déjà créé : la période EN COURS (mois/trimestre) doit rester éligible
+   * si la règle y tombe encore strictement dans le futur, jamais sautée
+   * d'office vers la période suivante.
+   */
+  describe('Tour 0 — `afterDate` = aujourd’hui, la période courante reste éligible', () => {
+    it('MONTHLY/DAY_OF_MONTH : le jour cible est déjà passé ce mois-ci (20 < 24) → suggère le mois SUIVANT, jamais le mois courant', () => {
+      const next = suggestNextOccurrenceDate({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 20 }, '2026-09-24');
+      expect(next).toBe('2026-10-20');
+    });
+
+    it('MONTHLY/DAY_OF_MONTH : le jour cible tombe encore ce mois-ci (25 > 24) → suggère le MÊME mois, jamais le mois suivant', () => {
+      const next = suggestNextOccurrenceDate({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 25 }, '2026-09-24');
+      expect(next).toBe('2026-09-25');
+    });
+
+    it('MONTHLY/DAY_OF_MONTH : le 1er du mois est toujours passé au moment où « aujourd’hui » existe → suggère le 1er du mois SUIVANT', () => {
+      const next = suggestNextOccurrenceDate({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 }, '2026-09-24');
+      expect(next).toBe('2026-10-01');
+    });
+
+    it('QUARTERLY/DAY_OF_MONTH : la date cible du trimestre courant tombe encore dans le futur → suggère cette date, jamais le trimestre suivant', () => {
+      // Trimestre courant (juillet-septembre 2026) : 1er mois du trimestre (juillet) → cible non atteignable (déjà septembre), donc ce test vise un mois du trimestre encore à venir.
+      const next = suggestNextOccurrenceDate({ frequency: 'QUARTERLY', quarterlyRule: 'DAY_OF_MONTH', quarterlyMonth: 3, quarterlyDayOfMonth: 30 }, '2026-09-24');
+      expect(next).toBe('2026-09-30'); // 3e mois du trimestre juillet-septembre = septembre, jour 30 > 24 → encore ce trimestre
+    });
+
+    it('backward-compatible : `afterDate` = dernier Tour déjà créé (même jour que la règle) continue de sauter au mois suivant, jamais une répétition du même jour', () => {
+      const next = suggestNextOccurrenceDate({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 15 }, '2026-06-15');
+      expect(next).toBe('2026-07-15'); // identique au test historique ci-dessus — non régressé par la vérification du mois courant
+    });
+  });
 });
 
 describe('tontine-frequency — formatFrequencyDescription (jamais de code technique affiché)', () => {

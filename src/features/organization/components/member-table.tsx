@@ -69,7 +69,7 @@ export function MemberTable({ t, rows, onView, onEdit, onPrint, onDelete, sortKe
             const fullName = `${member.firstName} ${member.lastName}`;
             return <tr key={member.id} className="transition-colors hover:bg-muted/30">
               <td className="px-4 py-3"><button type="button" onClick={() => onView(member)} className="flex min-w-0 items-center gap-3 text-left"><MemberAvatar member={member} /><span className="min-w-0"><span className="block truncate font-semibold text-foreground">{member.lastName}</span><span className="block truncate text-xs text-muted-foreground">{member.firstName}</span></span></button></td>
-              <td className="truncate px-4 py-3 font-mono text-xs text-muted-foreground">{member.matricule || member.id}</td>
+              <td className="truncate px-4 py-3 font-mono text-xs text-muted-foreground">{member.matricule || '—'}</td>
               <td className="truncate px-4 py-3 text-foreground">{t('organization', memberRole(member))}</td>
               <td className="truncate px-4 py-3 text-foreground">{member.email || '—'}</td>
               <td className="truncate px-4 py-3 text-foreground">{member.phone || '—'}</td>

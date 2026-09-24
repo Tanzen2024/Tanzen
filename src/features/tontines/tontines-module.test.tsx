@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes, useLocation } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
@@ -7,6 +7,7 @@ import { TontinesModule } from './tontines-module';
 import { tontinesService } from '@/services/tontines.service';
 import { tontineOperationsService } from '@/services/tontine-operations.service';
 import { formatNumber, formatTourDate } from '@/lib/utils';
+import { suggestNextOccurrenceDate } from '@/mocks/tontines/tontine-frequency';
 
 function renderTontines(route: string) {
   return renderWithProviders(<Routes><Route path="/tontines/*" element={<TontinesModule />} /></Routes>, { route });
@@ -41,10 +42,10 @@ describe('Créer une tontine — « Avec achat », jamais « Mode achat »/« Mo
 });
 
 describe('Fiche Tontine — édition sans aucun champ Devise', () => {
-  it('la fiche en lecture affiche « Avec achat », jamais « Mode achat » (onglet Vue générale)', async () => {
-    renderTontines('/tontines/TON-004/overview'); // MONEY, tenant T-001, withPurchase: true (seed) — Vue générale n'est plus l'onglet par défaut, route explicite
+  it('la fiche en lecture affiche « Avec achat », jamais « Mode achat »', async () => {
+    renderTontines('/tontines/TON-004'); // MONEY, tenant T-001, withPurchase: true (seed) — « Vue générale » a été supprimée, l'info reste visible dans l'en-tête de la fiche
     await screen.findByRole('heading', { name: 'Coopérative Sutura' });
-    expect(screen.getAllByText('Avec achat').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Avec achat/).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('Mode achat')).not.toBeInTheDocument();
   });
 
@@ -88,12 +89,41 @@ describe('Tontine sans date propre — la Tontine définit les règles, le Tour 
     expect(dateInput.value).toBe('2026-07-01');
   });
 
-  it('ALLOW: une Tontine fraîchement créée (aucun tour) ne propose AUCUNE date suggérée — le champ reste vide, l’utilisateur saisit librement la date du premier tour', async () => {
+  /**
+   * Mandat « préremplissage Date du tour au Tour 0 », 2026-09-24 — remplace
+   * l'ancien comportement (champ vide au Tour 0) : la première date FUTURE
+   * respectant la fréquence configurée préremplit désormais le champ,
+   * calculée depuis AUJOURD'HUI (même moteur `suggestNextOccurrenceDate`
+   * que pour le Tour suivant), jamais depuis une date inventée.
+   */
+  it('ALLOW: une Tontine fraîchement créée (aucun tour) préremplit « Date du tour » avec la première date future de sa fréquence — jamais vide, jamais une date passée', async () => {
+    const today = new Date().toISOString().slice(0, 10);
     const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test zéro tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
     renderTontines(`/tontines/${tontine!.id}/tours`);
     await screen.findByRole('heading', { name: tontine!.name });
     const dateInput = await screen.findByLabelText(/Date du tour/) as HTMLInputElement;
-    expect(dateInput.value).toBe('');
+    const expectedDate = suggestNextOccurrenceDate({ frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 }, today)!;
+    expect(dateInput.value).toBe(expectedDate);
+    expect(dateInput.value > today).toBe(true); // strictement future, jamais aujourd'hui ni le passé
+  });
+
+  it('ALLOW: la date préremplie au Tour 0 reste une simple VALEUR INITIALE — l’utilisateur peut la modifier librement avant d’ajouter le tour', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test zéro tour modifiable ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    renderTontines(`/tontines/${tontine!.id}/tours`);
+    await screen.findByRole('heading', { name: tontine!.name });
+    const dateInput = await screen.findByLabelText(/Date du tour/) as HTMLInputElement;
+    // `user.type` ne fonctionne pas de façon fiable sur un `<input type="date">` segmenté sous jsdom — `fireEvent.change` reste la façon standard de simuler une saisie utilisateur sur ce type de champ.
+    fireEvent.change(dateInput, { target: { value: '2099-12-25' } });
+    expect(dateInput.value).toBe('2099-12-25');
+  });
+
+  it('DENY: le simple affichage de la date préremplie au Tour 0 ne crée AUCUN Tour — la base reste inchangée tant que « Ajouter un tour » n’est pas cliqué', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test zéro tour aucune création ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    renderTontines(`/tontines/${tontine!.id}/tours`);
+    await screen.findByRole('heading', { name: tontine!.name });
+    await screen.findByLabelText(/Date du tour/);
+    expect(screen.getByText('Aucun tour')).toBeInTheDocument();
+    expect(await tontineOperationsService.listOccurrences('T-001', tontine!.id)).toHaveLength(0);
   });
 });
 
@@ -102,9 +132,14 @@ describe('Fiche Tontine — navigation par onglets (refonte UI)', () => {
     renderTontines('/tontines/TON-004'); // MONEY, withPurchase: true — aucun onglet explicite dans l'URL
     await screen.findByRole('heading', { name: 'Coopérative Sutura' });
     expect(screen.getByRole('tab', { name: 'Tours' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: 'Vue générale' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Adhérents' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Planification' })).not.toBeInTheDocument();
+  });
+
+  it('« Vue générale » a été supprimée (mandat « suppression de la redondance Vue générale/Liste des tontines ») — plus aucun onglet ni route ne l’expose', async () => {
+    renderTontines('/tontines/TON-004');
+    await screen.findByRole('heading', { name: 'Coopérative Sutura' });
+    expect(screen.queryByRole('tab', { name: 'Vue générale' })).not.toBeInTheDocument();
   });
 
   it('mandat « le Tour devient le centre des opérations » — Cotisations/Distributions/Reliquats n’apparaissent plus comme onglets du détail Tontine (redondants avec le Tour)', async () => {
@@ -129,10 +164,11 @@ describe('Fiche Tontine — navigation par onglets (refonte UI)', () => {
     expect(await screen.findByText('Coumba Thiam')).toBeInTheDocument();
   });
 
-  it('Vue générale reste accessible via sa route explicite /overview, jamais l’onglet d’entrée', async () => {
+  it('un ancien lien vers /overview retombe proprement sur l’onglet par défaut (Tours), jamais une page cassée ni « Vue générale »', async () => {
     renderTontines('/tontines/TON-004/overview');
     await screen.findByRole('heading', { name: 'Coopérative Sutura' });
-    expect(screen.getByRole('tab', { name: 'Vue générale' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Tours' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'Vue générale' })).not.toBeInTheDocument();
   });
 
   it('cliquer sur l’onglet « Adhérents » depuis Tours (défaut) affiche son contenu et met à jour l’URL sous /tontines/:id/adherents', async () => {
@@ -428,22 +464,16 @@ describe('Dashboard Tontines — KPI', () => {
     await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     renderTontines('/tontines');
-    await screen.findByText('Participations');
-    expect(within(screen.getByText('Participations').closest('article')!).getByText(String(before + 2))).toBeInTheDocument();
+    // `{ selector: 'p' }` — depuis le renommage de la colonne liste « Adhérents » → « Participations » (mandat « colonne Reliquats conditionnelle », 2026-09-24), le même libellé existe aussi comme en-tête de colonne (`<th>`) : on cible ici EXCLUSIVEMENT le `<p>` de la carte KPI, jamais l'en-tête de tableau.
+    await screen.findByText('Participations', { selector: 'p' });
+    expect(within(screen.getByText('Participations', { selector: 'p' }).closest('article')!).getByText(String(before + 2))).toBeInTheDocument();
   });
 
-  it('KPI Tours à venir : compte uniquement les Tours PLANNED dont la date est future — jamais les Tours passés ni RÉALISÉS, et reste indépendant des filtres de la liste', async () => {
-    const before = (await tontineOperationsService.listAllOccurrences('T-001')).filter((o) => o.status === 'PLANNED' && o.date >= new Date().toISOString().slice(0, 10)).length;
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test KPI Tours ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: true } as never);
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2099-01-01'); // futur, PLANNED → compté
-    const pastOccurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2020-01-01'); // passé → jamais compté
-    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2020-01-01');
-    const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', pastOccurrence!.id, adhesion!.id, 5_000);
-    await tontineOperationsService.recordReception('T-001', beneficiary!.id, 5_000);
-    await tontineOperationsService.closeOccurrence('T-001', pastOccurrence!.id); // RÉALISÉ → jamais compté même si sa date était future
+  it('la carte KPI « Tours à venir » a été supprimée du dashboard (mandat « suppression KPI Tours à venir + bloc Prochains Tours », 2026-09-24) — plus aucune trace, ni le libellé ni son sous-libellé', async () => {
     renderTontines('/tontines');
-    await screen.findByText('Tours à venir');
-    expect(within(screen.getByText('Tours à venir').closest('article')!).getByText(String(before + 1))).toBeInTheDocument();
+    await screen.findByText('Tontines actives');
+    expect(screen.queryByText('Tours à venir')).not.toBeInTheDocument();
+    expect(screen.queryByText('Prochains tours')).not.toBeInTheDocument();
   });
 });
 
@@ -529,50 +559,14 @@ describe('Dashboard Tontines — État des Tontines', () => {
   });
 });
 
-describe('Dashboard Tontines — Prochains Tours', () => {
-  it('seuls les Tours à venir apparaissent, triés par date croissante (le plus proche en premier), et un Tour passé n’y figure jamais même s’il reste PLANNED', async () => {
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Ordre Tours ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2099-06-01'); // plus lointain
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2099-01-01'); // plus proche
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2019-01-01'); // passé, jamais affiché même PLANNED
+describe('Dashboard Tontines — bloc « Prochains Tours » supprimé', () => {
+  it('le bloc « Prochains Tours » (mandat « suppression KPI Tours à venir + bloc Prochains Tours », 2026-09-24) n’est plus rendu du tout, même quand des Tours à venir existent', async () => {
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Bloc Supprimé ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2099-01-01');
     renderTontines('/tontines');
-    const card = (await screen.findByText('Prochains Tours')).closest('div')!.parentElement!;
-    expect(within(card).getAllByText(formatTourDate('2099-01-01')).length).toBeGreaterThanOrEqual(1);
-    const janIndex = within(card).getAllByRole('row').findIndex((row) => row.textContent?.includes(formatTourDate('2099-01-01')));
-    const juneIndex = within(card).getAllByRole('row').findIndex((row) => row.textContent?.includes(formatTourDate('2099-06-01')));
-    expect(janIndex).toBeGreaterThanOrEqual(0);
-    expect(juneIndex).toBeGreaterThan(janIndex); // le plus proche (janvier) précède le plus lointain (juin)
-    expect(within(card).queryByText(/2019/)).not.toBeInTheDocument();
-  });
-
-  it('« Voir tous les Tours » apparaît uniquement au-delà de la limite affichée, et pointe vers la liste des Tontines de cette même page', async () => {
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Limite Tours ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
-    for (const date of ['2098-01-01', '2098-02-01', '2098-03-01', '2098-04-01', '2098-05-01', '2098-06-01']) {
-      await tontineOperationsService.createOccurrence('T-001', tontine!.id, date);
-    }
-    renderTontines('/tontines');
-    const link = await screen.findByText('Voir tous les Tours →');
-    expect(link.closest('a')).toHaveAttribute('href', '#tontines-list');
-  });
-
-  it('plusieurs bénéficiaires sur un même Tour ne sont jamais perdus — affichage compact « Nom + N autres »', async () => {
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Multi Bénéficiaires ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: true } as never);
-    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2097-01-01');
-    const adhesionA = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2020-01-01');
-    const adhesionB = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2020-01-01');
-    await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionA!.id, 5_000);
-    await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionB!.id, 5_000);
-    renderTontines('/tontines');
-    const card = (await screen.findByText('Prochains Tours')).closest('div')!.parentElement!;
-    expect(await within(card).findByText(/\+ 1 autres/)).toBeInTheDocument();
-  });
-
-  it('aucun Tour à venir → état vide explicite', async () => {
-    // Sans tour futur créé, la carte doit rester exploitable (état vide plutôt qu'une erreur).
-    renderTontines('/tontines');
-    await screen.findByText('Prochains Tours');
-    const upcomingCount = (await tontineOperationsService.listAllOccurrences('T-001')).filter((o) => o.status === 'PLANNED' && o.date >= new Date().toISOString().slice(0, 10)).length;
-    if (upcomingCount === 0) expect(screen.getByText('Aucun Tour à venir')).toBeInTheDocument();
+    await screen.findByText('Tontines actives');
+    expect(screen.queryByText('Prochains Tours')).not.toBeInTheDocument();
+    expect(screen.queryByText('Voir tous les Tours →')).not.toBeInTheDocument();
   });
 });
 
@@ -589,43 +583,58 @@ describe('Dashboard Tontines — Liste (colonnes Reliquats / Adhérents / Procha
     expect(within(row).getByText('2')).toBeInTheDocument();
   });
 
-  it('la colonne Prochain tour affiche « — » quand aucun Tour futur n’existe pour cette Tontine', async () => {
+  /**
+   * Mandat « prochain tour pour une Tontine sans Tour », 2026-09-24 — une
+   * Tontine à Tours = 0 affiche désormais une date CALCULÉE (fréquence,
+   * ancrée sur AUJOURD'HUI) annotée « Prévisionnel », jamais « — » (ancien
+   * comportement, corrigé ici).
+   */
+  it('la colonne Prochain tour affiche une date CALCULÉE (fréquence, ancrée sur aujourd’hui) annotée « Prévisionnel » quand la Tontine n’a encore aucun Tour, jamais « — »', async () => {
     const user = userEvent.setup();
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Sans Tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    const config = { frequency: 'MONTHLY' as const, monthlyRule: 'DAY_OF_MONTH' as const, monthlyDayOfMonth: 1 };
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Sans Tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, ...config } as never);
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    expect(within(row).getByText('—')).toBeInTheDocument();
+    const today = new Date().toISOString().slice(0, 10);
+    const expectedDate = suggestNextOccurrenceDate(config, today)!;
+    expect(within(row).getByText(formatTourDate(expectedDate))).toBeInTheDocument();
+    expect(within(row).getByText('(Prévisionnel)')).toBeInTheDocument();
+    expect(within(row).queryByText('—')).not.toBeInTheDocument();
   });
 });
 
-describe('Dashboard Tontines — Colonne « Prochain tour » (date future la plus proche, par Tontine, sans N+1)', () => {
+describe('Dashboard Tontines — Colonne « Prochain tour » (Tour courant vs Tour suivant, par Tontine, sans N+1)', () => {
   function futureDate(daysFromNow: number) {
     const date = new Date(); date.setDate(date.getDate() + daysFromNow);
     return date.toISOString().slice(0, 10);
   }
 
+  const MONTHLY_CONFIG = { frequency: 'MONTHLY' as const, monthlyRule: 'DAY_OF_MONTH' as const, monthlyDayOfMonth: 1 };
+
   async function makeTontine(tenantId: string, name: string) {
-    return tontinesService.createTontine({ tenantId, name: `${name} ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    return tontinesService.createTontine({ tenantId, name: `${name} ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, valueType: 'MONEY', contributionAmount: 5_000, ...MONTHLY_CONFIG } as never);
   }
 
-  it('TEST 1 — un Tour futur unique : sa date s’affiche dans « Prochain tour »', async () => {
+  it('TEST 1 — un seul Tour existant (le Tour courant) : la colonne affiche une date CALCULÉE (fréquence) annotée « Prévisionnel », jamais la date du Tour courant lui-même', async () => {
     const user = userEvent.setup();
-    const tontine = await makeTontine('T-001', 'Test Tour Futur Unique');
+    const tontine = await makeTontine('T-001', 'Test Tour Unique');
     await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(10));
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    expect(within(row).getByText(formatTourDate(futureDate(10)))).toBeInTheDocument();
+    const expectedDate = suggestNextOccurrenceDate(MONTHLY_CONFIG, futureDate(10))!;
+    expect(within(row).getByText(formatTourDate(expectedDate))).toBeInTheDocument();
+    expect(within(row).queryByText(formatTourDate(futureDate(10)))).not.toBeInTheDocument();
     expect(within(row).queryByText('—')).not.toBeInTheDocument();
   });
 
-  it('TEST 2/8 — plusieurs Tours futurs sur la même Tontine : seul le plus proche est affiché', async () => {
+  it('TEST 2/8 — plusieurs Tours déjà créés sur la même Tontine : le Tour suivant RÉEL (numéro juste après le Tour courant) est affiché, jamais un autre ni une date calculée', async () => {
     const user = userEvent.setup();
-    const tontine = await makeTontine('T-001', 'Test Plusieurs Tours Futurs');
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(60)); // le plus éloigné, créé en premier
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(5)); // le plus proche
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(30)); // intermédiaire
+    const tontine = await makeTontine('T-001', 'Test Plusieurs Tours');
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(60)); // Tour #1 (courant)
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(5)); // Tour #2 (suivant réel)
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(30)); // Tour #3
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
@@ -634,29 +643,31 @@ describe('Dashboard Tontines — Colonne « Prochain tour » (date future la plu
     expect(within(row).queryByText(formatTourDate(futureDate(60)))).not.toBeInTheDocument();
   });
 
-  it('TEST 3 — uniquement des Tours passés : « — »', async () => {
+  it('TEST 3 — le Tour courant (PLANNED) est déjà passé et aucun Tour suivant n’existe : une date CALCULÉE à partir de SA date s’affiche, jamais « — » ni sa propre date (c’est exactement le bug corrigé)', async () => {
     const user = userEvent.setup();
-    const tontine = await makeTontine('T-001', 'Test Tours Uniquement Passés');
+    const tontine = await makeTontine('T-001', 'Test Tour Courant Passé');
     await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(-10));
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(-3));
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    expect(within(row).getByText('—')).toBeInTheDocument();
+    const expectedDate = suggestNextOccurrenceDate(MONTHLY_CONFIG, futureDate(-10))!;
+    expect(within(row).getByText(formatTourDate(expectedDate))).toBeInTheDocument();
+    expect(within(row).queryByText(formatTourDate(futureDate(-10)))).not.toBeInTheDocument();
+    expect(within(row).queryByText('—')).not.toBeInTheDocument();
   });
 
-  it('TEST 5 — un Tour passé et un Tour futur : le Tour futur est affiché', async () => {
+  it('TEST 5 — Tour courant (#1, passé) suivi d’un Tour #2 (futur) déjà créé : le Tour #2 réel est affiché, jamais une date calculée', async () => {
     const user = userEvent.setup();
-    const tontine = await makeTontine('T-001', 'Test Passé Puis Futur');
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(-7));
-    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(14));
+    const tontine = await makeTontine('T-001', 'Test Courant Passé Puis Suivant');
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(-7)); // Tour #1 (courant)
+    await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(14)); // Tour #2 (suivant réel)
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
     expect(within(row).getByText(formatTourDate(futureDate(14)))).toBeInTheDocument();
   });
 
-  it('TEST 6 — plusieurs Tontines avec des prochains Tours différents : chaque ligne affiche SON propre prochain Tour', async () => {
+  it('TEST 6 — plusieurs Tontines avec chacune un seul Tour courant : chaque ligne affiche SA propre date calculée', async () => {
     const user = userEvent.setup();
     const tontineA = await makeTontine('T-001', 'Test Multi A');
     const tontineB = await makeTontine('T-001', 'Test Multi B');
@@ -666,11 +677,11 @@ describe('Dashboard Tontines — Colonne « Prochain tour » (date future la plu
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), 'Test Multi ');
     const rowA = (await screen.findByText(tontineA!.name)).closest('tr')!;
     const rowB = (await screen.findByText(tontineB!.name)).closest('tr')!;
-    expect(within(rowA).getByText(formatTourDate(futureDate(3)))).toBeInTheDocument();
-    expect(within(rowB).getByText(formatTourDate(futureDate(20)))).toBeInTheDocument();
+    expect(within(rowA).getByText(formatTourDate(suggestNextOccurrenceDate(MONTHLY_CONFIG, futureDate(3))!))).toBeInTheDocument();
+    expect(within(rowB).getByText(formatTourDate(suggestNextOccurrenceDate(MONTHLY_CONFIG, futureDate(20))!))).toBeInTheDocument();
   });
 
-  it('TEST 7 — MULTI-TENANT : un Tour futur d’un AUTRE tenant n’apparaît jamais dans la Tontine du tenant courant', async () => {
+  it('TEST 7 — MULTI-TENANT : un Tour d’un AUTRE tenant n’apparaît jamais dans la Tontine du tenant courant', async () => {
     const user = userEvent.setup();
     const tontineOther = await tontinesService.createTontine({ tenantId: 'T-002', name: `Test Autre Tenant ${Date.now()}`, valueType: 'MONEY', currency: 'XOF', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
     await tontineOperationsService.createOccurrence('T-002', tontineOther!.id, futureDate(2));
@@ -678,27 +689,34 @@ describe('Dashboard Tontines — Colonne « Prochain tour » (date future la plu
     renderTontines('/tontines'); // rendu pour le tenant courant, T-001
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    expect(within(row).getByText('—')).toBeInTheDocument(); // le Tour de T-002 n'est jamais utilisé
+    // Aucun Tour pour CETTE Tontine (T-001) → date CALCULÉE ancrée sur aujourd'hui, jamais la date du Tour de T-002 (`futureDate(2)`) ni « — ».
+    const today = new Date().toISOString().slice(0, 10);
+    expect(within(row).getByText(formatTourDate(suggestNextOccurrenceDate(MONTHLY_CONFIG, today)!))).toBeInTheDocument();
+    expect(within(row).queryByText(formatTourDate(futureDate(2)))).not.toBeInTheDocument();
   });
 
   it('TEST 9 — la colonne reste correcte après application des filtres Fréquence et Statut', async () => {
     const user = userEvent.setup();
-    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Filtre Prochain Tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'QUARTERLY', quarterlyMonth: 1, quarterlyDayOfMonth: 15 } as never);
+    const quarterlyConfig = { frequency: 'QUARTERLY' as const, quarterlyMonth: 1 as const, quarterlyDayOfMonth: 15 };
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Filtre Prochain Tour ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, ...quarterlyConfig } as never);
     await tontineOperationsService.createOccurrence('T-001', tontine!.id, futureDate(8));
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     await user.selectOptions(screen.getByLabelText('Fréquence'), 'QUARTERLY');
     await user.selectOptions(screen.getByLabelText('Statut'), 'statusActive');
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    expect(within(row).getByText(formatTourDate(futureDate(8)))).toBeInTheDocument();
+    const expectedDate = suggestNextOccurrenceDate(quarterlyConfig, futureDate(8))!;
+    expect(within(row).getByText(formatTourDate(expectedDate))).toBeInTheDocument();
   });
 
-  it('TON-004 (Coopérative Sutura) — la seule Occurrence du jeu de données (OCC-004, 2026-06-01) est passée : « — » est correct, absence réelle de Tour futur, pas un bug de calcul', async () => {
+  it('TON-004 (Coopérative Sutura) — le Tour courant existant (OCC-004, 2026-06-01, PLANNED) n’est jamais affiché comme « Prochain tour » : une date CALCULÉE (fréquence mensuelle) est annoncée en Prévisionnel', async () => {
     const user = userEvent.setup();
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), 'Coopérative Sutura');
     const row = (await screen.findByText('Coopérative Sutura')).closest('tr')!;
-    expect(within(row).getByText('—')).toBeInTheDocument();
+    expect(within(row).getByText(formatTourDate('2026-07-01'))).toBeInTheDocument();
+    expect(within(row).queryByText(formatTourDate('2026-06-01'))).not.toBeInTheDocument();
+    expect(within(row).queryByText('—')).not.toBeInTheDocument();
   });
 
   it('TON-004 (Coopérative Sutura) — dès qu’un Tour futur existe réellement (« Ajouter un tour »), la colonne affiche sa date au lieu de « — »', async () => {
@@ -768,19 +786,19 @@ describe('Dashboard Tontines — Filtres (Fréquence puis Statut) et Réinitiali
 });
 
 describe('Dashboard Tontines — KPI global vs Total de la liste filtrée', () => {
-  it('le Total de reliquats de la liste change avec le filtre Fréquence, mais le KPI global « Tours à venir » n’en dépend jamais', async () => {
-    const kpiBefore = (await tontineOperationsService.listAllOccurrences('T-001')).filter((o) => o.status === 'PLANNED' && o.date >= new Date().toISOString().slice(0, 10)).length;
+  it('le Total de reliquats de la liste change avec le filtre Fréquence, mais un KPI global (« Tontines actives ») n’en dépend jamais', async () => {
+    const kpiBefore = (await tontinesService.listTontines('T-001')).filter((item) => item.status === 'statusActive').length;
     const user = userEvent.setup();
     renderTontines('/tontines');
-    await screen.findByText('Tours à venir');
-    const kpiValueBefore = within(screen.getByText('Tours à venir').closest('article')!).getByText(String(kpiBefore)).textContent;
+    await screen.findByText('Tontines actives');
+    const kpiValueBefore = within(screen.getByText('Tontines actives').closest('article')!).getByText(String(kpiBefore)).textContent;
     await user.selectOptions(screen.getByLabelText('Fréquence'), 'MONTHLY');
-    const kpiValueAfter = within(screen.getByText('Tours à venir').closest('article')!).getByText(String(kpiBefore)).textContent;
+    const kpiValueAfter = within(screen.getByText('Tontines actives').closest('article')!).getByText(String(kpiBefore)).textContent;
     expect(kpiValueAfter).toBe(kpiValueBefore); // inchangé malgré le filtre Fréquence appliqué à la liste
   });
 });
 
-describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliquats OPEN du tenant courant)', () => {
+describe('Dashboard Tontines — KPI « Reliquats tontines » (règle globale « reliquat > 0, sinon historique, sinon rien », mandat 2026-09-24)', () => {
   /** Reproduit le SEUL chemin métier qui crée un reliquat : clôture d'un Tour dont la cagnotte collectée dépasse ce qui a été distribué (cf. tontine-operations.service.ts `closeOccurrence`). Retourne le reliquat effectivement créé (collected - distributed). */
   async function createRemainder(tenantId: string, memberId: string, collected: number, distributed: number) {
     const tontine = await tontinesService.createTontine({ tenantId, name: `Test Reliquat KPI ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, valueType: 'MONEY', withPurchase: true, contributionAmount: collected, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
@@ -802,7 +820,17 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliqua
     return within(article).getByText((content) => content.replace(/\s/g, '') === target.replace(/\s/g, ''));
   }
 
-  it('affiche le libellé « Reliquats tontines » et le sous-libellé « Total des reliquats »', async () => {
+  it('la carte est totalement ABSENTE tant que le tenant courant n’a JAMAIS eu le moindre reliquat — jamais un « 0 FCFA » affiché sans historique', async () => {
+    // Auto-vérifiant plutôt que dépendant de l'ordre d'exécution (mandat « reliquat > 0 ») : si un test précédent a déjà créé un historique pour T-001, la carte doit être visible ; sinon elle doit être absente.
+    const hasHistory = (await tontineOperationsService.listAllRemainders('T-001')).length > 0;
+    renderTontines('/tontines');
+    await screen.findByText('Tontines actives');
+    if (hasHistory) expect(screen.getByText('Reliquats tontines')).toBeInTheDocument();
+    else expect(screen.queryByText('Reliquats tontines')).not.toBeInTheDocument();
+  });
+
+  it('affiche le libellé « Reliquats tontines » et le sous-libellé « Total des reliquats » dès qu’un reliquat a existé', async () => {
+    await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique, quel que soit l'ordre d'exécution
     renderTontines('/tontines');
     const article = (await screen.findByText('Reliquats tontines')).closest('article')!;
     expect(within(article).getByText('Total des reliquats')).toBeInTheDocument();
@@ -825,7 +853,8 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliqua
     expect(kpiValue(article, `${formatNumber(before + 7_500)}FCFA`)).toBeInTheDocument();
   });
 
-  it('une Tontine sans reliquat (cagnotte intégralement distribuée) n’ajoute rien au KPI', async () => {
+  it('une Tontine sans reliquat (cagnotte intégralement distribuée) n’ajoute rien au KPI, mais la carte reste affichée à « 0 » dès qu’un historique existe déjà', async () => {
+    await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique pour ce test (indépendant de l'ordre d'exécution)
     const before = await totalOpenRemainders('T-001');
     await createRemainder('T-001', 'M-001', 10_000, 10_000); // collecté = distribué → aucun reliquat créé
     renderTontines('/tontines');
@@ -834,6 +863,7 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliqua
   });
 
   it('MULTI-TENANT : un reliquat créé pour un AUTRE tenant (T-002) n’est jamais inclus dans le KPI de T-001', async () => {
+    await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique pour T-001 (indépendant de l'ordre d'exécution)
     const before = await totalOpenRemainders('T-001');
     await createRemainder('T-002', 'M-002', 10_000, 1_000); // reliquat 9 000, mais chez T-002
     renderTontines('/tontines'); // rendu pour le tenant courant, T-001
@@ -842,6 +872,7 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliqua
   });
 
   it('le KPI global « Reliquats tontines » ne dépend jamais du filtre Fréquence de la liste', async () => {
+    await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique pour ce test (indépendant de l'ordre d'exécution)
     const before = await totalOpenRemainders('T-001');
     const user = userEvent.setup();
     renderTontines('/tontines');
@@ -852,12 +883,83 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (somme des reliqua
     expect(valueAfter).toBe(valueBefore);
   });
 
-  it('les autres KPI (Tontines, Actives, Participations, Tours à venir) restent affichés et inchangés par l’ajout de la carte Reliquats', async () => {
+  it('les autres KPI (Tontines, Actives, Participations) restent affichés et inchangés par l’ajout de la carte Reliquats', async () => {
+    await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique pour ce test (indépendant de l'ordre d'exécution)
     renderTontines('/tontines');
     await screen.findByText('Reliquats tontines');
     expect(screen.getByText('Tontines actives')).toBeInTheDocument();
-    expect(screen.getByText('Participations')).toBeInTheDocument();
-    expect(screen.getByText('Tours à venir')).toBeInTheDocument();
+    // `{ selector: 'p' }` — cible la carte KPI, jamais l'en-tête de colonne « Participations » de la liste (mandat « colonne Reliquats conditionnelle », 2026-09-24).
+    expect(screen.getByText('Participations', { selector: 'p' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Footer de la liste (mandat « footer 0 FCFA », 2026-09-24) — analyse : le
+ * montant en FCFA du footer est `filteredRemaindersTotal`, la somme des
+ * RELIQUATS `OPEN` (`openRemaindersByTontine`, alimentée par
+ * `listAllRemainders`) des Tontines actuellement AFFICHÉES (après recherche/
+ * filtres) — jamais les cotisations ni un autre total financier. Le nombre à
+ * côté est `filteredAdherentsTotal`, la somme des adhésions ACTIVES
+ * (`activeAdhesionsByTontine`, alimentée par `listAllAdhesions`) des mêmes
+ * lignes — même donnée et même calcul que la colonne « Participations »,
+ * seulement agrégée. « Total » reste TOUJOURS affiché ; seul le montant est
+ * conditionnel (`hasVisibleRemainder`, même règle que la colonne Reliquats).
+ */
+describe('Dashboard Tontines — Footer de la liste (« Total » / reliquats / participations)', () => {
+  function footerLine(): HTMLElement {
+    return screen.getByText(/ participations$/).closest('div')!;
+  }
+
+  it('TEST 5 — footer SANS reliquat (aucun historique) : « Total » reste affiché, mais jamais de montant « 0 FCFA »', async () => {
+    const user = userEvent.setup();
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Footer Sans Reliquat ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    renderTontines('/tontines');
+    await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
+    await screen.findByText(tontine!.name);
+    const footer = footerLine();
+    expect(within(footer).getByText('Total')).toBeInTheDocument();
+    expect(within(footer).queryByText(/FCFA/)).not.toBeInTheDocument();
+  });
+
+  it('TEST 6 — footer AVEC reliquat : le montant (somme des reliquats OPEN des Tontines affichées) est affiché à côté de « Total »', async () => {
+    const user = userEvent.setup();
+    const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Footer Avec Reliquat ${Date.now()}`, valueType: 'MONEY', withPurchase: true, contributionAmount: 10_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
+    const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 4_000); // reliquat 6 000
+    await tontineOperationsService.recordReception('T-001', beneficiary!.id, 4_000);
+    await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
+
+    renderTontines('/tontines');
+    await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
+    await screen.findByText(tontine!.name);
+    const footer = footerLine();
+    expect(within(footer).getByText('Total')).toBeInTheDocument();
+    expect(within(footer).getByText((content) => content.replace(/\s/g, '') === `${formatNumber(6_000)}FCFA`.replace(/\s/g, ''))).toBeInTheDocument();
+  });
+
+  it('TEST 7 — le total de participations du footer est la SOMME des participations des Tontines affichées, jamais un autre calcul', async () => {
+    const user = userEvent.setup();
+    const stamp = Date.now();
+    // Le stamp précède le suffixe A/B (jamais l'inverse) : la recherche ci-dessous filtre par `Test Footer Participations {stamp}`, qui doit rester un sous-texte CONTIGU des deux noms.
+    const tontineA = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Footer Participations ${stamp} A`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    const tontineB = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Footer Participations ${stamp} B`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
+    await tontinesService.addAdhesion('T-001', tontineA!.id, 'M-001', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineA!.id, 'M-001', '2026-01-01'); // Tontine A : 2 participations
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-001', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-016', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-006', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-018', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-001', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-001', '2026-01-01');
+    await tontinesService.addAdhesion('T-001', tontineB!.id, 'M-001', '2026-01-01'); // Tontine B : 7 participations
+
+    renderTontines('/tontines');
+    await user.type(await screen.findByPlaceholderText('Nom de la tontine'), `Test Footer Participations ${stamp}`);
+    await screen.findByText(tontineA!.name);
+    await screen.findByText(tontineB!.name);
+    expect(within(footerLine()).getByText('9 participations')).toBeInTheDocument();
   });
 });
 

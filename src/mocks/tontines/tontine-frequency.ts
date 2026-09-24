@@ -140,11 +140,18 @@ export function validateFrequency(t: (section: 'tontines', key: string) => strin
 
 /**
  * Suggère UNE SEULE date (jamais un tableau) : la prochaine occurrence de la
- * fréquence configurée, strictement après `afterDate` (dernier tour déjà
- * créé, ou `Tontine.startDate` s'il n'y en a aucun). Pure suggestion
+ * fréquence configurée, strictement après `afterDate`. Pure suggestion
  * pré-remplie côté UI — « Ajouter un tour » reste un acte manuel unique,
  * jamais une génération en masse (mandat reconstruction §2 : « No bulk
  * future date generation »). `null` si la fréquence est incomplète/absente.
+ *
+ * `afterDate` est le dernier Tour déjà créé (suggestion du Tour suivant), OU
+ * la date du jour quand la Tontine n'a encore AUCUN Tour (Tour 0, mandat
+ * « préremplissage Date du tour au Tour 0 », 2026-09-24) — dans ce second
+ * cas, la période EN COURS (mois/trimestre de `afterDate`) est éligible : si
+ * la règle tombe encore strictement après aujourd'hui dans le mois/trimestre
+ * courant, c'est elle la réponse (ex. « le 25 de chaque mois » un 24 →
+ * suggère le 25 du MÊME mois, jamais le mois suivant).
  */
 export function suggestNextOccurrenceDate(config: Partial<FrequencyConfig>, afterDate: string): string | null {
   if (!isValidFrequencyConfig(config)) return null;
@@ -164,11 +171,12 @@ export function suggestNextOccurrenceDate(config: Partial<FrequencyConfig>, afte
   if (config.frequency === 'MONTHLY') {
     let [year, month] = splitYearMonth(afterDate);
     for (let i = 0; i < 24; i += 1) {
-      month += 1; if (month > 12) { month = 1; year += 1; }
+      // Mois COURANT vérifié en premier (jamais sauté d'office) : si la date cible du mois de `afterDate` tombe encore strictement après `afterDate`, elle est la bonne réponse — cas « Tour 0 » où `afterDate` est aujourd'hui, pas un Tour déjà créé. Sans effet quand `afterDate` EST déjà l'occurrence du mois courant (candidate === afterDate, jamais strictement supérieur) : le comportement « après le dernier Tour » reste inchangé.
       const candidate = config.monthlyRule === 'NTH_WEEKDAY'
         ? computeNthWeekdayDate(year, month, config.monthlyOrdinal, config.monthlyWeekday)
         : computeDayOfMonthDate(year, month, config.monthlyDayOfMonth);
       if (candidate && candidate > afterDate) return candidate;
+      month += 1; if (month > 12) { month = 1; year += 1; }
     }
     return null;
   }
@@ -177,12 +185,13 @@ export function suggestNextOccurrenceDate(config: Partial<FrequencyConfig>, afte
     let year = initialYear;
     let quarter = Math.floor((initialMonth - 1) / 3);
     for (let i = 0; i < 8; i += 1) {
-      quarter += 1; if (quarter > 3) { quarter = 0; year += 1; }
+      // Trimestre COURANT vérifié en premier — même raisonnement que MONTHLY ci-dessus.
       const targetMonth = quarter * 3 + config.quarterlyMonth!;
       const candidate = config.quarterlyRule === 'NTH_WEEKDAY'
         ? computeNthWeekdayDate(year, targetMonth, config.quarterlyOrdinal, config.quarterlyWeekday)
         : computeDayOfMonthDate(year, targetMonth, config.quarterlyDayOfMonth);
       if (candidate && candidate > afterDate) return candidate;
+      quarter += 1; if (quarter > 3) { quarter = 0; year += 1; }
     }
     return null;
   }

@@ -25,7 +25,7 @@ import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 import { units, formatUnit } from '@/constants/units';
 import {
   formatFrequencyDescription, validateFrequency, applyWeekday, applyMonthlyDayOfMonth, applyMonthlyOrdinal, applyMonthlyWeekday,
-  applyQuarterlyMonth, applyQuarterlyDayOfMonth, applyQuarterlyOrdinal, applyQuarterlyWeekday,
+  applyQuarterlyMonth, applyQuarterlyDayOfMonth, applyQuarterlyOrdinal, applyQuarterlyWeekday, suggestNextOccurrenceDate,
   WEEKDAYS, ORDINALS, QUARTER_MONTHS, type FrequencyConfig, type TontineFrequency,
 } from '@/mocks/tontines/tontine-frequency';
 import { members } from '@/mocks/organization/members';
@@ -33,7 +33,7 @@ import { AdherentsOrderPanel, OccurrenceSection } from './tontine-tours-module';
 import { OccurrenceDetail } from './tontine-occurrence-module';
 import { AddAdherentsDialog } from './add-adherents-dialog';
 import type { TableColumn } from '@/types/ui';
-import { formatDate, formatNumber, formatTourDate } from '@/lib/utils';
+import { formatDate, formatNumber } from '@/lib/utils';
 
 export type T = (section: 'tontines' | 'nav', key: string, values?: Record<string, string>) => string;
 
@@ -88,8 +88,6 @@ function FrequencyFields({ t, value, onChange, error }: { t: T; value: Partial<F
   </div>;
 }
 
-/** Nombre max de Tours affichés dans « Prochains Tours » — au-delà, « Voir tous les Tours » renvoie vers la liste des Tontines de cette même page. */
-const UPCOMING_TOURS_LIMIT = 5;
 /** Taille de page de la liste des Tontines (mandat « dashboard Tontines », pagination). */
 const TONTINES_PAGE_SIZE = 10;
 
@@ -114,12 +112,11 @@ export function TontinesTableSection({ t }: { t: T }) {
   /**
    * Requêtes transverses (mandat « dashboard Tontines » §26 « pas de requête
    * par Tontine/Tour ») — chacune UNE SEULE fois pour tout le tenant, jamais
-   * un fetch par ligne. Alimentent les KPI, l'analyse, « Prochains Tours » et
-   * les colonnes Reliquats/Adhérents/Prochain tour de la liste.
+   * un fetch par ligne. Alimentent les KPI, l'analyse et les colonnes
+   * Reliquats/Adhérents/Prochain tour de la liste.
    */
   const { data: occurrences = [] } = useQuery({ queryKey: queryKeys.tontines.allOccurrences(currentTenant.id), queryFn: () => tontineOperationsService.listAllOccurrences(currentTenant.id) });
   const { data: adhesions = [] } = useQuery({ queryKey: queryKeys.tontines.allAdhesions(currentTenant.id), queryFn: () => tontineOperationsService.listAllAdhesions(currentTenant.id) });
-  const { data: beneficiaries = [] } = useQuery({ queryKey: queryKeys.tontines.allBeneficiaries(currentTenant.id), queryFn: () => tontineOperationsService.listAllBeneficiaries(currentTenant.id) });
   const { data: remainders = [] } = useQuery({ queryKey: queryKeys.tontines.allRemainders(currentTenant.id), queryFn: () => tontineOperationsService.listAllRemainders(currentTenant.id) });
   if (isLoading) return <TableSkeleton />;
   if (isError) return <ErrorState onRetry={refetch} />;
@@ -127,15 +124,6 @@ export function TontinesTableSection({ t }: { t: T }) {
   const activeTontinesCount = tontines.filter((item) => item.status === 'statusActive').length;
   /** Participations = adhésions ACTIVES, tenant entier — chaque `TontineAdhesion` EST une représentation distincte (un membre peut en cumuler plusieurs dans une même Tontine, cf. onglet Adhérents) : jamais un comptage par membre unique. */
   const activeParticipationsCount = adhesions.filter((item) => item.status === 'active').length;
-  const today = new Date().toISOString().slice(0, 10);
-  /** Tour à venir = PLANNED (jamais REALIZED) ET date ≥ aujourd'hui — mêmes statuts que partout ailleurs dans le module (aucun statut « annulé » dans ce modèle). */
-  const upcomingAll = occurrences.filter((occurrence) => occurrence.status === 'PLANNED' && occurrence.date >= today).sort((a, b) => a.date.localeCompare(b.date));
-  const upcoming = upcomingAll.slice(0, UPCOMING_TOURS_LIMIT);
-
-  const tontineById = new Map(tontines.map((item) => [item.id, item]));
-  const adhesionById = new Map(adhesions.map((item) => [item.id, item]));
-  const beneficiariesByOccurrence = new Map<string, typeof beneficiaries>();
-  for (const beneficiary of beneficiaries) beneficiariesByOccurrence.set(beneficiary.occurrenceId, [...(beneficiariesByOccurrence.get(beneficiary.occurrenceId) ?? []), beneficiary]);
 
   /** Fréquences RÉELLEMENT utilisées par le tenant courant — jamais les 4 valeurs du référentiel en dur : une fréquence non utilisée par aucune Tontine n'apparaît ni dans l'analyse ni dans le filtre (mandat §7). Le modèle actuel ne définit que 4 fréquences fixes (DAILY/WEEKLY/MONTHLY/QUARTERLY) — aucune fréquence personnalisée (« toutes les 2 semaines », etc.) n'existe encore côté données (mandat §8 : documentée, pas créée dans ce chantier). */
   const frequencyCounts = new Map<TontineFrequency, number>();
@@ -147,13 +135,58 @@ export function TontinesTableSection({ t }: { t: T }) {
   /** Adhésions ACTIVES par Tontine (colonne Adhérents) — jamais dédupliquées par Membre : une représentation supplémentaire du même Membre compte pour 1 de plus (même règle que le KPI Participations). */
   const activeAdhesionsByTontine = new Map<string, number>();
   for (const adhesion of adhesions) if (adhesion.status === 'active') activeAdhesionsByTontine.set(adhesion.tontineId, (activeAdhesionsByTontine.get(adhesion.tontineId) ?? 0) + 1);
-  /** Prochain Tour par Tontine (colonne Prochain tour) — dérivé de `upcomingAll`, déjà trié par date croissante : le premier rencontré pour une Tontine est son prochain Tour. */
-  const nextOccurrenceByTontine = new Map<string, (typeof upcomingAll)[number]>();
-  for (const occurrence of upcomingAll) if (!nextOccurrenceByTontine.has(occurrence.tontineId)) nextOccurrenceByTontine.set(occurrence.tontineId, occurrence);
+  /**
+   * Prochain Tour par Tontine (colonne Prochain tour) — mandat « correction
+   * calcul Prochain tour », 2026-09-24 : le Tour COURANT (le Tour `PLANNED`
+   * actif, ou à défaut le dernier Tour existant) n'est JAMAIS affiché comme
+   * son propre « Prochain tour » (bug corrigé : `upcomingAll`, qui inclut le
+   * Tour courant dès que sa date est future, ne peut PAS être réutilisé ici).
+   * Le « Prochain tour » désigne un Tour STRICTEMENT après le Tour courant
+   * (numéro supérieur) : s'il existe déjà réellement, sa date réelle prime ;
+   * sinon une simple date CALCULÉE (`suggestNextOccurrenceDate`, même moteur
+   * de fréquence que « Ajouter un tour »), ancrée sur la date du Tour
+   * courant, annotée « Prévisionnel ». Mandat « prochain tour pour une
+   * Tontine sans Tour », 2026-09-24 — une Tontine n'ayant encore AUCUN Tour
+   * (Tours = 0, `currentOccurrence` absent) n'affiche plus « — » : la même
+   * fonction est réutilisée, simplement ancrée sur AUJOURD'HUI au lieu de la
+   * date d'un Tour existant, pour obtenir la première date future respectant
+   * la fréquence/règle configurée. Un Tour N+1 n'est JAMAIS créé en base
+   * uniquement pour cet affichage, dans aucun des deux cas.
+   */
+  const today = new Date().toISOString().slice(0, 10);
+  const occurrencesByTontine = new Map<string, typeof occurrences>();
+  for (const occurrence of occurrences) occurrencesByTontine.set(occurrence.tontineId, [...(occurrencesByTontine.get(occurrence.tontineId) ?? []), occurrence]);
+  const nextOccurrenceInfoByTontine = new Map<string, { provisional: boolean; date: string }>();
+  for (const tontine of tontines) {
+    const sortedOccurrences = [...(occurrencesByTontine.get(tontine.id) ?? [])].sort((a, b) => a.occurrenceNumber - b.occurrenceNumber);
+    const currentOccurrence = sortedOccurrences.find((occurrence) => occurrence.status === 'PLANNED') ?? sortedOccurrences[sortedOccurrences.length - 1];
+    if (currentOccurrence) {
+      const realNext = sortedOccurrences.find((occurrence) => occurrence.occurrenceNumber > currentOccurrence.occurrenceNumber);
+      if (realNext) { nextOccurrenceInfoByTontine.set(tontine.id, { provisional: false, date: realNext.date }); continue; }
+    }
+    const anchorDate = currentOccurrence ? currentOccurrence.date : today;
+    const suggestedDate = suggestNextOccurrenceDate(tontine as FrequencyConfig, anchorDate);
+    if (suggestedDate) nextOccurrenceInfoByTontine.set(tontine.id, { provisional: true, date: suggestedDate });
+  }
+  /** Nombre total de Tours par Tontine (colonne Tours) — dérivé de `occurrences` (déjà chargé pour tout le tenant), jamais une requête par ligne. Reprend une information auparavant visible uniquement dans « Vue générale » (mandat « suppression de la redondance Vue générale/Liste »). */
+  const occurrenceCountByTontine = new Map<string, number>();
+  for (const occurrence of occurrences) occurrenceCountByTontine.set(occurrence.tontineId, (occurrenceCountByTontine.get(occurrence.tontineId) ?? 0) + 1);
   /** Reliquats RESTANTS par Tontine (colonne Reliquats) — somme des `TontineRemainder` `OPEN` uniquement (`CONSUMED`/`WRITTEN_OFF` sont déjà résolus, jamais comptés comme « restants »). */
   const openRemaindersByTontine = new Map<string, number>();
   for (const remainder of remainders) if (remainder.status === 'OPEN') openRemaindersByTontine.set(remainder.tontineId, (openRemaindersByTontine.get(remainder.tontineId) ?? 0) + remainder.amount);
-  /** KPI « Reliquats tontines » — somme des reliquats OPEN de TOUTES les Tontines du tenant courant, indépendante des filtres de la liste (même règle que les autres KPI globaux). */
+  /**
+   * Règle globale « reliquat > 0 » (mandat « affichage conditionnel des
+   * reliquats », 2026-09-24) — un reliquat n'est affiché QUE s'il est
+   * strictement positif, SAUF si la Tontine a déjà eu un reliquat par le
+   * passé (n'importe quel `TontineRemainder`, même déjà `CONSUMED`/
+   * `WRITTEN_OFF` — un historique reste un historique) : dans ce cas, un
+   * reliquat désormais nul s'affiche « 0 », jamais masqué (il documente
+   * qu'il a été résorbé). Une Tontine n'ayant JAMAIS eu le moindre
+   * `TontineRemainder` n'affiche rien du tout — le reliquat n'existe tout
+   * simplement pas pour elle.
+   */
+  const hasRemainderHistoryByTontine = new Set(remainders.map((remainder) => remainder.tontineId));
+  /** KPI « Reliquats tontines » — somme des reliquats OPEN de TOUTES les Tontines du tenant courant, indépendante des filtres de la liste (même règle que les autres KPI globaux). Carte entière masquée si `totalOpenRemainders <= 0`, quelle que soit l'historique. */
   const totalOpenRemainders = tontines.reduce((sum, item) => sum + (openRemaindersByTontine.get(item.id) ?? 0), 0);
   const totalOpenRemaindersCurrency = tontines.find((item) => item.currency)?.currency ?? organizationCurrency;
 
@@ -162,49 +195,46 @@ export function TontinesTableSection({ t }: { t: T }) {
   /** Le Total de la liste dépend des filtres (mandat §27/§28) — jamais du KPI global, qui lui reste indépendant de la recherche/des filtres. */
   const filteredRemaindersTotal = rows.reduce((sum, item) => sum + (openRemaindersByTontine.get(item.id) ?? 0), 0);
   const filteredAdherentsTotal = rows.reduce((sum, item) => sum + (activeAdhesionsByTontine.get(item.id) ?? 0), 0);
+  /** Colonne « Reliquats » de la liste — affichée uniquement si au moins une Tontine AFFICHÉE (recherche/filtres) a un reliquat à montrer (positif maintenant, ou nul avec historique) — même règle globale que la carte KPI « Reliquats tontines ». */
+  const hasVisibleRemainder = rows.some((item) => (openRemaindersByTontine.get(item.id) ?? 0) > 0 || hasRemainderHistoryByTontine.has(item.id));
   const pageCount = Math.max(1, Math.ceil(rows.length / TONTINES_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedRows = rows.slice((currentPage - 1) * TONTINES_PAGE_SIZE, currentPage * TONTINES_PAGE_SIZE);
 
   const columns: TableColumn<Tontine>[] = [
-    { key: 'name', header: t('tontines', 'tontineName'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} className="flex items-center gap-3 text-left"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><UsersRound size={17} /></span><span><span className="block font-semibold">{row.name}</span><span className="block font-mono text-xs text-muted-foreground">{row.id}</span></span></button> },
+    { key: 'name', header: t('tontines', 'tontineName'), render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} className="flex items-center gap-3 text-left"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><UsersRound size={17} /></span><span className="font-semibold">{row.name}</span></button> },
+    { key: 'valueType', header: t('tontines', 'valueType'), render: (row) => row.valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind') },
+    /** Colonne « Montant de cotisation » — reprend l'info de l'ex-« Vue générale » (mandat « suppression de la redondance »). MONEY uniquement ; en nature affiche l'article de référence (jamais de devise, cf. mandat). */
+    { key: 'contributionAmount', header: t('tontines', 'tontineContributionAmount'), render: (row) => row.valueType === 'MONEY' ? (row.contributionAmount ? <MoneyDisplay amount={row.contributionAmount} currency={row.currency ?? organizationCurrency} /> : '—') : (row.item ? `${row.item}${row.quantity ? ` · ${formatUnit(row.quantity, row.unit)}` : ''}` : '—') },
     { key: 'frequency', header: t('tontines', 'frequency'), render: (row) => t('tontines', FREQUENCY_LABEL_KEY[row.frequency]) },
+    { key: 'withPurchase', header: t('tontines', 'withPurchase'), render: (row) => row.valueType === 'MONEY' ? t('tontines', row.withPurchase ? 'yes' : 'no') : '—' },
     { key: 'status', header: t('tontines', 'tontineStatus'), render: (row) => <StatusBadge label={t('tontines', row.status)} tone={STATUS_TONE[row.status]} /> },
-    { key: 'remainders', header: t('tontines', 'remaindersColumn'), render: (row) => row.valueType === 'MONEY' ? <MoneyDisplay amount={openRemaindersByTontine.get(row.id) ?? 0} currency={row.currency ?? organizationCurrency} /> : '—' },
+    ...(hasVisibleRemainder ? [{
+      key: 'remainders', header: t('tontines', 'remaindersColumn'), render: (row: Tontine) => {
+        if (row.valueType !== 'MONEY') return '—';
+        const amount = openRemaindersByTontine.get(row.id) ?? 0;
+        if (amount <= 0 && !hasRemainderHistoryByTontine.has(row.id)) return '—';
+        return <MoneyDisplay amount={amount} currency={row.currency ?? organizationCurrency} />;
+      },
+    } as TableColumn<Tontine>] : []),
     { key: 'adherents', header: t('tontines', 'adherentsColumnShort'), render: (row) => formatNumber(activeAdhesionsByTontine.get(row.id) ?? 0) },
-    { key: 'nextOccurrence', header: t('tontines', 'nextOccurrenceColumn'), render: (row) => { const next = nextOccurrenceByTontine.get(row.id); return next ? <TourDateDisplay value={next.date} /> : '—'; } },
+    { key: 'occurrenceCount', header: t('tontines', 'occurrenceCount'), render: (row) => formatNumber(occurrenceCountByTontine.get(row.id) ?? 0) },
+    { key: 'nextOccurrence', header: t('tontines', 'nextOccurrenceColumn'), render: (row) => {
+      const info = nextOccurrenceInfoByTontine.get(row.id);
+      if (!info) return '—';
+      return <span className="flex items-center gap-1.5"><TourDateDisplay value={info.date} />{info.provisional && <span className="text-xs text-muted-foreground">({t('tontines', 'nextOccurrenceProvisionalLabel')})</span>}</span>;
+    } },
     { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
-  ];
-
-  const upcomingColumns: TableColumn<(typeof upcoming)[number]>[] = [
-    { key: 'date', header: t('tontines', 'upcomingDateColumn'), render: (occurrence) => <TourDateDisplay value={occurrence.date} /> },
-    { key: 'frequency', header: t('tontines', 'frequency'), render: (occurrence) => { const tontine = tontineById.get(occurrence.tontineId); return tontine ? t('tontines', FREQUENCY_LABEL_KEY[tontine.frequency]) : '—'; } },
-    {
-      key: 'beneficiary', header: t('tontines', 'upcomingBeneficiaryColumn'), render: (occurrence) => {
-        const names = (beneficiariesByOccurrence.get(occurrence.id) ?? []).map((item) => adhesionById.get(item.adhesionId)?.memberName).filter((name): name is string => Boolean(name));
-        if (names.length === 0) return '—';
-        return names.length === 1 ? names[0] : t('tontines', 'upcomingBeneficiaryAndOthers', { name: names[0], count: String(names.length - 1) });
-      },
-    },
-    {
-      key: 'amount', header: t('tontines', 'upcomingAmountColumn'), render: (occurrence) => {
-        const tontine = tontineById.get(occurrence.tontineId);
-        const firstBeneficiary = (beneficiariesByOccurrence.get(occurrence.id) ?? [])[0];
-        if (!tontine || !firstBeneficiary) return '—';
-        return tontine.valueType === 'MONEY' ? <MoneyDisplay amount={firstBeneficiary.amountDue} currency={tontine.currency ?? organizationCurrency} /> : formatUnit(firstBeneficiary.amountDue, tontine.unit);
-      },
-    },
   ];
 
   return <div className="space-y-6">
     <div className="flex flex-wrap justify-end gap-2"><PermissionGate permission="tontines.create"><Button onClick={() => navigate('/tontines/create')}><Plus size={16} />{t('tontines', 'createTontine')}</Button></PermissionGate></div>
 
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div className={`grid gap-4 sm:grid-cols-2 ${totalOpenRemainders > 0 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
       <Metric label={t('tontines', 'tontinesTitle')} value={formatNumber(tontines.length)} detail={t('tontines', 'kpiTontinesTotal')} icon={Landmark} tone="info" />
       <Metric label={t('tontines', 'kpiActiveTontines')} value={formatNumber(activeTontinesCount)} detail={t('tontines', 'kpiActiveTontinesDetail')} icon={CircleCheck} tone="success" />
       <Metric label={t('tontines', 'kpiParticipations')} value={formatNumber(activeParticipationsCount)} detail={t('tontines', 'kpiParticipationsDetail')} icon={UsersRound} tone="info" />
-      <Metric label={t('tontines', 'kpiUpcomingTours')} value={formatNumber(upcomingAll.length)} detail={t('tontines', 'kpiUpcomingToursDetail')} icon={CalendarDays} tone={upcomingAll.length > 0 ? 'info' : 'neutral'} />
-      <Metric label={t('tontines', 'kpiRemainders')} value={formatCurrency(totalOpenRemainders, totalOpenRemaindersCurrency, locale)} detail={t('tontines', 'kpiRemaindersDetail')} icon={Banknote} tone={totalOpenRemainders > 0 ? 'warning' : 'neutral'} />
+      {totalOpenRemainders > 0 && <Metric label={t('tontines', 'kpiRemainders')} value={formatCurrency(totalOpenRemainders, totalOpenRemaindersCurrency, locale)} detail={t('tontines', 'kpiRemaindersDetail')} icon={Banknote} tone="warning" />}
     </div>
 
     <div className="grid gap-4 lg:grid-cols-2">
@@ -223,11 +253,6 @@ export function TontinesTableSection({ t }: { t: T }) {
       </CardContent></Card>
     </div>
 
-    <Card><CardHeader><CardTitle className="text-sm flex items-center gap-2"><CalendarDays size={15} />{t('tontines', 'upcomingToursTitle')}</CardTitle></CardHeader><CardContent className="p-5 pt-0">
-      <DataTable columns={upcomingColumns} rows={upcoming} onRowClick={(occurrence) => navigate(`/tontines/${occurrence.tontineId}/occurrences/${occurrence.id}`)} empty={<EmptyState icon={CalendarDays} title={t('tontines', 'noUpcomingTours')} />} />
-      {upcomingAll.length > UPCOMING_TOURS_LIMIT && <div className="mt-3 text-right"><a href="#tontines-list" className="text-sm font-medium text-primary hover:underline">{t('tontines', 'viewAllTours')} →</a></div>}
-    </CardContent></Card>
-
     <div id="tontines-list" className="space-y-4 scroll-mt-6">
       <div className="flex items-center gap-2 text-sm font-semibold"><List size={15} />{t('tontines', 'tontineListTitle')}</div>
       <FilterBar search={search} onSearchChange={(value) => { setSearch(value); resetPage(); }} placeholder={t('tontines', 'tontineName')} onClear={() => { setSearch(''); setStatus('all'); setFrequency('all'); resetPage(); }} filters={<>
@@ -243,7 +268,8 @@ export function TontinesTableSection({ t }: { t: T }) {
       </>} />
       <DataTable columns={columns} rows={pagedRows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noTontines')} />} />
       {rows.length > 0 && <div className="-mt-px flex flex-wrap items-center justify-between gap-3 rounded-b-xl border border-t-0 border-border bg-card px-4 py-3 text-sm">
-        <div className="flex items-center gap-2 font-semibold"><span>{t('tontines', 'totalLabel')}</span><span><MoneyDisplay amount={filteredRemaindersTotal} currency={rows.find((item) => item.currency)?.currency ?? organizationCurrency} /></span><span className="text-muted-foreground">{formatNumber(filteredAdherentsTotal)} {t('tontines', 'adherentsColumnShort').toLowerCase()}</span></div>
+        {/* « Total » reste toujours affiché (mandat « footer 0 FCFA », 2026-09-24) — seul le montant des reliquats (`filteredRemaindersTotal`, jamais les cotisations) est conditionnel, même règle que la colonne Reliquats (`hasVisibleRemainder`) : masqué quand il n'y a rien à montrer, jamais un « 0 FCFA » creux. */}
+        <div className="flex items-center gap-2 font-semibold"><span>{t('tontines', 'totalLabel')}</span>{hasVisibleRemainder && <span><MoneyDisplay amount={filteredRemaindersTotal} currency={rows.find((item) => item.currency)?.currency ?? organizationCurrency} /></span>}<span className="text-muted-foreground">{formatNumber(filteredAdherentsTotal)} {t('tontines', 'adherentsColumnShort').toLowerCase()}</span></div>
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-xs text-muted-foreground">{t('tontines', 'paginationSummary', { shown: String(pagedRows.length), total: String(rows.length) })}</span>
           <TontinesPagination page={currentPage} pageCount={pageCount} onPageChange={setPage} />
@@ -309,7 +335,7 @@ function TontineCreate({ t }: { t: T }) {
   return <Page title={t('tontines', 'createTontine')} description={t('tontines', 'tontinesDescription')} actions={<Back label={t('tontines', 'backToTontines')} to="/tontines" />}><div className="grid gap-5 lg:grid-cols-2">
     <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2">{!isGoods && !organizationCurrency && <div className="sm:col-span-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"><p>{t('tontines', 'organizationCurrencyMissing')}</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => navigate('/settings/organization')}>{t('tontines', 'goToOrganizationSettings')}</Button></div>}<div className="space-y-2"><Label htmlFor="tontine-name">{t('tontines', 'tontineName')} *</Label><Input id="tontine-name" value={name} onChange={(event) => setName(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="tontine-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-value-type" value={valueType} onChange={(event) => setValueType(event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><div className="relative"><Input id="tontine-contribution-amount" type="number" inputMode="decimal" min={0} value={contributionAmount} onChange={(event) => setContributionAmount(event.target.value)} aria-invalid={Boolean(contributionAmountError)} aria-describedby={organizationCurrency ? 'tontine-contribution-amount-currency' : undefined} className={organizationCurrency ? 'pr-14' : undefined} />{organizationCurrency && <span id="tontine-contribution-amount-currency" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">{getCurrencyShortLabel(organizationCurrency)}</span>}</div><FieldError message={contributionAmountError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-item">{t('tontines', 'goodsItem')} *</Label><Input id="tontine-goods-item" value={item} onChange={(event) => setItem(event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-quantity">{t('tontines', 'referenceQuantity')} *</Label><Input id="tontine-goods-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div>}{!isGoods && <div className="flex items-center justify-between gap-3 space-y-0 rounded-lg border border-input px-3 py-2 sm:col-span-2"><div><Label htmlFor="tontine-with-purchase">{t('tontines', 'withPurchase')}</Label><p className="mt-0.5 text-[11px] text-muted-foreground">{t('tontines', 'withPurchaseHint')}</p></div><Switch id="tontine-with-purchase" checked={withPurchase} onCheckedChange={setWithPurchase} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-unit">{t('tontines', 'unit')} *</Label><select id="tontine-goods-unit" value={unit} onChange={(event) => setUnit(event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div>}{!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}</div></FormSection>
     <FormSection title={t('tontines', 'frequencySection')} description={t('tontines', 'frequencySectionDescription')}><FrequencyFields t={t} value={freq} onChange={setFreq} error={frequencyError} /></FormSection>
-    <FormSection title={t('tontines', 'summarySection')}><div className="grid gap-2 text-sm sm:grid-cols-2"><Info label={t('tontines', 'summaryName')} value={name || '—'} icon={Landmark} /><Info label={t('tontines', 'valueType')} value={valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />{!isGoods && <><Info label={t('tontines', 'currency')} value={organizationCurrency ? `${organizationCurrency} — ${getCurrencyLabel(organizationCurrency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'tontineContributionAmount')} value={contributionAmount ? formatCurrency(Number(contributionAmount), organizationCurrency, 'fr') : '—'} icon={Banknote} /><Info label={t('tontines', 'withPurchase')} value={t('tontines', withPurchase ? 'yes' : 'no')} icon={ClipboardList} /></>}{isGoods && <><Info label={t('tontines', 'goodsItem')} value={item.trim() || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={quantity ? `${quantity} ${formatUnit(Number(quantity), unit)}`.trim() : '—'} icon={Hash} /></>}{freq.frequency && <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[freq.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(freq as FrequencyConfig, 'fr')} icon={CalendarDays} /></>}<Info label={t('tontines', 'summaryTenant')} value={`${currentTenant.name} (${currentTenant.id})`} icon={UsersRound} /></div></FormSection>
+    <FormSection title={t('tontines', 'summarySection')}><div className="grid gap-2 text-sm sm:grid-cols-2"><Info label={t('tontines', 'summaryName')} value={name || '—'} icon={Landmark} /><Info label={t('tontines', 'valueType')} value={valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />{!isGoods && <><Info label={t('tontines', 'currency')} value={organizationCurrency ? `${organizationCurrency} — ${getCurrencyLabel(organizationCurrency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'tontineContributionAmount')} value={contributionAmount ? formatCurrency(Number(contributionAmount), organizationCurrency, 'fr') : '—'} icon={Banknote} /><Info label={t('tontines', 'withPurchase')} value={t('tontines', withPurchase ? 'yes' : 'no')} icon={ClipboardList} /></>}{isGoods && <><Info label={t('tontines', 'goodsItem')} value={item.trim() || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={quantity ? `${quantity} ${formatUnit(Number(quantity), unit)}`.trim() : '—'} icon={Hash} /></>}{freq.frequency && <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[freq.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(freq as FrequencyConfig, 'fr')} icon={CalendarDays} /></>}<Info label={t('tontines', 'summaryTenant')} value={currentTenant.name} icon={UsersRound} /></div></FormSection>
     <div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isPending} onClick={() => navigate('/tontines')}>{t('tontines', 'cancel')}</Button><Button disabled={isPending || (!isGoods && !organizationCurrency)} onClick={handleSave}>{isPending ? t('tontines', 'saving') : t('tontines', 'save')}</Button></div>
   </div></Page>;
 }
@@ -369,30 +395,29 @@ function AdhesionsPanel({ t, tontineId }: { t: T; tontineId: string }) {
 }
 
 /**
- * « Vue générale » a désormais sa PROPRE route explicite (`overview`) — le
- * chemin bare (`/tontines/:id`, aucun segment) n'ouvre plus « Vue générale »
- * mais « Tours » (mandat « ouverture par défaut sur Tours »), tandis qu'une
- * route explicite reste toujours prioritaire, y compris `/overview` (voir
- * `activeTab`/`goToTab` ci-dessous).
+ * « Vue générale » a été SUPPRIMÉE (mandat « suppression de la redondance
+ * Vue générale/Liste des tontines ») — ses informations pertinentes (type de
+ * valeur, montant de cotisation/article, avec achat, nombre de tours) vivent
+ * désormais comme colonnes supplémentaires de la liste des Tontines
+ * (`TontinesTableSection` ci-dessus), jamais dupliquées ici. Un ancien lien
+ * vers `/overview` retombe proprement sur le défaut (`activeTab` ci-dessous),
+ * même mécanisme de secours que pour tout segment absent de `TAB_SEGMENTS`.
  *
  * Mandat « le Tour devient le centre des opérations » — « Cotisations »,
  * « Distributions » et « Reliquats » ne sont plus des onglets du détail
  * Tontine (redondants avec ce que chaque Tour affiche déjà individuellement :
  * `ContributionsColumn`/`BeneficiariesColumn`/reliquat de la synthèse dans
- * `tontine-occurrence-module.tsx`). Un ancien lien vers l'un de ces trois
- * segments retombe proprement sur « Tours » via le même mécanisme de secours
- * que pour tout segment absent de `TAB_SEGMENTS` (`activeTab` ci-dessous) —
- * jamais une page cassée. AUCUNE donnée/service supprimé : `listContributions`,
- * `listDistributions`, `listRemainders`, `consumeRemainder`, `writeOffRemainder`
- * restent intacts dans `tontine-operations.service.ts`, réutilisés par
+ * `tontine-occurrence-module.tsx`). AUCUNE donnée/service supprimé :
+ * `listContributions`, `listDistributions`, `listRemainders`,
+ * `consumeRemainder`, `writeOffRemainder` restent intacts dans
+ * `tontine-operations.service.ts`, réutilisés par
  * `tontine-occurrence-module.tsx`.
  */
-const TAB_SEGMENTS = ['overview', 'adherents', 'tours'] as const;
+const TAB_SEGMENTS = ['adherents', 'tours'] as const;
 type TabSegment = (typeof TAB_SEGMENTS)[number];
 
 function TontineDetail({ t }: { t: T }) {
   const { tontineId = '', '*': subPath = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
-  const { locale } = useLocale();
   const { data: tontine, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.tontines.detail(tontineId), currentTenant.id], queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId) });
   /**
    * `summary`/`planningStatus` alimentent le calcul de l'onglet par défaut
@@ -408,7 +433,7 @@ function TontineDetail({ t }: { t: T }) {
   const { data: occurrences = [] } = useQuery({ queryKey: queryKeys.tontines.occurrences(tontineId), queryFn: () => tontineOperationsService.listOccurrences(currentTenant.id, tontineId), enabled: Boolean(tontine) });
   /** Sans objet pour « Avec achat » (`isPlanningComplete` y retourne toujours `false`, jamais utilisé dans ce cas par `defaultTab` plus bas) — interrogée quand même pour rester en parallèle de `tontine`, jamais séquentielle derrière elle. */
   const { data: planningStatus } = useQuery({ queryKey: queryKeys.tontines.planningStatus(tontineId), queryFn: () => tontineOperationsService.getPlanningStatus(currentTenant.id, tontineId) });
-  const tabAvailable: Record<TabSegment, boolean> = { overview: true, adherents: true, tours: true };
+  const tabAvailable: Record<TabSegment, boolean> = { adherents: true, tours: true };
   /**
    * Onglet par défaut à l'ouverture (URL « bare », aucun onglet explicite
    * demandé) — mandat « Adhérents + Ordre de passage » : l'ancien onglet
@@ -473,8 +498,7 @@ function TontineDetail({ t }: { t: T }) {
    * toute réévaluation ultérieure de `defaultTab`.
    */
   const goToTab = (tab: TabSegment) => navigate(`/tontines/${tontine.id}/${tab}`);
-  const nextOccurrence = occurrences.filter((occurrence) => occurrence.status === 'PLANNED').sort((a, b) => a.date.localeCompare(b.date))[0];
-  return <Page title={tontine.name} description={`${tontine.id} · ${tontine.tenantId}`} actions={<><Back label={t('tontines', 'backToTontines')} to="/tontines" /><PermissionGate permission="tontines.update"><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/edit`)}><Pencil size={16} />{t('tontines', 'edit')}</Button></PermissionGate></>}>
+  return <Page title={tontine.name} actions={<><Back label={t('tontines', 'backToTontines')} to="/tontines" /><PermissionGate permission="tontines.update"><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/edit`)}><Pencil size={16} />{t('tontines', 'edit')}</Button></PermissionGate></>}>
     <Card><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
       <div className="space-y-1 min-w-0">
         <StatusBadge label={t('tontines', tontine.status)} tone={STATUS_TONE[tontine.status]} />
@@ -485,29 +509,9 @@ function TontineDetail({ t }: { t: T }) {
 
     <Tabs value={activeTab} onValueChange={(value) => goToTab(value as TabSegment)}>
       <TabsList className="flex h-auto flex-wrap justify-start gap-1 bg-muted/60 p-1">
-        <TabsTrigger value="overview">{t('tontines', 'tabOverview')}</TabsTrigger>
         <TabsTrigger value="adherents">{t('tontines', 'tabAdherents')}</TabsTrigger>
         <TabsTrigger value="tours">{t('tontines', 'tabTours')}</TabsTrigger>
       </TabsList>
-
-      <TabsContent value="overview" className="mt-4 space-y-5">
-        <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'tontineInfoTitle')}</CardTitle></CardHeader><CardContent className="grid gap-4 p-5 pt-0 sm:grid-cols-3">
-          <Info label={t('tontines', 'summaryName')} value={tontine.name} icon={Landmark} />
-          <Info label={t('tontines', 'valueType')} value={tontine.valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />
-          <Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[tontine.frequency])} icon={CalendarDays} />
-          {tontine.valueType === 'MONEY'
-            ? <Info label={t('tontines', 'tontineContributionAmount')} value={tontine.contributionAmount ? formatCurrency(tontine.contributionAmount, tontine.currency, locale) : '—'} icon={Banknote} />
-            : <Info label={t('tontines', 'goodsItem')} value={tontine.item || '—'} icon={Package} />}
-          <Info label={t('tontines', 'memberCount')} value={formatNumber(summary?.memberCount ?? 0)} icon={UsersRound} />
-          <Info label={t('tontines', 'occurrenceCount')} value={formatNumber(occurrences.length)} icon={Hash} />
-          <Info label={t('tontines', 'nextOccurrenceLabel')} value={nextOccurrence ? formatTourDate(nextOccurrence.date) : t('tontines', 'noNextOccurrence')} icon={CalendarDays} />
-        </CardContent></Card>
-        <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'configuration')}</CardTitle></CardHeader><CardContent className="grid gap-4 p-5 pt-0 sm:grid-cols-3">
-          {tontine.valueType === 'MONEY' && <><Info label={t('tontines', 'currency')} value={tontine.currency ? `${tontine.currency} — ${getCurrencyLabel(tontine.currency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'withPurchase')} value={t('tontines', tontine.withPurchase ? 'yes' : 'no')} icon={ClipboardList} /></>}
-          {tontine.valueType === 'GOODS' && <Info label={t('tontines', 'referenceQuantity')} value={tontine.quantity ? `${formatNumber(tontine.quantity)} ${formatUnit(tontine.quantity, tontine.unit)}`.trim() : '—'} icon={Hash} />}
-          <Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(tontine as FrequencyConfig, 'fr')} icon={CalendarDays} />
-        </CardContent></Card>
-      </TabsContent>
 
       {/* Sans achat : ordre de passage prédéfini (AdherentsOrderPanel). Avec achat : pas d'ordre, simple adhésion (AdhesionsPanel) — la détermination du bénéficiaire se fait ultérieurement via les règles d'achat. */}
       <TabsContent value="adherents" className="mt-4"><Card><CardContent className="p-5">{tontine.withPurchase ? <AdhesionsPanel t={t} tontineId={tontine.id} /> : <AdherentsOrderPanel t={t} tontineId={tontine.id} />}</CardContent></Card></TabsContent>

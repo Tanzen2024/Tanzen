@@ -479,21 +479,24 @@ export function OccurrenceDetail({ t }: { t: T }) {
       remplacement. Le bouton « Retour aux Tours » n'est PAS un onglet
       (poids visuel inférieur, ghost) ; la navigation principale RÉUTILISE
       telle quelle la même liste d'onglets que `TontineDetail`
-      (`tabOverview`/`tabAdherents`/`tabTours`, mêmes routes explicites
-      `/tontines/:tontineId/<segment>`) — jamais une seconde logique
-      d'onglets. Cette page est toujours conceptuellement « dans » Tours :
-      `value="tours"` est fixe, chaque `TabsTrigger` navigue explicitement
-      au clic (y compris « Tours » lui-même, qui doit ramener à la LISTE des
-      Tours même si son onglet est déjà visuellement actif — un
+      (`tabAdherents`/`tabTours` — « Vue générale » a été supprimée, mandat
+      « suppression de la redondance Vue générale/Liste des tontines »,
+      mêmes routes explicites `/tontines/:tontineId/<segment>`) — jamais une
+      seconde logique d'onglets. Cette page est toujours conceptuellement
+      « dans » Tours : `value="tours"` est fixe, chaque `TabsTrigger` navigue
+      explicitement au clic (y compris « Tours » lui-même, qui doit ramener à
+      la LISTE des Tours même si son onglet est déjà visuellement actif — un
       `onValueChange` seul ne se déclenche jamais pour une valeur inchangée).
     */}
     <div>
-      <Button variant="ghost" size="sm" className="mb-2 -ml-2 text-muted-foreground hover:text-foreground" onClick={() => navigate(`/tontines/${tontineId}/tours`)}>
-        <ArrowLeftIcon size={14} />{t('tontines', 'backToOccurrences')}
-      </Button>
+      {/* Même alignement que « Retour aux tontines » (`Back`, `PageHeader`) — à droite du conteneur principal, jamais à gauche (mandat « alignement du lien Retour aux Tours », 2026-09-24). */}
+      <div className="mb-2 flex justify-end">
+        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => navigate(`/tontines/${tontineId}/tours`)}>
+          <ArrowLeftIcon size={14} />{t('tontines', 'backToOccurrences')}
+        </Button>
+      </div>
       <Tabs value="tours">
         <TabsList className="flex h-auto w-fit flex-wrap justify-start gap-1 bg-muted/60 p-1">
-          <TabsTrigger value="overview" onClick={() => navigate(`/tontines/${tontineId}/overview`)}>{t('tontines', 'tabOverview')}</TabsTrigger>
           <TabsTrigger value="adherents" onClick={() => navigate(`/tontines/${tontineId}/adherents`)}>{t('tontines', 'tabAdherents')}</TabsTrigger>
           <TabsTrigger value="tours" onClick={() => navigate(`/tontines/${tontineId}/tours`)}>{t('tontines', 'tabTours')}</TabsTrigger>
         </TabsList>

@@ -60,7 +60,7 @@ function entityLink(request: WorkflowRequest) { return request.entityType === 'a
 
 function DefinitionsTab({ t, definitions }: { t: T; definitions: WorkflowDefinition[] }) {
   const columns: TableColumn<WorkflowDefinition>[] = [
-    { key: 'name', header: t('operations', 'requestId'), render: (row) => { const Icon = DOMAIN_ICON[row.domain]; return <span className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={16} /></span><span><span className="block font-semibold">{row.name}</span><span className="block text-xs text-muted-foreground">{row.id}</span></span></span>; } },
+    { key: 'name', header: t('operations', 'name'), render: (row) => { const Icon = DOMAIN_ICON[row.domain]; return <span className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Icon size={16} /></span><span className="font-semibold">{row.name}</span></span>; } },
     { key: 'domain', header: t('operations', 'domain'), render: (row) => t('operations', DOMAIN_KEY[row.domain]) },
     { key: 'steps', header: t('operations', 'steps'), render: (row) => formatNumber(row.steps.length) },
     { key: 'active', header: t('operations', 'status'), render: (row) => <StatusBadge label={row.active ? t('operations', 'delegationActive') : t('operations', 'delegationInactive')} tone={row.active ? 'success' : 'default'} /> },
@@ -70,7 +70,6 @@ function DefinitionsTab({ t, definitions }: { t: T; definitions: WorkflowDefinit
 
 function RequestsTable({ t, rows, onRowClick, empty }: { t: T; rows: WorkflowRequest[]; onRowClick: (id: string) => void; empty: ReactNode }) {
   const columns: TableColumn<WorkflowRequest>[] = [
-    { key: 'id', header: t('operations', 'requestId'), render: (row) => <button type="button" onClick={() => onRowClick(row.id)} className="font-mono text-xs font-semibold text-primary">{row.id}</button> },
     { key: 'entity', header: t('operations', 'entity'), render: (row) => <button type="button" onClick={() => onRowClick(row.id)} className="text-left"><span className="block font-medium">{row.entityLabel}</span><span className="block text-xs text-muted-foreground">{t('operations', ENTITY_KEY[row.entityType])}</span></button> },
     { key: 'domain', header: t('operations', 'domain'), render: (row) => { const Icon = DOMAIN_ICON[row.domain]; return <span className="flex items-center gap-1.5 text-sm text-muted-foreground"><Icon size={13} />{t('operations', DOMAIN_KEY[row.domain])}</span>; } },
     { key: 'requestedBy', header: t('operations', 'requestedBy') },
@@ -270,7 +269,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     cancel: { title: t('operations', 'cancelRequest'), confirm: t('operations', 'cancelRequest') },
   };
 
-  return <Page title={`${request.id} · ${request.entityLabel}`} description={t('operations', DOMAIN_KEY[request.domain])} actions={<><Back label={t('operations', 'backToWorkflows')} />{link && <Button variant="outline" onClick={() => navigate(link)}><DomainIcon size={15} />{t('operations', 'viewDetail')}</Button>}</>}>
+  return <Page title={request.entityLabel} description={t('operations', DOMAIN_KEY[request.domain])} actions={<><Back label={t('operations', 'backToWorkflows')} />{link && <Button variant="outline" onClick={() => navigate(link)}><DomainIcon size={15} />{t('operations', 'viewDetail')}</Button>}</>}>
     <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
       <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'approvalTimeline')}</CardTitle></CardHeader><CardContent className="p-5"><ApprovalTimeline request={request} t={t} /></CardContent></Card>
       <div className="space-y-5">
@@ -428,7 +427,7 @@ function EntityPicker({ t, tenantId, entityType, entityId, onSelect }: { t: T; t
   const selectClass = 'flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm';
 
   if (entityType === 'member') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const m = members.find((item) => item.id === e.target.value); onSelect(e.target.value, m ? `${m.firstName} ${m.lastName}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{members.map((m) => <option key={m.id} value={m.id}>{m.firstName} {m.lastName}</option>)}</select>;
-  if (entityType === 'loan') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const l = loans.find((item) => item.id === e.target.value); onSelect(e.target.value, l ? `${l.id} · ${l.borrower}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{loans.map((l) => <option key={l.id} value={l.id}>{l.id} · {l.borrower}</option>)}</select>;
+  if (entityType === 'loan') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const l = loans.find((item) => item.id === e.target.value); onSelect(e.target.value, l ? `${l.borrower} · ${formatDate(l.disbursementDate)}` : ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{loans.map((l) => <option key={l.id} value={l.id}>{l.borrower} · {formatDate(l.disbursementDate)}</option>)}</select>;
   if (entityType === 'tontine') return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const item = tontinesList.find((tt) => tt.id === e.target.value); onSelect(e.target.value, item?.name ?? ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{tontinesList.map((tt) => <option key={tt.id} value={tt.id}>{tt.name}</option>)}</select>;
   return <select id="doc-upload-entity" value={entityId} onChange={(e) => { const a = assemblies.find((item) => item.id === e.target.value); onSelect(e.target.value, a?.title ?? ''); }} className={selectClass}><option value="">{t('operations', 'selectEntity')}</option>{assemblies.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}</select>;
 }

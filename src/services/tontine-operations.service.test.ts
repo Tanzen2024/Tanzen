@@ -460,6 +460,7 @@ describe('tontineOperationsService — Finance : cotisations et réceptions jour
     const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000); // Condition 1 de clôture (mandat « renforcement clôture », 2026-09-24) : toutes les participations doivent avoir cotisé
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 5_000);
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 5_000);
     await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
@@ -481,14 +482,56 @@ describe('tontineOperationsService — Clôture et Reliquat', () => {
     expect(closed).toBeNull();
   });
 
-  it('ALLOW: closeOccurrence succeeds once every beneficiary is fully paid, and moves status to REALIZED', async () => {
+  it('ALLOW: closeOccurrence succeeds once every contribution is settled AND at least one beneficiary is fully paid, and moves status to REALIZED', async () => {
     const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000); // Condition 1 (mandat « renforcement clôture », 2026-09-24)
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 10_000);
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 10_000);
     const closed = await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
     expect(closed?.status).toBe('REALIZED');
+  });
+
+  it('DENY: closeOccurrence refuses while ANY eligible participation has not fully cotisé, even when every beneficiary is fully paid (Condition 1)', async () => {
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
+    const adhesionA = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
+    await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01'); // reste éligible mais ne cotise jamais
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    await tontineOperationsService.recordReception('T-001', beneficiary!.id, 10_000);
+    const closed = await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
+    expect(closed).toBeNull();
+  });
+
+  it('ALLOW: closeOccurrence succeeds with only PARTIAL beneficiaries alongside one PAID beneficiary (Condition 2 needs only ONE « Réglé », never all)', async () => {
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
+    const adhesionA = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
+    const adhesionB = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesionB!.id, 10_000);
+    const beneficiaryA = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    const beneficiaryB = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionB!.id, 10_000);
+    await tontineOperationsService.recordReception('T-001', beneficiaryA!.id, 10_000); // PAID
+    await tontineOperationsService.recordReception('T-001', beneficiaryB!.id, 4_000); // PARTIAL — jamais bloquant tant qu'un autre est « Réglé »
+    const closed = await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
+    expect(closed?.status).toBe('REALIZED');
+  });
+
+  it('DENY: closeOccurrence refuses when every beneficiary is only PARTIAL/PENDING — no beneficiary is exactly « Réglé » (Condition 2)', async () => {
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
+    const adhesionA = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
+    const adhesionB = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
+    const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesionB!.id, 10_000);
+    const beneficiaryA = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionA!.id, 10_000);
+    await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesionB!.id, 10_000); // jamais réglé (PENDING)
+    await tontineOperationsService.recordReception('T-001', beneficiaryA!.id, 4_000); // PARTIAL seulement
+    const closed = await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);
+    expect(closed).toBeNull();
   });
 
   it('RELIQUAT — traçabilité complète : un solde collecté non intégralement distribué crée un TontineRemainder OPEN avec tontine/tour/date/origine/statut', async () => {
@@ -1319,6 +1362,7 @@ describe('tontineOperationsService — Action « Régler » : recordReception jo
     const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
+    await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000); // Condition 1 de clôture (mandat « renforcement clôture », 2026-09-24)
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 10_000);
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 10_000);
     await tontineOperationsService.closeOccurrence('T-001', occurrence!.id);

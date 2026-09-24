@@ -16,8 +16,17 @@ import { FiscalYearProvider } from '@/contexts/fiscal-year-context';
  * pour les composants qui dépendent de `react-router-dom` (TenantBreadcrumb,
  * FiscalYearSelector, PlatformScopeGuard).
  */
-export function renderWithProviders(ui: ReactElement, { route = '/' }: { route?: string } = {}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+/**
+ * `staleTime` (optionnel, défaut 0) — la plupart des tests veulent voir un
+ * refetch immédiat au remount (données toujours « stale »), mais certains
+ * doivent reproduire le `staleTime: 30_000` réel de `src/app/providers.tsx`
+ * pour vérifier qu'une invalidation explicite (`invalidateKeys`) est bien
+ * nécessaire — sans ce réglage, une donnée fraîchement mise en cache par un
+ * précédent montage ne serait PAS rafraîchie au remount suivant, masquant un
+ * bug de cache qui ne se manifeste qu'en production.
+ */
+export function renderWithProviders(ui: ReactElement, { route = '/', staleTime = 0 }: { route?: string; staleTime?: number } = {}) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime }, mutations: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>

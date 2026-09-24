@@ -35,7 +35,7 @@ import type { Guarantor } from '@/mocks/finance/guarantors';
 import { TRANSACTION_CATEGORIES, AUTRES_SUBCATEGORIES, DEFAULT_DIRECTION, categoryLabelKey, subcategoryLabelKey, subcategoriesFor, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import type { LoanRule, LoanRuleApprovalLevel, LoanRuleGuaranteeType, LoanRuleInterestPeriod, LoanRuleInterestType, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { TableColumn } from '@/types/ui';
-import { formatNumber } from '@/lib/utils';
+import { formatDate, formatNumber } from '@/lib/utils';
 import { formatCurrency } from '@/constants/currencies';
 import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 
@@ -809,7 +809,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode, accountLocked = f
         {isDistribution && <div className="space-y-2"><Label htmlFor="tx-distribution">{t('finance', 'distributionConcerned')}</Label>
           <select id="tx-distribution" value={form.distributionId} onChange={(event) => setForm({ distributionId: event.target.value })} className={selectClass}>
             <option value="">—</option>
-            {distributions.map((distribution) => <option key={distribution.id} value={distribution.id}>{distribution.id} · {distribution.beneficiary}</option>)}
+            {distributions.map((distribution) => <option key={distribution.id} value={distribution.id}>{distribution.beneficiary} · {formatDate(distribution.date)}</option>)}
           </select>
         </div>}
         <div className="space-y-2 sm:col-span-2"><Label htmlFor="tx-comment">{t('finance', 'comment')}</Label><Textarea id="tx-comment" value={form.description} onChange={(event) => setForm({ description: event.target.value })} /></div>
@@ -828,7 +828,7 @@ function TransactionFormBody({ t, form, setForm, errors, mode, accountLocked = f
     {isRepayment && memberDebt && <>
       <FormSection title={t('finance', 'repaymentSection')}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="tx-amount-to-repay">{t('finance', 'amountToRepay')}</Label><Input id="tx-amount-to-repay" value={formatCurrency(memberDebt.outstanding, currency)} readOnly disabled /><p className="text-[11px] text-muted-foreground">{t('finance', 'loanConcerned')}: {memberDebt.id}</p></div>
+          <div className="space-y-2"><Label htmlFor="tx-amount-to-repay">{t('finance', 'amountToRepay')}</Label><Input id="tx-amount-to-repay" value={formatCurrency(memberDebt.outstanding, currency)} readOnly disabled /><p className="text-[11px] text-muted-foreground">{t('finance', 'loanConcerned')}: {formatDate(memberDebt.disbursementDate)}</p></div>
           <div className="space-y-2"><Label htmlFor="tx-amount-paid">{t('finance', 'amountPaid')} *</Label><Input id="tx-amount-paid" type="number" inputMode="decimal" value={form.amount} onChange={(event) => setForm({ amount: event.target.value })} aria-invalid={Boolean(errors.amount)} /><FieldError message={errors.amount} /></div>
           <div className="space-y-2"><Label htmlFor="tx-debt-carryover">{t('finance', 'debtCarryover')}</Label><Input id="tx-debt-carryover" value={formatCurrency(Math.max(0, memberDebt.outstanding - paidAmount), currency)} readOnly disabled /></div>
           <div className="space-y-2"><Label>{t('finance', 'status')}</Label><div className="pt-1"><StatusBadge label={t('finance', paidAmount >= memberDebt.outstanding ? 'repaymentStatusSettled' : 'repaymentStatusPartial')} tone={paidAmount >= memberDebt.outstanding ? 'success' : 'warning'} /></div></div>
@@ -1348,8 +1348,7 @@ function ApplicationsList({ t }: { t: T }) {
   const { data: applications = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.credit.applications(currentTenant.id), queryFn: () => creditService.listApplications(currentTenant.id) });
   const filtered = applications.filter((application) => `${application.applicant} ${application.id}`.toLowerCase().includes(search.toLowerCase()));
   const columns: TableColumn<Application>[] = [
-    { key: 'id', header: t('finance', 'loanId'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/applications/${row.id}`)} className="font-mono text-xs font-semibold text-primary">{row.id}</button> },
-    { key: 'applicant', header: t('finance', 'applicant') },
+    { key: 'applicant', header: t('finance', 'applicant'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/applications/${row.id}`)} className="text-left font-semibold text-primary">{row.applicant}</button> },
     { key: 'requestedAmount', header: t('finance', 'requestedAmount'), render: (row) => <MoneyDisplay amount={row.requestedAmount} /> },
     { key: 'stage', header: t('finance', 'applicationStage'), render: (row) => <StatusBadge label={t('finance', row.stage)} tone={tone[row.stage]} /> },
     { key: 'submittedDate', header: t('finance', 'submittedDate'), render: (row) => <DateDisplay value={row.submittedDate} /> },
@@ -1584,8 +1583,7 @@ function LoansList({ t }: { t: T }) {
   const { data: loans = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.credit.loans(currentTenant.id), queryFn: () => creditService.listLoans(currentTenant.id) });
   const filtered = loans.filter((loan) => `${loan.borrower} ${loan.id}`.toLowerCase().includes(search.toLowerCase()));
   const columns: TableColumn<Loan>[] = [
-    { key: 'id', header: t('finance', 'loanId'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/loans/${row.id}`)} className="font-mono text-xs font-semibold text-primary">{row.id}</button> },
-    { key: 'borrower', header: t('finance', 'borrower') },
+    { key: 'borrower', header: t('finance', 'borrower'), render: (row) => <button type="button" onClick={() => navigate(`/finance/credit/loans/${row.id}`)} className="text-left font-semibold text-primary">{row.borrower}</button> },
     { key: 'principal', header: t('finance', 'principal'), render: (row) => <MoneyDisplay amount={row.principal} /> },
     { key: 'outstanding', header: t('finance', 'outstanding'), render: (row) => <MoneyDisplay amount={row.outstanding} /> },
     { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },

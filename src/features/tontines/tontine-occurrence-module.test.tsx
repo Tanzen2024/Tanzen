@@ -6,6 +6,7 @@ import { renderWithProviders } from '@/test/render-with-providers';
 import { TontinesModule } from './tontines-module';
 import { tontinesService } from '@/services/tontines.service';
 import { tontineOperationsService } from '@/services/tontine-operations.service';
+import { formatTourDate } from '@/lib/utils';
 
 /**
  * Espace de travail du Tour (mandat refonte « Tours ») — chaque test
@@ -1162,7 +1163,7 @@ describe('Espace de travail du Tour — Routing/chargement (anti-flash 404)', ()
   });
 });
 
-describe('Espace de travail du Tour — Navigation contextuelle (« Retour aux Tours » + onglets Vue générale/Adhérents/Tours)', () => {
+describe('Espace de travail du Tour — Navigation contextuelle (« Retour aux Tours » + onglets Adhérents/Tours)', () => {
   it('affiche le bouton « Retour aux Tours » et le clic ramène à la liste des Tours de la MÊME Tontine', async () => {
     const user = userEvent.setup();
     const { tontineId, occurrenceId } = await setupWithPurchaseTour();
@@ -1173,23 +1174,13 @@ describe('Espace de travail du Tour — Navigation contextuelle (« Retour aux T
     expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontineId}/tours`);
   });
 
-  it('affiche les trois onglets Vue générale/Adhérents/Tours, avec « Tours » visuellement actif sur la page de détail du Tour', async () => {
+  it('affiche les deux onglets Adhérents/Tours (« Vue générale » a été supprimée), avec « Tours » visuellement actif sur la page de détail du Tour', async () => {
     const { tontineId, occurrenceId } = await setupWithPurchaseTour();
     renderOccurrence(tontineId, occurrenceId);
     await screen.findByText('Fatou Ndiaye');
-    expect(screen.getByRole('tab', { name: 'Vue générale' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Vue générale' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Adhérents' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Tours', selected: true })).toBeInTheDocument();
-  });
-
-  it('cliquer sur l’onglet « Vue générale » depuis le Tour navigue vers l’onglet Vue générale de la MÊME Tontine', async () => {
-    const user = userEvent.setup();
-    const { tontineId, occurrenceId } = await setupWithPurchaseTour();
-    renderOccurrenceWithLocationProbe(tontineId, occurrenceId);
-    await screen.findByText('Fatou Ndiaye');
-    await user.click(screen.getByRole('tab', { name: 'Vue générale' }));
-    await screen.findByRole('tab', { name: 'Vue générale', selected: true });
-    expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontineId}/overview`);
   });
 
   it('cliquer sur l’onglet « Adhérents » depuis le Tour navigue vers l’onglet Adhérents de la MÊME Tontine', async () => {
@@ -1242,9 +1233,11 @@ describe('Espace de travail du Tour — Synthèse et Tour clôturé', () => {
   it('mandat « le reliquat appartient au contexte du Tour » — reste identifiable, traçable et actionnable (Affecter/Abandonner) directement dans la Synthèse du Tour, plus aucun onglet Reliquats séparé', async () => {
     const user = userEvent.setup();
     const { tontineId, occurrenceId } = await setupWithPurchaseTour({ contributionAmount: 25_000 });
-    // Cagnotte sous-distribuée : 25 000 collectés, 15 000 distribués → reliquat 10 000 à la clôture.
-    await tontineOperationsService.recordContribution('T-001', occurrenceId, (await tontineOperationsService.listContributionStatuses('T-001', occurrenceId))[0].adhesionId, 25_000);
-    const adhesionId = (await tontineOperationsService.listContributionStatuses('T-001', occurrenceId))[0].adhesionId;
+    // Condition 1 de clôture (mandat « renforcement clôture », 2026-09-24) : TOUTES les participations éligibles doivent avoir cotisé — `setupWithPurchaseTour` en crée deux (Fatou/Cheikh), les deux doivent régler ici, jamais une seule.
+    const contributionStatuses = await tontineOperationsService.listContributionStatuses('T-001', occurrenceId);
+    for (const status of contributionStatuses) await tontineOperationsService.recordContribution('T-001', occurrenceId, status.adhesionId, 25_000);
+    // Cagnotte sous-distribuée : 2 × 25 000 = 50 000 collectés, 15 000 distribués → reliquat 35 000 à la clôture.
+    const adhesionId = contributionStatuses[0].adhesionId;
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrenceId, adhesionId, 15_000);
     expect(beneficiary).toBeTruthy();
     const reception = await tontineOperationsService.recordReception('T-001', beneficiary!.id, 15_000);
@@ -1253,12 +1246,62 @@ describe('Espace de travail du Tour — Synthèse et Tour clôturé', () => {
     expect(closed).toBeTruthy();
     const remaindersCheck = await tontineOperationsService.listRemainders('T-001', tontineId);
     expect(remaindersCheck.length).toBe(1);
-    expect(remaindersCheck[0].amount).toBe(10_000);
+    expect(remaindersCheck[0].amount).toBe(35_000);
 
     renderOccurrence(tontineId, occurrenceId);
     await screen.findByText('Synthèse');
     const remainderRow = (await screen.findByText('Ouvert')).closest('div')!;
     await user.click(within(remainderRow).getByRole('button', { name: 'Affecter' }));
     expect(await within(remainderRow).findByText('Affecté')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Chaque cycle possède son propre historique de bénéficiaires (mandat
+ * « historique par cycle », 2026-09-24) : l'historique du cycle PRÉCÉDENT ne
+ * doit jamais verrouiller les participations du nouveau cycle démarré via
+ * « Démarrer un nouveau cycle ». Cause racine identifiée : le service
+ * (`listCycleBeneficiaryAdhesionIds`, déjà scopé sur `getCurrentCycle`) était
+ * déjà correct, mais la mutation `startNewCycle` côté UI n'invalidait pas le
+ * cache React Query `cycleBeneficiaries`/`cycleBeneficiaryOrder` — une
+ * participation déjà bénéficiaire du cycle 1, vue une première fois (mettant
+ * la requête en cache), restait donc affichée comme « historique » au Tour 1
+ * du cycle 2 jusqu'au prochain refetch naturel (masqué en test par le
+ * `staleTime: 0` par défaut, d'où `staleTime: 30_000` explicite ci-dessous,
+ * identique à la production).
+ */
+describe('Cotisations — l’historique ne traverse jamais un changement de cycle', () => {
+  function renderTontines(route: string) {
+    return renderWithProviders(<Routes><Route path="/tontines/*" element={<TontinesModule />} /></Routes>, { route, staleTime: 30_000 });
+  }
+
+  it('BUG — après « Démarrer un nouveau cycle », une participation ayant déjà bénéficié dans le cycle PRÉCÉDENT redevient immédiatement disponible au Tour 1 du nouveau cycle, jamais verrouillée « historique »', async () => {
+    const user = userEvent.setup();
+    const tontine = await tontinesService.createTontine({
+      tenantId: 'T-001', name: `Test Historique Nouveau Cycle ${Date.now()}`, valueType: 'MONEY',
+      contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: true,
+    } as never);
+    const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01'); // Fatou Ndiaye
+    const occurrence1 = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
+    const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence1!.id, adhesion!.id, 5_000);
+    await tontineOperationsService.recordReception('T-001', beneficiary!.id, 5_000); // « bénéficié » = réglé → cycle 1 complet
+
+    renderTontines(`/tontines/${tontine!.id}/occurrences/${occurrence1!.id}`);
+    // Vue du Tour 1 : met en cache la requête `cycleBeneficiaries` du cycle 1 (contient Fatou).
+    await screen.findByText('Cotisations des adhérents (1)');
+
+    await user.click(await screen.findByRole('button', { name: /Retour aux Tours/ }));
+    await user.click(await screen.findByRole('button', { name: /Démarrer un nouveau cycle/ }));
+    await user.click(await screen.findByRole('button', { name: 'Démarrer le nouveau cycle' }));
+    await user.type(await screen.findByLabelText(/Date du tour/), '2026-03-01');
+    await user.click(screen.getByRole('button', { name: /Ajouter un tour/ }));
+
+    // Ouvre le Tour 1 du CYCLE 2 (même tenant/tontine, requête `cycleBeneficiaries` partageant la même clé de cache que celle mise en cache plus haut).
+    await user.click(await screen.findByText(formatTourDate('2026-03-01')));
+    await screen.findByText('Cotisations des adhérents (1)');
+    const table = (await screen.findAllByRole('table'))[0];
+    const fatouRow = within(table).getByText('Fatou Ndiaye').closest('tr')!;
+    expect(within(fatouRow).queryByLabelText('Déjà bénéficiaire d’un tour précédent')).not.toBeInTheDocument();
+    expect(within(fatouRow).getByRole('checkbox')).toBeInTheDocument(); // de nouveau sélectionnable, jamais verrouillée par l'historique du cycle 1
   });
 });

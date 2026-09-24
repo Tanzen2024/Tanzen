@@ -70,7 +70,7 @@ function UsersList({ t }: { t: T }) {
   );
 
   const columns: TableColumn<SystemUser>[] = [
-    { key: 'name', header: t('access', 'name'), render: (row) => <button type="button" onClick={() => navigate(`/access-security/users/${row.id}`)} className="flex items-center gap-3 text-left"><Avatar name={row.name} /><span><span className="block font-semibold">{row.name}</span><span className="block text-xs text-muted-foreground">{row.id}</span></span></button> },
+    { key: 'name', header: t('access', 'name'), render: (row) => <button type="button" onClick={() => navigate(`/access-security/users/${row.id}`)} className="flex items-center gap-3 text-left"><Avatar name={row.name} /><span className="font-semibold">{row.name}</span></button> },
     { key: 'email', header: t('access', 'email'), render: (row) => <span className="text-sm text-muted-foreground">{row.email}</span> },
     { key: 'tenant', header: t('access', 'tenant'), render: (row) => row.tenantName },
     { key: 'status', header: t('access', 'status'), render: (row) => <StatusBadge label={t('access', userStatusKey(row.isActive))} tone={userStatusTone(row.isActive)} /> },
@@ -284,7 +284,7 @@ function UserDetail({ t }: { t: T }) {
   if (!user) return <NotFoundPage />;
   const isInactive = !user.isActive;
   const nextIsActive = isInactive;
-  return <Page title={user.name} description={`${user.id} · ${user.tenantName}`} actions={<><Back label={t('access', 'backToUsers')} /><PermissionGate permission="users.update"><Button variant="outline" onClick={() => navigate(`/access-security/users/${user.id}/edit`)}><Edit3 size={15} />{t('access', 'editUser')}</Button><Button variant="outline" onClick={() => setConfirmStatus(true)}>{isInactive ? <ShieldCheck size={15} /> : <ShieldOff size={15} />}{t('access', isInactive ? 'reactivateUser' : 'deactivateUser')}</Button></PermissionGate></>}>
+  return <Page title={user.name} description={user.tenantName} actions={<><Back label={t('access', 'backToUsers')} /><PermissionGate permission="users.update"><Button variant="outline" onClick={() => navigate(`/access-security/users/${user.id}/edit`)}><Edit3 size={15} />{t('access', 'editUser')}</Button><Button variant="outline" onClick={() => setConfirmStatus(true)}>{isInactive ? <ShieldCheck size={15} /> : <ShieldOff size={15} />}{t('access', isInactive ? 'reactivateUser' : 'deactivateUser')}</Button></PermissionGate></>}>
     {confirmStatus && <ConfirmDialog open title={t('access', isInactive ? 'reactivateUser' : 'deactivateUser')} description={t('access', isInactive ? 'reactivateUserConfirm' : 'deactivateUserConfirm')} confirmLabel={t('access', isInactive ? 'reactivateUser' : 'deactivateUser')} cancelLabel={t('access', 'cancel')} onConfirm={() => statusMutation.mutate(nextIsActive)} onCancel={() => setConfirmStatus(false)} />}
     <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
       <Card className="h-fit"><CardContent className="flex flex-col items-center p-6 text-center">
