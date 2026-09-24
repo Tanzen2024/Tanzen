@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, ArrowLeft as ArrowLeftIcon, CalendarDays, CheckCircle2, Download, HandCoins, Lock, MoreVertical, ShoppingCart, Trash2, UsersRound, Wallet } from 'lucide-react';
+import { ArrowRight, CalendarDays, CheckCircle2, Download, HandCoins, Lock, MoreVertical, ShoppingCart, Trash2, UsersRound, Wallet } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DataTable, StatusBadge, EmptyState, MoneyDisplay, PermissionGate, DetailSkeleton, ErrorState, MemberAvatar, FilterBar, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
@@ -22,7 +22,7 @@ import { notify } from '@/lib/notify';
 import { members } from '@/mocks/organization/members';
 import type { TableColumn } from '@/types/ui';
 import { formatDate, formatTourDate } from '@/lib/utils';
-import type { T } from './tontines-module';
+import { Back, type T } from './tontines-module';
 
 /**
  * Espace de travail d'un Tour (mandat refonte visuelle « Tours ») —
@@ -489,11 +489,9 @@ export function OccurrenceDetail({ t }: { t: T }) {
       `onValueChange` seul ne se déclenche jamais pour une valeur inchangée).
     */}
     <div>
-      {/* Même alignement que « Retour aux tontines » (`Back`, `PageHeader`) — à droite du conteneur principal, jamais à gauche (mandat « alignement du lien Retour aux Tours », 2026-09-24). */}
+      {/* Même présentation EXACTE que « Retour aux tontines » (composant `Back`, réutilisé tel quel — jamais un style recréé en parallèle) : à droite du conteneur principal, jamais à gauche (mandat « alignement du lien Retour aux Tours », 2026-09-24). */}
       <div className="mb-2 flex justify-end">
-        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => navigate(`/tontines/${tontineId}/tours`)}>
-          <ArrowLeftIcon size={14} />{t('tontines', 'backToOccurrences')}
-        </Button>
+        <Back label={t('tontines', 'backToOccurrences')} to={`/tontines/${tontineId}/tours`} />
       </div>
       <Tabs value="tours">
         <TabsList className="flex h-auto w-fit flex-wrap justify-start gap-1 bg-muted/60 p-1">
