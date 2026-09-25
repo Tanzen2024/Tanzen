@@ -9,10 +9,10 @@ import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import { settingsService, type CreateFiscalYearInput } from '@/services/settings.service';
 import { queryKeys } from '@/services/query-keys';
-import { suggestNextFiscalYear, type FiscalYear } from '@/mocks/settings/fiscal-years';
-import { isValidMeetingScheduleConfig, type MeetingScheduleConfig } from '@/mocks/settings/meeting-schedule';
+import { suggestNextFiscalYear, fiscalYearLabel, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { isValidSessionScheduleConfig, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
 import { fiscalYearTransferCategories, type TransferabilityDecision } from '@/mocks/settings/fiscal-year-transfer-categories';
-import { MeetingScheduleFields } from './meeting-schedule-fields';
+import { SessionScheduleFields } from './session-schedule-fields';
 import type { StatusTone } from '@/types/ui';
 
 const TRANSFERABILITY_TONE: Record<TransferabilityDecision, StatusTone> = { TRANSFERABLE: 'success', NOT_TRANSFERABLE: 'default', PARTIAL: 'info', UNDETERMINED: 'warning' };
@@ -26,8 +26,11 @@ const TRANSFERABILITY_KEY: Record<TransferabilityDecision, string> = { TRANSFERA
  * même `settingsService.createFiscalYear`, mêmes catégories de transfert,
  * même calendrier de réunions optionnel, mêmes clés i18n.
  *
- * Préremplit `label`/`startDate`/`endDate` via `suggestNextFiscalYear` — champs
- * restant modifiables, comme avant l'ajout de cette suggestion.
+ * Préremplit `startDate`/`endDate` via `suggestNextFiscalYear` — champs
+ * restant modifiables, comme avant l'ajout de cette suggestion. Le libellé
+ * n'est jamais saisi : `fiscalYearLabel(form)` l'affiche en aperçu, recalculé
+ * à chaque changement de date (§5/§6 du mandat « reconstruction Exercices
+ * fiscaux / Séances »).
  */
 export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: { open: boolean; onOpenChange: (open: boolean) => void; tenantId: string; years: FiscalYear[] }) {
   const { t, locale } = useLocale();
@@ -36,7 +39,7 @@ export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: 
   const [form, setForm] = useState(() => suggestNextFiscalYear(years));
   const [error, setError] = useState<string | undefined>();
   const [transferSelections, setTransferSelections] = useState<Set<string>>(new Set());
-  const [meetingSchedule, setMeetingSchedule] = useState<Partial<MeetingScheduleConfig>>({});
+  const [sessionSchedule, setSessionSchedule] = useState<Partial<SessionScheduleConfig>>({});
 
   // Réinitialise l'assistant à chaque ouverture — pas seulement au montage — pour
   // toujours repartir d'une suggestion fraîche (le tenant/la liste peuvent avoir changé).
@@ -46,7 +49,7 @@ export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: 
     setForm(suggestNextFiscalYear(years));
     setError(undefined);
     setTransferSelections(new Set());
-    setMeetingSchedule({});
+    setSessionSchedule({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -61,13 +64,14 @@ export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: 
     invalidateKeys: [queryKeys.settings.fiscalYears(tenantId)],
     onSuccess: (year) => {
       if (!year) { setError(t('settings', 'fiscalYearInvalid')); setStep(1); return; }
-      notify.success(t('settings', 'fiscalYearCreated', { label: year.label }));
+      notify.success(t('settings', 'fiscalYearCreated', { label: fiscalYearLabel(year) }));
       onOpenChange(false);
     },
   });
 
+  const previewLabel = form.startDate && form.endDate ? fiscalYearLabel(form) : '';
   const handleContinueToTransferStep = () => {
-    if (!form.label.trim() || !form.startDate || !form.endDate) { setError(t('settings', 'fieldRequired')); return; }
+    if (!form.startDate || !form.endDate) { setError(t('settings', 'fieldRequired')); return; }
     if (new Date(form.endDate) <= new Date(form.startDate)) { setError(t('settings', 'fiscalYearInvalidPeriod')); return; }
     setError(undefined);
     setStep(2);
@@ -77,7 +81,7 @@ export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: 
     createMutation.mutate({
       ...form,
       transferSelections: Array.from(transferSelections),
-      meetingSchedule: isValidMeetingScheduleConfig(meetingSchedule) ? meetingSchedule : undefined,
+      sessionSchedule: isValidSessionScheduleConfig(sessionSchedule) ? sessionSchedule : undefined,
     });
   };
 
@@ -86,21 +90,21 @@ export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: 
   return <>
     {step === 1 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep1Title')} description={t('settings', 'createFiscalYearDescription')} confirmLabel={t('settings', 'continueAction')} cancelLabel={t('settings', 'cancel')} onConfirm={handleContinueToTransferStep} onCancel={() => onOpenChange(false)}>
       <div className="mt-4 max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-left">
-        {current && <p className="text-xs text-muted-foreground">{t('settings', 'previousFiscalYear', { label: current.label })}</p>}
-        <div className="space-y-1"><Label htmlFor="fy-create-label">{t('settings', 'fiscalYear')}</Label><Input id="fy-create-label" value={form.label} onChange={(event) => setForm((value) => ({ ...value, label: event.target.value }))} aria-invalid={Boolean(error)} /></div>
+        {current && <p className="text-xs text-muted-foreground">{t('settings', 'previousFiscalYear', { label: fiscalYearLabel(current) })}</p>}
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1"><Label htmlFor="fy-create-start">{t('settings', 'startDate')}</Label><Input id="fy-create-start" type="date" value={form.startDate} onChange={(event) => setForm((value) => ({ ...value, startDate: event.target.value }))} aria-invalid={Boolean(error)} /></div>
           <div className="space-y-1"><Label htmlFor="fy-create-end">{t('settings', 'endDate')}</Label><Input id="fy-create-end" type="date" value={form.endDate} onChange={(event) => setForm((value) => ({ ...value, endDate: event.target.value }))} aria-invalid={Boolean(error)} /></div>
         </div>
+        {previewLabel && <p data-testid="fy-create-preview" className="text-sm font-medium text-foreground">{previewLabel}</p>}
         <FieldError message={error} />
         <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
-          <p className="text-sm font-medium">{t('settings', 'meetingScheduleOptional')}</p>
-          <p className="text-[11px] text-muted-foreground">{t('settings', 'meetingScheduleCreateHint')}</p>
-          <MeetingScheduleFields locale={locale} value={meetingSchedule} onChange={setMeetingSchedule} idPrefix="fy-create-meeting" />
+          <p className="text-sm font-medium">{t('settings', 'sessionScheduleOptional')}</p>
+          <p className="text-[11px] text-muted-foreground">{t('settings', 'sessionScheduleCreateHint')}</p>
+          <SessionScheduleFields locale={locale} value={sessionSchedule} onChange={setSessionSchedule} idPrefix="fy-create-session" />
         </div>
       </div>
     </ConfirmDialog>}
-    {step === 2 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep2Title')} description={t('settings', 'transferStepDescription', { source: current?.label ?? '—', target: form.label })} confirmLabel={createMutation.isPending ? t('settings', 'saving') : t('settings', 'createFiscalYearAction')} confirmDisabled={createMutation.isPending} cancelLabel={t('settings', 'back')} onConfirm={handleCreate} onCancel={() => setStep(1)}>
+    {step === 2 && <ConfirmDialog open title={t('settings', 'createFiscalYearStep2Title')} description={t('settings', 'transferStepDescription', { source: current ? fiscalYearLabel(current) : '—', target: previewLabel })} confirmLabel={createMutation.isPending ? t('settings', 'saving') : t('settings', 'createFiscalYearAction')} confirmDisabled={createMutation.isPending} cancelLabel={t('settings', 'back')} onConfirm={handleCreate} onCancel={() => setStep(1)}>
       <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto pr-1 text-left">
         {fiscalYearTransferCategories.map((category) => {
           const checked = transferSelections.has(category.id);

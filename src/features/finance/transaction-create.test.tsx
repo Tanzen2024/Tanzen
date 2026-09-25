@@ -59,7 +59,7 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     const table = await screen.findByRole('table');
     expect(screen.getByRole('button', { name: /Ajouter une transaction/i })).toBeInTheDocument();
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
-    expect(headers).toEqual(['Date réunion', 'Date transaction', 'Adhérent', 'Catégorie', 'Débit', 'Crédit', 'Commentaire']);
+    expect(headers).toEqual(['Séance', 'Date transaction', 'Adhérent', 'Catégorie', 'Débit', 'Crédit', 'Commentaire']);
   });
 
   it('IMPORTANT : « Sous-catégorie » n’apparaît que pour Catégorie = AUTRES, est vidée quand on quitte AUTRES', async () => {

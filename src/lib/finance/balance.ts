@@ -1,14 +1,14 @@
-import { accountEntryEffect, accountLedgerEntries, type AccountRecord } from '@/mocks/finance/accounts';
-import { isMemberOfAccountAsOf } from '@/mocks/finance/account-memberships';
+import { cashboxEntryEffect, cashboxLedgerEntries, type CashboxRecord } from '@/mocks/finance/cashboxes';
+import { isMemberOfCashboxAsOf } from '@/mocks/finance/cashbox-memberships';
 import { latestFinalOpeningEntryAsOf } from '@/mocks/finance/opening-entries';
 import { referenceDate } from './reference-date';
-import { accountsOfAsOf, scopeKey } from './scope';
+import { cashboxesOfAsOf, scopeKey } from './scope';
 import type { BalanceLine, BalanceResult, BaselineResolution, FinanceCtx, FinancialScope } from './types';
 
 function isMemberScope(
   scope: FinancialScope,
-): scope is Extract<FinancialScope, { kind: 'MEMBER_ALL_ACCOUNTS' | 'MEMBER_ACCOUNT' }> {
-  return scope.kind === 'MEMBER_ALL_ACCOUNTS' || scope.kind === 'MEMBER_ACCOUNT';
+): scope is Extract<FinancialScope, { kind: 'MEMBER_ALL_CASHBOXES' | 'MEMBER_CASHBOX' }> {
+  return scope.kind === 'MEMBER_ALL_CASHBOXES' || scope.kind === 'MEMBER_CASHBOX';
 }
 
 /**
@@ -21,12 +21,12 @@ function isMemberScope(
  *     floorDate`) — sinon on compterait deux fois ce qui est déjà inclus dans
  *     l'`OpeningEntry`.
  *   - Sinon → comportement LEGACY strictement inchangé : `account.openingBalance`,
- *     réputé valable à toute date (comme `resolveAccount`), aucune borne basse.
+ *     réputé valable à toute date (comme `resolveCashbox`), aucune borne basse.
  *     C'est le cas de TOUTES les caisses seedées tant que `closeFiscalYear`/
  *     `carryForward` (`closing.ts`/`carry-forward.ts`) n'ont pas tourné pour
  *     elles — non-régression garantie pour les tests des étapes 1-5.
  */
-export function resolveBaseline(account: AccountRecord, ctx: FinanceCtx, asOfDate: string): BaselineResolution {
+export function resolveBaseline(account: CashboxRecord, ctx: FinanceCtx, asOfDate: string): BaselineResolution {
   const opening = latestFinalOpeningEntryAsOf(ctx.openingEntries ?? [], account.id, asOfDate);
   if (opening) {
     return { amount: opening.amount, floorDate: opening.date, openingEntryId: opening.id };
@@ -47,7 +47,7 @@ export function resolveBaseline(account: AccountRecord, ctx: FinanceCtx, asOfDat
  *         | scope membre ⇒ tx.memberId == memberId
  *                        ET adhésion à la caisse active le jour de tx
  *
- * `effet` = `accountEntryEffect` (déjà utilisé par `resolveAccount`) : +montant
+ * `effet` = `cashboxEntryEffect` (déjà utilisé par `resolveCashbox`) : +montant
  * si la caisse reçoit, −montant si elle émet, ±montant selon `type` pour une
  * écriture interne.
  *
@@ -55,7 +55,7 @@ export function resolveBaseline(account: AccountRecord, ctx: FinanceCtx, asOfDat
  * caisses / transactions / adhésions du tenant courant.
  */
 export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: string): BalanceResult {
-  const { accounts, outOfScope } = accountsOfAsOf(scope, ctx, asOfDate);
+  const { cashboxes: accounts, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
   const memberScope = isMemberScope(scope);
   const memberId = memberScope ? scope.memberId : undefined;
 
@@ -63,8 +63,8 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
     (tx) => tx.status === 'completed' && referenceDate(tx) <= asOfDate,
   );
 
-  const byAccount: BalanceLine[] = accounts.map((account) => {
-    let entries = accountLedgerEntries(account, upToDate);
+  const byCashbox: BalanceLine[] = accounts.map((account) => {
+    let entries = cashboxLedgerEntries(account, upToDate);
     let opening: number;
     if (memberId) {
       // Scope membre : uniquement SES écritures, et seulement sur les jours où
@@ -77,7 +77,7 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
       entries = entries.filter(
         (tx) =>
           tx.memberId === memberId &&
-          isMemberOfAccountAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
+          isMemberOfCashboxAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
       );
       opening = 0;
     } else {
@@ -91,15 +91,15 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
     let credits = 0;
     let debits = 0;
     for (const tx of entries) {
-      const effect = accountEntryEffect(account.accountNumber, tx);
+      const effect = cashboxEntryEffect(account.cashboxNumber, tx);
       if (effect >= 0) credits += effect;
       else debits += -effect;
     }
 
     const line: BalanceLine = {
-      accountId: account.id,
-      accountNumber: account.accountNumber,
-      accountTitle: account.title,
+      cashboxId: account.id,
+      cashboxNumber: account.cashboxNumber,
+      cashboxTitle: account.title,
       opening,
       credits,
       debits,
@@ -109,7 +109,7 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
       const active = ctx.memberships.find(
         (m) =>
           m.memberId === memberId &&
-          m.accountId === account.id &&
+          m.cashboxId === account.id &&
           m.startDate <= asOfDate &&
           (m.endDate === null || asOfDate <= m.endDate),
       );
@@ -121,8 +121,8 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
   return {
     scopeKey: scopeKey(scope),
     asOfDate,
-    total: byAccount.reduce((sum, line) => sum + line.balance, 0),
-    byAccount,
+    total: byCashbox.reduce((sum, line) => sum + line.balance, 0),
+    byCashbox,
     outOfScope,
   };
 }

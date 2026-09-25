@@ -1,7 +1,7 @@
 import { mockRequest } from './api-client';
 import { financialOverviewData, contributionsData, repaymentsData, tontineActivityData } from '@/mocks/dashboard';
 import { members } from '@/mocks/organization/members';
-import { accounts, resolveAccount } from '@/mocks/finance/accounts';
+import { cashboxes, resolveCashbox } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
 import { contributions } from '@/mocks/finance/contributions';
 import { applications } from '@/mocks/finance/applications';
@@ -41,7 +41,7 @@ const TX_TYPE_KEY: Record<string, string> = {
 
 function buildOverview(tenantId: string): DashboardOverview {
   const tenantMembers = members.filter((member) => member.tenantId === tenantId);
-  const tenantAccounts = accounts.filter((account) => account.tenantId === tenantId);
+  const tenantCashboxes = cashboxes.filter((account) => account.tenantId === tenantId);
   const tenantTransactions = transactions.filter((transaction) => transaction.tenantId === tenantId);
   const tenantContributions = contributions.filter((contribution) => contribution.tenantId === tenantId);
   const tenantApplications = applications.filter((application) => application.tenantId === tenantId);
@@ -54,7 +54,7 @@ function buildOverview(tenantId: string): DashboardOverview {
   const kpis: DashboardOverview['kpis'] = {
     members: kpi(tenantMembers.length),
     // Trésorerie = somme des soldes calculés (report d'ouverture + journal comptabilisé), même source que la fiche caisse.
-    treasury: kpi(tenantAccounts.reduce((sum, account) => sum + resolveAccount(account, tenantTransactions).balance, 0)),
+    treasury: kpi(tenantCashboxes.reduce((sum, account) => sum + resolveCashbox(account, tenantTransactions).balance, 0)),
     contributions: kpi(tenantContributions.filter((c) => c.status === 'completed').reduce((sum, c) => sum + c.amount, 0)),
     activeLoans: kpi(tenantLoans.filter((loan) => loan.status === 'active').length),
     repayments: kpi(tenantRepayments.filter((r) => r.status === 'completed').reduce((sum, r) => sum + r.amount, 0)),

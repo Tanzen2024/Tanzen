@@ -166,7 +166,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.credit.loans(currentTenant.id) });
       queryClient.invalidateQueries({ queryKey: ['finance', 'transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['finance', 'accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['finance', 'cashboxes'] });
     },
   });
   /** Mandat §9 « photos partout où l'identité du bénéficiaire est affichée, y compris en validation de permutation » — écran générique, donc lecture activée seulement pour ce domaine/entityType précis (même garde que `isFiscalYearReopen` ci-dessus). */

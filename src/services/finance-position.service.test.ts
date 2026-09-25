@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { financePositionService } from './finance-position.service';
 import { settingsService } from './settings.service';
-import { resolveAccount, accounts } from '@/mocks/finance/accounts';
+import { resolveCashbox, cashboxes } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
 
 /**
@@ -10,44 +10,44 @@ import { transactions } from '@/mocks/finance/transactions';
  * pas la logique de calcul (couverte par `src/lib/finance/*.test.ts`).
  */
 describe('financePositionService — câblage & isolation tenant', () => {
-  it('balanceAsOf(ACCOUNT) est cohérent avec resolveAccount pour une date lointaine', async () => {
-    const result = await financePositionService.balanceAsOf('T-001', { kind: 'ACCOUNT', accountId: 'AC-001' }, '2099-12-31');
-    const expected = resolveAccount(accounts.find((a) => a.id === 'AC-001')!, transactions).balance;
+  it('balanceAsOf(ACCOUNT) est cohérent avec resolveCashbox pour une date lointaine', async () => {
+    const result = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-001' }, '2099-12-31');
+    const expected = resolveCashbox(cashboxes.find((a) => a.id === 'AC-001')!, transactions).balance;
     expect(result.total).toBe(expected);
     expect(result.total).toBe(12_500_000);
   });
 
-  it('balanceAsOf(TENANT_ALL_ACCOUNTS) ne voit que les caisses du tenant demandé', async () => {
-    const t001 = await financePositionService.balanceAsOf('T-001', { kind: 'TENANT_ALL_ACCOUNTS' }, '2099-12-31');
-    const t002 = await financePositionService.balanceAsOf('T-002', { kind: 'TENANT_ALL_ACCOUNTS' }, '2099-12-31');
-    expect(t001.byAccount.every((l) => l.accountId.startsWith('AC-'))).toBe(true);
+  it('balanceAsOf(TENANT_ALL_CASHBOXES) ne voit que les caisses du tenant demandé', async () => {
+    const t001 = await financePositionService.balanceAsOf('T-001', { kind: 'TENANT_ALL_CASHBOXES' }, '2099-12-31');
+    const t002 = await financePositionService.balanceAsOf('T-002', { kind: 'TENANT_ALL_CASHBOXES' }, '2099-12-31');
+    expect(t001.byCashbox.every((l) => l.cashboxId.startsWith('AC-'))).toBe(true);
     // aucune caisse de T-002 dans le résultat T-001
-    const t002Ids = new Set(t002.byAccount.map((l) => l.accountId));
-    expect(t001.byAccount.some((l) => t002Ids.has(l.accountId))).toBe(false);
+    const t002Ids = new Set(t002.byCashbox.map((l) => l.cashboxId));
+    expect(t001.byCashbox.some((l) => t002Ids.has(l.cashboxId))).toBe(false);
   });
 
   it('un membre de T-001 interrogé sur le tenant T-002 → outOfScope (isolation)', async () => {
-    const result = await financePositionService.balanceAsOf('T-002', { kind: 'MEMBER_ACCOUNT', memberId: 'M-001', accountId: 'AC-004' }, '2099-12-31');
+    const result = await financePositionService.balanceAsOf('T-002', { kind: 'MEMBER_CASHBOX', memberId: 'M-001', cashboxId: 'AC-004' }, '2099-12-31');
     expect(result.outOfScope).toBe(true);
     expect(result.total).toBe(0);
   });
 
-  it('MEMBER_ALL_ACCOUNTS — périmètre = adhésions du membre à la date (seed Fatou)', async () => {
-    const jul = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_ACCOUNTS', memberId: 'M-001' }, '2026-07-31');
-    const aug = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_ACCOUNTS', memberId: 'M-001' }, '2026-08-05');
-    expect(jul.byAccount.map((l) => l.accountId).sort()).toEqual(['AC-001', 'AC-002']);
-    expect(aug.byAccount.map((l) => l.accountId).sort()).toEqual(['AC-001', 'AC-002', 'AC-011']);
+  it('MEMBER_ALL_CASHBOXES — périmètre = adhésions du membre à la date (seed Fatou)', async () => {
+    const jul = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-07-31');
+    const aug = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-08-05');
+    expect(jul.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-001', 'AC-002']);
+    expect(aug.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-001', 'AC-002', 'AC-011']);
   });
 
-  it('flows(TENANT_ALL_ACCOUNTS) 2026 — T-001 : 1 375 000 / 220 000 / 6', async () => {
-    const result = await financePositionService.flows('T-001', { kind: 'TENANT_ALL_ACCOUNTS' }, '2026-01-01', '2026-12-31');
+  it('flows(TENANT_ALL_CASHBOXES) 2026 — T-001 : 1 375 000 / 220 000 / 6', async () => {
+    const result = await financePositionService.flows('T-001', { kind: 'TENANT_ALL_CASHBOXES' }, '2026-01-01', '2026-12-31');
     expect(result.totalDebit).toBe(1_375_000);
     expect(result.totalCredit).toBe(220_000);
     expect(result.count).toBe(6);
   });
 
   it('flows d’un autre tenant n’inclut aucune transaction de T-001', async () => {
-    const t002 = await financePositionService.flows('T-002', { kind: 'TENANT_ALL_ACCOUNTS' }, '2026-01-01', '2026-12-31');
+    const t002 = await financePositionService.flows('T-002', { kind: 'TENANT_ALL_CASHBOXES' }, '2026-01-01', '2026-12-31');
     // T-002 seed : TR-003, TR-005, TR-013, TR-015 — jamais TR-001/TR-002...
     expect(t002.transactionIds.every((id) => !['TR-001', 'TR-002', 'TR-004', 'TR-006', 'TR-010', 'TR-012'].includes(id))).toBe(true);
   });
@@ -88,7 +88,7 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
     expect(result?.ok).toBe(false);
     if (result && !result.ok) {
       expect(result.reason).toBe('MISSING_CLOSING_ENTRIES');
-      expect(result.accountIds).toEqual(expect.arrayContaining(['AC-004', 'AC-005']));
+      expect(result.cashboxIds).toEqual(expect.arrayContaining(['AC-004', 'AC-005']));
     }
   });
 
@@ -96,8 +96,8 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
     const result = await financePositionService.closeFiscalYear('T-001', 'FY-T001-2026');
     expect(result?.ok).toBe(true);
     if (result?.ok) {
-      const t001AccountIds = accounts.filter((a) => a.tenantId === 'T-001').map((a) => a.id);
-      expect(result.entries.map((e) => e.accountId).sort()).toEqual(t001AccountIds.sort());
+      const t001AccountIds = cashboxes.filter((a) => a.tenantId === 'T-001').map((a) => a.id);
+      expect(result.entries.map((e) => e.cashboxId).sort()).toEqual(t001AccountIds.sort());
       expect(result.entries.every((e) => e.status === 'FINAL' && e.fiscalYearId === 'FY-T001-2026')).toBe(true);
       expect(result.entries.every((e) => e.tenantId === 'T-001')).toBe(true);
     }
@@ -120,14 +120,14 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
     const carried = await financePositionService.carryForward('T-001', 'FY-T001-2026', 'FY-T001-2027');
     expect(carried?.ok).toBe(true);
     if (carried?.ok) {
-      const opening2027 = carried.entries.find((e) => e.accountId === 'AC-001')!;
+      const opening2027 = carried.entries.find((e) => e.cashboxId === 'AC-001')!;
       expect(opening2027.origin).toBe('CARRY_FORWARD');
       expect(opening2027.date).toBe('2027-01-01');
     }
 
     // Aucune transaction seedée après 2026 → le total à '2099-12-31' doit rester EXACTEMENT
     // celui d'avant l'étape 6 (invariant non-régression), même si le mécanisme sous-jacent a changé.
-    const total2099 = await financePositionService.balanceAsOf('T-001', { kind: 'ACCOUNT', accountId: 'AC-001' }, '2099-12-31');
+    const total2099 = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-001' }, '2099-12-31');
     expect(total2099.total).toBe(12_500_000);
 
     const mismatches = await financePositionService.verifyCarryForwardIntegrity('T-001', 'FY-T001-2026', 'FY-T001-2027');
@@ -145,7 +145,7 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
     expect(t002?.ok).toBe(true);
     if (t002?.ok) {
       expect(t002.entries.every((e) => e.tenantId === 'T-002')).toBe(true);
-      expect(t002.entries.some((e) => e.accountId.startsWith('AC-001'))).toBe(false); // aucune caisse T-001
+      expect(t002.entries.some((e) => e.cashboxId.startsWith('AC-001'))).toBe(false); // aucune caisse T-001
     }
   });
 });
@@ -157,26 +157,26 @@ describe('financePositionService — recomputeClosingEntry (étape 6)', () => {
     expect(recomputed?.ok).toBe(true);
     if (recomputed?.ok) {
       expect(recomputed.entry.status).toBe('FINAL');
-      expect(recomputed.entry.accountId).toBe('AC-004');
+      expect(recomputed.entry.cashboxId).toBe('AC-004');
     }
   });
 
-  it('ACCOUNT_NOT_FOUND — caisse inexistante, ou d’un autre tenant (déjà exclue du ctx tenant-scopé par le service)', async () => {
+  it('CASHBOX_NOT_FOUND — caisse inexistante, ou d’un autre tenant (déjà exclue du ctx tenant-scopé par le service)', async () => {
     const notFound = await financePositionService.recomputeClosingEntry('T-002', 'FY-T002-2026', 'AC-NOPE', 'x');
-    expect(notFound).toEqual({ ok: false, reason: 'ACCOUNT_NOT_FOUND' });
+    expect(notFound).toEqual({ ok: false, reason: 'CASHBOX_NOT_FOUND' });
 
-    // AC-001 appartient à T-001 : ctxForTenant('T-002') ne le contient jamais, donc ACCOUNT_NOT_FOUND ici —
+    // AC-001 appartient à T-001 : ctxForTenant('T-002') ne le contient jamais, donc CASHBOX_NOT_FOUND ici —
     // FISCAL_YEAR_TENANT_MISMATCH n'est atteignable qu'au niveau du moteur pur (défense en profondeur,
     // cf. `closing.test.ts`), jamais via ce service déjà tenant-scopé par construction.
     const crossTenant = await financePositionService.recomputeClosingEntry('T-002', 'FY-T002-2026', 'AC-001', 'x');
-    expect(crossTenant).toEqual({ ok: false, reason: 'ACCOUNT_NOT_FOUND' });
+    expect(crossTenant).toEqual({ ok: false, reason: 'CASHBOX_NOT_FOUND' });
   });
 });
 
 describe('financePositionService — createInitialOpeningEntry (étape 6, origin INITIAL)', () => {
   it('crée une OpeningEntry INITIAL pour une caisse qui n’en a encore aucune', async () => {
     const entry = await financePositionService.createInitialOpeningEntry('T-003', 'AC-006', 'FY-T003-2026', 500_000);
-    expect(entry).toMatchObject({ tenantId: 'T-003', accountId: 'AC-006', fiscalYearId: 'FY-T003-2026', amount: 500_000, origin: 'INITIAL', status: 'FINAL', date: '2026-01-01' });
+    expect(entry).toMatchObject({ tenantId: 'T-003', cashboxId: 'AC-006', fiscalYearId: 'FY-T003-2026', amount: 500_000, origin: 'INITIAL', status: 'FINAL', date: '2026-01-01' });
   });
 
   it('refuse un doublon — jamais d’écrasement silencieux d’une OpeningEntry FINAL existante', async () => {
@@ -191,26 +191,26 @@ describe('financePositionService — createInitialOpeningEntry (étape 6, origin
 });
 
 describe('financePositionService — memberFinancialPosition / memberFinancialPositions (étape 7)', () => {
-  it('MEMBER_ALL_ACCOUNTS — Fatou (T-001) : savings + credit corrects, cohérent avec le moteur pur', async () => {
-    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_ACCOUNTS', memberId: 'M-001' }, '2026-08-31');
+  it('MEMBER_ALL_CASHBOXES — Fatou (T-001) : savings + credit corrects, cohérent avec le moteur pur', async () => {
+    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-08-31');
     expect(result.savings).toBe(100_000);
     expect(result.credit).toEqual({ loansReceived: 850_000, repayments: 158_667, outstanding: 793_333, loanCount: 1 });
   });
 
-  it('MEMBER_ACCOUNT — pas de credit/distributions exposés', async () => {
-    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ACCOUNT', memberId: 'M-001', accountId: 'AC-002' }, '2026-08-31');
+  it('MEMBER_CASHBOX — pas de credit/distributions exposés', async () => {
+    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_CASHBOX', memberId: 'M-001', cashboxId: 'AC-002' }, '2026-08-31');
     expect(result.credit).toBeUndefined();
     expect(result.distributions).toBeUndefined();
   });
 
   it('isolation tenant — un membre de T-001 interrogé sous T-002 ne voit ni caisse ni prêt', async () => {
-    const result = await financePositionService.memberFinancialPosition('T-002', { kind: 'MEMBER_ALL_ACCOUNTS', memberId: 'M-001' }, '2026-08-31');
+    const result = await financePositionService.memberFinancialPosition('T-002', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-08-31');
     expect(result.outOfScope).toBe(true);
     expect(result.credit).toEqual({ loansReceived: 0, repayments: 0, outstanding: 0, loanCount: 0 });
   });
 
   it('POINT CRITIQUE (câblage service) — Cheikh (T-001) : Loan L-004 sans Transaction PRET, loansReceived/outstanding corrects', async () => {
-    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_ACCOUNTS', memberId: 'M-006' }, '2026-08-31');
+    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, '2026-08-31');
     expect(result.credit).toEqual({ loansReceived: 2_100_000, repayments: 194_250, outstanding: 2_136_750, loanCount: 1 });
   });
 

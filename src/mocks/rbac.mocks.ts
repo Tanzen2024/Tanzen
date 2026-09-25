@@ -56,7 +56,7 @@ export const permissionCatalog: Permission[] = [
   'governance.read', 'governance.create', 'governance.approve', 'governance.update', 'governance.delete',
   /** `boardPositions.manage` (mandat « Fonctions / mandats ») — gère le RÉFÉRENTIEL de fonctions (créer/modifier/activer/désactiver), distincte de `governance.create` qui reste la permission pour attribuer un MANDAT (choisir une fonction existante). Un utilisateur avec seulement `governance.create` peut ajouter un mandat mais pas créer de nouvelle fonction. */
   'boardPositions.manage',
-  'accounts.read', 'accounts.create', 'accounts.update', 'accounts.delete', 'accounts.manage',
+  'cashboxes.read', 'cashboxes.create', 'cashboxes.update', 'cashboxes.delete', 'cashboxes.manage',
   'transactions.read', 'transactions.export', 'transactions.create', 'transactions.update', 'transactions.cancel',
   'contributions.read',
   'distributions.read', 'distributions.create', 'distributions.approve',

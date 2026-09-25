@@ -3,14 +3,13 @@
  * tenant, consommé par tous les modules (Finance, Tontines, Audit...) —
  * pas un exercice fiscal par module.
  */
-import type { MeetingScheduleConfig } from './meeting-schedule';
+import type { SessionScheduleConfig } from './session-schedule';
 
 export type FiscalYearStatus = 'open' | 'closed' | 'upcoming';
 
 export type FiscalYear = {
   id: string;
   tenantId: string;
-  label: string;
   startDate: string;
   endDate: string;
   status: FiscalYearStatus;
@@ -44,36 +43,49 @@ export type FiscalYear = {
   closedAt: string | null;
   closedBy: string | null;
   /**
-   * Configuration de récurrence des RÉUNIONS de l'exercice (mandat « RÈGLE
-   * CENTRALE — DATES DE RÉUNION »). Quand elle est renseignée, ses occurrences
-   * générées (`meetingService` + `generateMeetingDates`) sont la SOURCE DE
-   * VÉRITÉ de tous les champs « Date de réunion » de l'application, isolées par
-   * exercice et par tenant. `undefined` = aucun calendrier configuré : les
-   * formulaires exigeant une réunion affichent un état explicite et se bloquent
-   * (jamais de date inventée). Modifiable tant que l'exercice n'est pas `closed`.
+   * Configuration de récurrence des SÉANCES de l'exercice — sert UNIQUEMENT à
+   * pré-remplir la suggestion de prochaine séance (`suggestNextSessionDate`),
+   * jamais à générer un calendrier en masse (cf. `session-schedule.ts`).
+   * `undefined` = aucune fréquence configurée : le formulaire « Ajouter une
+   * séance » n'a alors aucune suggestion (l'utilisateur saisit la date
+   * librement, dans la période de l'exercice). Modifiable tant que l'exercice
+   * n'est pas `closed`.
    */
-  meetingSchedule?: MeetingScheduleConfig;
+  sessionSchedule?: SessionScheduleConfig;
 };
 
 export const fiscalYears: FiscalYear[] = [
-  { id: 'FY-T001-2024', tenantId: 'T-001', label: 'Exercice 2024', startDate: '2024-01-01', endDate: '2024-12-31', status: 'closed', isCurrent: false, createdAt: '2024-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T001-2025', tenantId: 'T-001', label: 'Exercice 2025', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  // Calendrier de réunions seedé = « deuxième mardi de chaque mois » (l'exemple du mandat) → 12 occurrences en 2026.
-  { id: 'FY-T001-2026', tenantId: 'T-001', label: 'Exercice 2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, meetingSchedule: { frequency: 'MONTHLY', rule: 'NTH_WEEKDAY', ordinal: 'SECOND', nthWeekday: 'TUESDAY' } },
-  { id: 'FY-T001-2027', tenantId: 'T-001', label: 'Exercice 2027', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T001-2024', tenantId: 'T-001', startDate: '2024-01-01', endDate: '2024-12-31', status: 'closed', isCurrent: false, createdAt: '2024-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T001-2025', tenantId: 'T-001', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  // Fréquence de séances seedée = « deuxième mardi de chaque mois » (l'exemple historique du mandat Meeting).
+  { id: 'FY-T001-2026', tenantId: 'T-001', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'NTH_WEEKDAY', ordinal: 'SECOND', nthWeekday: 'TUESDAY' } },
+  { id: 'FY-T001-2027', tenantId: 'T-001', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T002-2025', tenantId: 'T-002', label: 'Exercice 2025', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T002-2026', tenantId: 'T-002', label: 'Exercice 2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, meetingSchedule: { frequency: 'MONTHLY', rule: 'DAY_OF_MONTH', dayOfMonth: 5 } },
-  { id: 'FY-T002-2027', tenantId: 'T-002', label: 'Exercice 2027', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T002-2025', tenantId: 'T-002', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T002-2026', tenantId: 'T-002', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'DAY_OF_MONTH', dayOfMonth: 5 } },
+  { id: 'FY-T002-2027', tenantId: 'T-002', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T003-2025', tenantId: 'T-003', label: 'Exercice 2025', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T003-2026', tenantId: 'T-003', label: 'Exercice 2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T003-2025', tenantId: 'T-003', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T003-2026', tenantId: 'T-003', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T004-2026', tenantId: 'T-004', label: 'Exercice 2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T004-2026', tenantId: 'T-004', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T005-2025', tenantId: 'T-005', label: 'Exercice 2025', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T005-2026', tenantId: 'T-005', label: 'Exercice 2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T005-2025', tenantId: 'T-005', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T005-2026', tenantId: 'T-005', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 ];
+
+/**
+ * Libellé de l'exercice — TOUJOURS calculé depuis les dates, jamais stocké
+ * (mandat « reconstruction Exercices fiscaux / Séances »). Même année →
+ * « Exercice YYYY » ; années différentes → « Exercice YYYY-YYYY ». Fonction
+ * centralisée, seule source de vérité — aucun composant ne doit recalculer
+ * cette règle lui-même.
+ */
+export function fiscalYearLabel(year: Pick<FiscalYear, 'startDate' | 'endDate'>): string {
+  const startYear = year.startDate.slice(0, 4);
+  const endYear = year.endDate.slice(0, 4);
+  return startYear === endYear ? `Exercice ${startYear}` : `Exercice ${startYear}-${endYear}`;
+}
 
 /** `YYYY-MM-DD` + N jours, sans dérive de fuseau (calcul en UTC). */
 function addDaysISO(dateISO: string, days: number): string {
@@ -94,8 +106,8 @@ function addYearsISO(dateISO: string, years: number): string {
  * d'un tenant (déjà filtrés par l'appelant, comme `listFiscalYears`/le
  * sélecteur de la barre supérieure le font). Aucune configuration de
  * fréquence/durée d'exercice n'existe aujourd'hui dans le modèle `FiscalYear`
- * (seul `meetingSchedule` a une fréquence, mais elle concerne les dates de
- * RÉUNION, pas la durée de l'exercice) — cette fonction dérive donc le
+ * (seul `sessionSchedule` a une fréquence, mais elle concerne les dates de
+ * SÉANCE, pas la durée de l'exercice) — cette fonction dérive donc le
  * prochain exercice du dernier exercice réel du tenant plutôt que de coder en
  * dur une convention (ex. 1er janvier) :
  * - date de début = lendemain de la date de fin du dernier exercice (aucun
@@ -105,19 +117,31 @@ function addYearsISO(dateISO: string, years: number): string {
  *   nombre d'années que la nouvelle date de début (reconduit la durée
  *   observée, gère aussi bien un exercice calendaire que juillet→juin).
  *
- * Ne propose rien (`label`/`startDate`/`endDate` vides, comme un formulaire
- * vierge) si le tenant n'a encore aucun exercice — aucune convention n'est
- * inventée pour ce cas, l'utilisateur saisit son premier exercice à la main
- * comme aujourd'hui.
+ * Ne propose rien (`startDate`/`endDate` vides, comme un formulaire vierge) si
+ * le tenant n'a encore aucun exercice — aucune convention n'est inventée pour
+ * ce cas, l'utilisateur saisit son premier exercice à la main comme
+ * aujourd'hui.
  */
-export function suggestNextFiscalYear(tenantYears: FiscalYear[]): { label: string; startDate: string; endDate: string } {
+export function suggestNextFiscalYear(tenantYears: FiscalYear[]): { startDate: string; endDate: string } {
   const last = [...tenantYears].sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
-  if (!last) return { label: '', startDate: '', endDate: '' };
+  if (!last) return { startDate: '', endDate: '' };
   const startDate = addDaysISO(last.endDate, 1);
   const yearShift = Number(startDate.slice(0, 4)) - Number(last.startDate.slice(0, 4));
   const endDate = addYearsISO(last.endDate, yearShift);
-  const startYear = startDate.slice(0, 4);
-  const endYear = endDate.slice(0, 4);
-  const label = startYear === endYear ? `Exercice ${startYear}` : `Exercice ${startYear}–${endYear}`;
-  return { label, startDate, endDate };
+  return { startDate, endDate };
+}
+
+/**
+ * Chevauchement de période entre deux exercices d'un même tenant (§23 du
+ * mandat « reconstruction Exercices fiscaux / Séances ») — deux périodes
+ * [a.startDate, a.endDate] et [b.startDate, b.endDate] se chevauchent ssi
+ * `a.startDate <= b.endDate && a.endDate >= b.startDate` (bornes incluses,
+ * cohérent avec la validation de séance qui accepte `date === startDate`/
+ * `date === endDate`). `excludeYearId` exclut l'exercice en cours de
+ * modification (prorogation `extendFiscalYearEndDate`).
+ */
+export function hasFiscalYearOverlap(existing: FiscalYear[], tenantId: string, startDate: string, endDate: string, excludeYearId?: string): boolean {
+  return existing.some(
+    (year) => year.tenantId === tenantId && year.id !== excludeYearId && startDate <= year.endDate && endDate >= year.startDate,
+  );
 }

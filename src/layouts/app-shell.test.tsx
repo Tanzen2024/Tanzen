@@ -40,7 +40,9 @@ describe('AppShell — un seul emplacement pour le tenant et l’exercice : le h
     const aside = container.querySelector('aside');
     expect(aside).toBeTruthy();
     expect(within(aside!).queryByText('Tenant actuel')).not.toBeInTheDocument();
-    expect(within(aside!).queryByText('Exercice', { exact: false })).not.toBeInTheDocument();
+    // Le nœud de navigation « Exercices fiscaux » (Finance → Exercices fiscaux) reste légitime dans le sidebar —
+    // seule la CARTE d'exercice courant (« Exercice 2026 », sélecteur du header) ne doit jamais s'y trouver.
+    expect(within(aside!).queryByText('Exercice 2026', { exact: false })).not.toBeInTheDocument();
     // Exactement une seule instance dans tout le DOM (le header) — pas une deuxième planquée ailleurs.
     expect(screen.getAllByText('Tenant actuel')).toHaveLength(1);
   });

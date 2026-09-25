@@ -1,43 +1,39 @@
 /**
- * Sélecteur de récurrence des RÉUNIONS d'un Exercice fiscal (mandat « RÈGLE
- * CENTRALE — DATES DE RÉUNION » §2/§3). Même parti-pris que `FrequencyFields`
- * (Tontine) : rendu strictement progressif — un champ dépendant n'apparaît
- * qu'une fois le précédent renseigné — et TOUTE la logique de transition
- * (« pas de valeur résiduelle ») vit dans les fonctions pures `applyMeeting*`
- * de `@/mocks/settings/meeting-schedule`, jamais dans ce composant.
- *
- * Ce composant ne réimplémente aucun moteur de récurrence : `meeting-schedule`
- * délègue à `generateOccurrenceDates` (moteur Tontine) pour DAILY/WEEKLY/
- * MONTHLY/QUARTERLY et n'étend que SEMIANNUAL/ANNUAL + « dernier jour de la
- * période ».
+ * Sélecteur de récurrence des SÉANCES d'un Exercice fiscal (reconstruction
+ * complète — remplace `meeting-schedule-fields.tsx`). Même parti-pris que
+ * `FrequencyFields` (Tontine) : rendu strictement progressif — un champ
+ * dépendant n'apparaît qu'une fois le précédent renseigné — et TOUTE la
+ * logique de transition (« pas de valeur résiduelle ») vit dans les fonctions
+ * pures `applySession*` de `@/mocks/settings/session-schedule`, jamais dans
+ * ce composant.
  */
 import {
-  MEETING_FREQUENCIES,
-  MEETING_RECURRENCE_RULES,
+  SESSION_FREQUENCIES,
+  SESSION_RECURRENCE_RULES,
   WEEKDAYS,
   ORDINALS,
   frequencyHasRule,
   frequencyHasAnchorMonth,
   anchorMonthCount,
-  isValidMeetingScheduleConfig,
-  formatMeetingScheduleDescription,
-  meetingFrequencyLabel,
-  meetingRuleLabel,
-  meetingWeekdayLabel,
-  meetingOrdinalLabel,
-  applyMeetingFrequency,
-  applyMeetingWeekday,
-  applyMeetingRule,
-  applyMeetingAnchorMonth,
-  applyMeetingDayOfMonth,
-  applyMeetingOrdinal,
-  applyMeetingNthWeekday,
-  type MeetingScheduleConfig,
-  type MeetingFrequency,
-  type MeetingRecurrenceRule,
+  isValidSessionScheduleConfig,
+  formatSessionScheduleDescription,
+  sessionFrequencyLabel,
+  sessionRuleLabel,
+  sessionWeekdayLabel,
+  sessionOrdinalLabel,
+  applySessionFrequency,
+  applySessionWeekday,
+  applySessionRule,
+  applySessionAnchorMonth,
+  applySessionDayOfMonth,
+  applySessionOrdinal,
+  applySessionNthWeekday,
+  type SessionScheduleConfig,
+  type SessionFrequency,
+  type SessionRecurrenceRule,
   type Weekday,
   type Ordinal,
-} from '@/mocks/settings/meeting-schedule';
+} from '@/mocks/settings/session-schedule';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 
@@ -45,7 +41,7 @@ const selectClass = 'flex h-9 w-full rounded-md border border-input bg-backgroun
 
 type Locale = 'fr' | 'en';
 
-function anchorMonthHint(frequency: MeetingFrequency | undefined, locale: Locale): string {
+function anchorMonthHint(frequency: SessionFrequency | undefined, locale: Locale): string {
   const fr = locale === 'fr';
   if (frequency === 'QUARTERLY') return fr ? 'Mois dans le trimestre (1 à 3)' : 'Month within the quarter (1–3)';
   if (frequency === 'SEMIANNUAL') return fr ? 'Mois dans le semestre (1 à 6)' : 'Month within the half-year (1–6)';
@@ -53,15 +49,15 @@ function anchorMonthHint(frequency: MeetingFrequency | undefined, locale: Locale
   return '';
 }
 
-export function MeetingScheduleFields({
+export function SessionScheduleFields({
   locale,
   value,
   onChange,
-  idPrefix = 'meeting-schedule',
+  idPrefix = 'session-schedule',
 }: {
   locale: Locale;
-  value: Partial<MeetingScheduleConfig>;
-  onChange: (next: Partial<MeetingScheduleConfig>) => void;
+  value: Partial<SessionScheduleConfig>;
+  onChange: (next: Partial<SessionScheduleConfig>) => void;
   idPrefix?: string;
 }) {
   const fr = locale === 'fr';
@@ -71,23 +67,23 @@ export function MeetingScheduleFields({
   const showRule = frequencyHasRule(frequency);
   const showAnchorMonth = frequency && frequencyHasAnchorMonth(frequency) && Boolean(rule) && rule !== 'LAST_DAY_OF_PERIOD';
   const anchorReady = !showAnchorMonth || Boolean(value.anchorMonth);
-  const isComplete = isValidMeetingScheduleConfig(value);
+  const isComplete = isValidSessionScheduleConfig(value);
 
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Étape 1 — fréquence, seul champ visible tant qu'elle n'est pas choisie. */}
         <div className="space-y-1">
-          <Label htmlFor={id('frequency')}>{fr ? 'Fréquence des réunions' : 'Meeting frequency'} *</Label>
+          <Label htmlFor={id('frequency')}>{fr ? 'Fréquence des séances' : 'Session frequency'} *</Label>
           <select
             id={id('frequency')}
             value={frequency ?? ''}
-            onChange={(event) => onChange(applyMeetingFrequency((event.target.value || undefined) as MeetingFrequency | undefined))}
+            onChange={(event) => onChange(applySessionFrequency((event.target.value || undefined) as SessionFrequency | undefined))}
             className={selectClass}
           >
             <option value="">{fr ? 'Sélectionner une fréquence' : 'Select a frequency'}</option>
-            {MEETING_FREQUENCIES.map((freq) => (
-              <option key={freq} value={freq}>{meetingFrequencyLabel(freq, locale)}</option>
+            {SESSION_FREQUENCIES.map((freq) => (
+              <option key={freq} value={freq}>{sessionFrequencyLabel(freq, locale)}</option>
             ))}
           </select>
         </div>
@@ -101,12 +97,12 @@ export function MeetingScheduleFields({
             <select
               id={id('weekday')}
               value={value.weekday ?? ''}
-              onChange={(event) => onChange(applyMeetingWeekday(value, (event.target.value || undefined) as Weekday | undefined))}
+              onChange={(event) => onChange(applySessionWeekday(value, (event.target.value || undefined) as Weekday | undefined))}
               className={selectClass}
             >
               <option value="">{fr ? 'Sélectionner un jour' : 'Select a day'}</option>
               {WEEKDAYS.map((weekday) => (
-                <option key={weekday} value={weekday}>{meetingWeekdayLabel(weekday, locale)}</option>
+                <option key={weekday} value={weekday}>{sessionWeekdayLabel(weekday, locale)}</option>
               ))}
             </select>
           </div>
@@ -119,12 +115,12 @@ export function MeetingScheduleFields({
             <select
               id={id('rule')}
               value={rule ?? ''}
-              onChange={(event) => onChange(applyMeetingRule(value, (event.target.value || undefined) as MeetingRecurrenceRule | undefined))}
+              onChange={(event) => onChange(applySessionRule(value, (event.target.value || undefined) as SessionRecurrenceRule | undefined))}
               className={selectClass}
             >
               <option value="">{fr ? 'Sélectionner une règle' : 'Select a rule'}</option>
-              {MEETING_RECURRENCE_RULES.map((recRule) => (
-                <option key={recRule} value={recRule}>{meetingRuleLabel(recRule, locale)}</option>
+              {SESSION_RECURRENCE_RULES.map((recRule) => (
+                <option key={recRule} value={recRule}>{sessionRuleLabel(recRule, locale)}</option>
               ))}
             </select>
           </div>
@@ -137,7 +133,7 @@ export function MeetingScheduleFields({
             <select
               id={id('anchor-month')}
               value={value.anchorMonth ?? ''}
-              onChange={(event) => onChange(applyMeetingAnchorMonth(value, event.target.value ? Number(event.target.value) : undefined))}
+              onChange={(event) => onChange(applySessionAnchorMonth(value, event.target.value ? Number(event.target.value) : undefined))}
               className={selectClass}
             >
               <option value="">{fr ? 'Sélectionner un mois' : 'Select a month'}</option>
@@ -159,7 +155,7 @@ export function MeetingScheduleFields({
               min={1}
               max={31}
               value={value.dayOfMonth ?? ''}
-              onChange={(event) => onChange(applyMeetingDayOfMonth(value, event.target.value ? Number(event.target.value) : undefined))}
+              onChange={(event) => onChange(applySessionDayOfMonth(value, event.target.value ? Number(event.target.value) : undefined))}
             />
             <p className="text-[11px] text-muted-foreground">{fr ? 'Un quantième absent (ex. 31 en février) est simplement ignoré ce mois-là.' : 'A missing day (e.g. the 31st in February) is simply skipped that month.'}</p>
           </div>
@@ -172,12 +168,12 @@ export function MeetingScheduleFields({
             <select
               id={id('ordinal')}
               value={value.ordinal ?? ''}
-              onChange={(event) => onChange(applyMeetingOrdinal(value, (event.target.value || undefined) as Ordinal | undefined))}
+              onChange={(event) => onChange(applySessionOrdinal(value, (event.target.value || undefined) as Ordinal | undefined))}
               className={selectClass}
             >
               <option value="">{fr ? 'Sélectionner un ordre' : 'Select an order'}</option>
               {ORDINALS.map((ordinal) => (
-                <option key={ordinal} value={ordinal}>{meetingOrdinalLabel(ordinal, locale)}</option>
+                <option key={ordinal} value={ordinal}>{sessionOrdinalLabel(ordinal, locale)}</option>
               ))}
             </select>
           </div>
@@ -190,12 +186,12 @@ export function MeetingScheduleFields({
             <select
               id={id('nth-weekday')}
               value={value.nthWeekday ?? ''}
-              onChange={(event) => onChange(applyMeetingNthWeekday(value, (event.target.value || undefined) as Weekday | undefined))}
+              onChange={(event) => onChange(applySessionNthWeekday(value, (event.target.value || undefined) as Weekday | undefined))}
               className={selectClass}
             >
               <option value="">{fr ? 'Sélectionner un jour' : 'Select a day'}</option>
               {WEEKDAYS.map((weekday) => (
-                <option key={weekday} value={weekday}>{meetingWeekdayLabel(weekday, locale)}</option>
+                <option key={weekday} value={weekday}>{sessionWeekdayLabel(weekday, locale)}</option>
               ))}
             </select>
           </div>
@@ -204,7 +200,7 @@ export function MeetingScheduleFields({
 
       {isComplete && (
         <p className="text-xs text-muted-foreground">
-          {(fr ? 'Aperçu : ' : 'Preview: ') + formatMeetingScheduleDescription(value, locale)}
+          {(fr ? 'Aperçu : ' : 'Preview: ') + formatSessionScheduleDescription(value, locale)}
         </p>
       )}
     </div>

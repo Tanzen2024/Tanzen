@@ -1,27 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import { flows } from './flows';
 import { balanceAsOf } from './balance';
-import { makeAccount, makeCtx, makeMembership, makeTransaction } from './__fixtures__/factories';
+import { makeCashbox, makeCtx, makeMembership, makeTransaction } from './__fixtures__/factories';
 import type { FinanceCtx } from './types';
-import { accounts as seedAccounts } from '@/mocks/finance/accounts';
+import { cashboxes as seedAccounts } from '@/mocks/finance/cashboxes';
 import { transactions as seedTransactions } from '@/mocks/finance/transactions';
-import { accountMemberships as seedMemberships } from '@/mocks/finance/account-memberships';
+import { cashboxMemberships as seedMemberships } from '@/mocks/finance/cashbox-memberships';
 
 function seedCtx(tenantId: string): FinanceCtx {
   return {
-    accounts: seedAccounts.filter((a) => a.tenantId === tenantId),
+    cashboxes: seedAccounts.filter((a) => a.tenantId === tenantId),
     transactions: seedTransactions.filter((t) => t.tenantId === tenantId),
     memberships: seedMemberships.filter((m) => m.tenantId === tenantId),
   };
 }
 
-const TENANT = { kind: 'TENANT_ALL_ACCOUNTS' as const };
-const ACCOUNT = (accountId: string) => ({ kind: 'ACCOUNT' as const, accountId });
+const TENANT = { kind: 'TENANT_ALL_CASHBOXES' as const };
+const ACCOUNT = (cashboxId: string) => ({ kind: 'CASHBOX' as const, cashboxId });
 
 describe('flows — période inclusive, completed only', () => {
-  const caisse = makeAccount({ id: 'AC-1', accountNumber: 'CX-1' });
+  const caisse = makeCashbox({ id: 'AC-1', cashboxNumber: 'CX-1' });
   const ctx = makeCtx({
-    accounts: [caisse],
+    cashboxes: [caisse],
     transactions: [
       makeTransaction({ id: 'A', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 100_000, date: '2026-05-01' }),
       makeTransaction({ id: 'B', tenantId: 'T-1', fromAccount: 'CX-1', toAccount: 'T', type: 'debit', amount: 30_000, date: '2026-05-15' }),
@@ -53,17 +53,17 @@ describe('flows — période inclusive, completed only', () => {
     expect(result.count).toBe(3);
   });
 
-  it('byAccount = perspective caisse (accountEntryEffect)', () => {
-    const line = flows(TENANT, ctx, '2026-05-01', '2026-05-31').byAccount[0];
-    expect(line).toMatchObject({ accountId: 'AC-1', credit: 140_000, debit: 30_000, count: 3 });
+  it('byCashbox = perspective caisse (cashboxEntryEffect)', () => {
+    const line = flows(TENANT, ctx, '2026-05-01', '2026-05-31').byCashbox[0];
+    expect(line).toMatchObject({ cashboxId: 'AC-1', credit: 140_000, debit: 30_000, count: 3 });
   });
 });
 
 describe('flows — SOLDE ≠ FLUX', () => {
   it('le flux d’une période ne masque pas les transactions, et n’est pas le solde de fin de période', () => {
-    const caisse = makeAccount({ id: 'AC-1', accountNumber: 'CX-1', openingBalance: 1_000_000 });
+    const caisse = makeCashbox({ id: 'AC-1', cashboxNumber: 'CX-1', openingBalance: 1_000_000 });
     const ctx = makeCtx({
-      accounts: [caisse],
+      cashboxes: [caisse],
       transactions: [
         makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 300_000, date: '2026-05-10' }),
         makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-1', toAccount: 'T', type: 'debit', amount: 150_000, date: '2026-05-20' }),
@@ -84,32 +84,32 @@ describe('flows — SOLDE ≠ FLUX', () => {
 });
 
 describe('flows — virement inter-caisses (comportement actuel, sans marqueur INTERNAL_TRANSFER)', () => {
-  it('TENANT_ALL_ACCOUNTS : le virement gonfle totalDebit ; byAccount montre ±montant', () => {
-    const src = makeAccount({ id: 'AC-SRC', accountNumber: 'CX-SRC' });
-    const dst = makeAccount({ id: 'AC-DST', accountNumber: 'CX-DST' });
+  it('TENANT_ALL_CASHBOXES : le virement gonfle totalDebit ; byCashbox montre ±montant', () => {
+    const src = makeCashbox({ id: 'AC-SRC', cashboxNumber: 'CX-SRC' });
+    const dst = makeCashbox({ id: 'AC-DST', cashboxNumber: 'CX-DST' });
     const ctx = makeCtx({
-      accounts: [src, dst],
+      cashboxes: [src, dst],
       transactions: [makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-SRC', toAccount: 'CX-DST', type: 'debit', amount: 500_000, date: '2026-05-10' })],
     });
     const result = flows(TENANT, ctx, '2026-05-01', '2026-05-31');
     expect(result.totalDebit).toBe(500_000); // connu : sera exclu à l'étape 10
     expect(result.totalCredit).toBe(0);
-    expect(result.byAccount.find((l) => l.accountId === 'AC-SRC')).toMatchObject({ debit: 500_000, credit: 0 });
-    expect(result.byAccount.find((l) => l.accountId === 'AC-DST')).toMatchObject({ debit: 0, credit: 500_000 });
+    expect(result.byCashbox.find((l) => l.cashboxId === 'AC-SRC')).toMatchObject({ debit: 500_000, credit: 0 });
+    expect(result.byCashbox.find((l) => l.cashboxId === 'AC-DST')).toMatchObject({ debit: 0, credit: 500_000 });
   });
 });
 
 describe('flows — scope membre (rattachement temporel explicite)', () => {
   // M-J : Épargne 01/04→ ; Projet 01/06→ (rejointe en cours de période) ; Trésorerie →30/04 (quittée en cours)
-  const tresorerie = makeAccount({ id: 'AC-T', accountNumber: 'CX-T' });
-  const epargne = makeAccount({ id: 'AC-E', accountNumber: 'CX-E' });
-  const projet = makeAccount({ id: 'AC-P', accountNumber: 'CX-P' });
+  const tresorerie = makeCashbox({ id: 'AC-T', cashboxNumber: 'CX-T' });
+  const epargne = makeCashbox({ id: 'AC-E', cashboxNumber: 'CX-E' });
+  const projet = makeCashbox({ id: 'AC-P', cashboxNumber: 'CX-P' });
   const ctx = makeCtx({
-    accounts: [tresorerie, epargne, projet],
+    cashboxes: [tresorerie, epargne, projet],
     memberships: [
-      makeMembership({ id: 'AM-T', accountId: 'AC-T', memberId: 'M-J', startDate: '2026-01-01', endDate: '2026-04-30', status: 'ended' }),
-      makeMembership({ id: 'AM-E', accountId: 'AC-E', memberId: 'M-J', startDate: '2026-04-01', endDate: null }),
-      makeMembership({ id: 'AM-P', accountId: 'AC-P', memberId: 'M-J', startDate: '2026-06-01', endDate: null }),
+      makeMembership({ id: 'AM-T', cashboxId: 'AC-T', memberId: 'M-J', startDate: '2026-01-01', endDate: '2026-04-30', status: 'ended' }),
+      makeMembership({ id: 'AM-E', cashboxId: 'AC-E', memberId: 'M-J', startDate: '2026-04-01', endDate: null }),
+      makeMembership({ id: 'AM-P', cashboxId: 'AC-P', memberId: 'M-J', startDate: '2026-06-01', endDate: null }),
     ],
     transactions: [
       makeTransaction({ id: 'T-avril', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'CX-T', toAccount: 'M-J', type: 'debit', amount: 100_000, date: '2026-04-10' }),
@@ -120,11 +120,11 @@ describe('flows — scope membre (rattachement temporel explicite)', () => {
       makeTransaction({ id: 'other', tenantId: 'T-1', memberId: 'M-OTHER', fromAccount: 'M-OTHER', toAccount: 'CX-E', type: 'credit', amount: 999_000, date: '2026-05-20' }),
     ],
   });
-  const M_ALL = { kind: 'MEMBER_ALL_ACCOUNTS' as const, memberId: 'M-J' };
+  const M_ALL = { kind: 'MEMBER_ALL_CASHBOXES' as const, memberId: 'M-J' };
 
   it('périmètre = caisses adhérées à un moment de la période (Trésorerie quittée y figure encore)', () => {
     const result = flows(M_ALL, ctx, '2026-04-01', '2026-06-30');
-    expect(result.byAccount.map((l) => l.accountId).sort()).toEqual(['AC-E', 'AC-P', 'AC-T']);
+    expect(result.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-E', 'AC-P', 'AC-T']);
   });
 
   it('adhésion clôturée en cours de période : les transactions APRÈS endDate ne comptent pas', () => {
@@ -145,7 +145,7 @@ describe('flows — scope membre (rattachement temporel explicite)', () => {
     expect(flows(M_ALL, ctx, '2026-04-01', '2026-06-30').transactionIds).not.toContain('other');
   });
 
-  it('MEMBER_ALL_ACCOUNTS sans adhésion chevauchant la période → outOfScope', () => {
+  it('MEMBER_ALL_CASHBOXES sans adhésion chevauchant la période → outOfScope', () => {
     const result = flows(M_ALL, ctx, '2020-01-01', '2020-12-31');
     expect(result.outOfScope).toBe(true);
     expect(result.count).toBe(0);
@@ -153,7 +153,7 @@ describe('flows — scope membre (rattachement temporel explicite)', () => {
 });
 
 describe('flows — seed réel T-001', () => {
-  it('TENANT_ALL_ACCOUNTS sur 2026 : totalDebit 1 375 000 / totalCredit 220 000 / 6 transactions (cohérent avec l’écran)', () => {
+  it('TENANT_ALL_CASHBOXES sur 2026 : totalDebit 1 375 000 / totalCredit 220 000 / 6 transactions (cohérent avec l’écran)', () => {
     const result = flows(TENANT, seedCtx('T-001'), '2026-01-01', '2026-12-31');
     expect(result.totalDebit).toBe(1_375_000);
     expect(result.totalCredit).toBe(220_000);

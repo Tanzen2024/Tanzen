@@ -1,10 +1,10 @@
 import { mockRequest } from './api-client';
-import { accounts } from '@/mocks/finance/accounts';
+import { cashboxes } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
-import { accountMemberships } from '@/mocks/finance/account-memberships';
+import { cashboxMemberships } from '@/mocks/finance/cashbox-memberships';
 import { openingEntries, finalOpeningEntryForFiscalYear, type OpeningEntry } from '@/mocks/finance/opening-entries';
 import { closingEntries, finalClosingEntry, type ClosingEntry } from '@/mocks/finance/closing-entries';
-import { fiscalYears } from '@/mocks/settings/fiscal-years';
+import { fiscalYears, fiscalYearLabel } from '@/mocks/settings/fiscal-years';
 import { loans } from '@/mocks/finance/loans';
 import { repayments } from '@/mocks/finance/repayments';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
@@ -36,9 +36,9 @@ import {
  */
 function ctxForTenant(tenantId: string): FinanceCtx {
   return {
-    accounts: accounts.filter((account) => account.tenantId === tenantId),
+    cashboxes: cashboxes.filter((account) => account.tenantId === tenantId),
     transactions: transactions.filter((transaction) => transaction.tenantId === tenantId),
-    memberships: accountMemberships.filter((membership) => membership.tenantId === tenantId),
+    memberships: cashboxMemberships.filter((membership) => membership.tenantId === tenantId),
     openingEntries: openingEntries.filter((entry) => entry.tenantId === tenantId),
     closingEntries: closingEntries.filter((entry) => entry.tenantId === tenantId),
     // Étape 7 — mêmes règles d'isolation que les autres tableaux : un membre d'un
@@ -99,18 +99,18 @@ export const financePositionService = {
 
   /**
    * POSITION FINANCIÈRE D'UN MEMBRE (étape 7) — lecture seule, aucune écriture.
-   * `scope` doit être `MEMBER_ACCOUNT` ou `MEMBER_ALL_ACCOUNTS` (voir
+   * `scope` doit être `MEMBER_CASHBOX` ou `MEMBER_ALL_CASHBOXES` (voir
    * `@/lib/finance/member-position.ts` pour la logique complète : savings/
    * otherMovements/internalTransfers par caisse, `credit`/`distributions`
-   * uniquement pour `MEMBER_ALL_ACCOUNTS`, jamais de rattachement Loan→caisse
+   * uniquement pour `MEMBER_ALL_CASHBOXES`, jamais de rattachement Loan→caisse
    * ni Distribution→membre par nom inventés).
    */
-  memberFinancialPosition: (tenantId: string, scope: Extract<FinancialScope, { kind: 'MEMBER_ACCOUNT' | 'MEMBER_ALL_ACCOUNTS' }>, asOfDate: string) =>
+  memberFinancialPosition: (tenantId: string, scope: Extract<FinancialScope, { kind: 'MEMBER_CASHBOX' | 'MEMBER_ALL_CASHBOXES' }>, asOfDate: string) =>
     mockRequest(() => memberFinancialPositionEngine(scope, ctxForTenant(tenantId), asOfDate)),
 
-  /** Version batch — un `memberFinancialPosition` par membre, même scope (caisse unique si `accountId` fourni, sinon toutes ses caisses). */
-  memberFinancialPositions: (tenantId: string, memberIds: string[], accountId: string | undefined, asOfDate: string) =>
-    mockRequest(() => memberFinancialPositionsEngine(memberIds, accountId, ctxForTenant(tenantId), asOfDate)),
+  /** Version batch — un `memberFinancialPosition` par membre, même scope (caisse unique si `cashboxId` fourni, sinon toutes ses caisses). */
+  memberFinancialPositions: (tenantId: string, memberIds: string[], cashboxId: string | undefined, asOfDate: string) =>
+    mockRequest(() => memberFinancialPositionsEngine(memberIds, cashboxId, ctxForTenant(tenantId), asOfDate)),
 
   /**
    * CLÔTURE D'EXERCICE (étape 6) — calcule (via `computeFiscalYearClosing`,
@@ -134,7 +134,7 @@ export const financePositionService = {
       const created: ClosingEntry[] = outcome.computations.map((computation, index) => ({
         id: `CE-${String(base + index + 1).padStart(3, '0')}`,
         tenantId,
-        accountId: computation.accountId,
+        cashboxId: computation.cashboxId,
         fiscalYearId: fiscalYear.id,
         date: fiscalYear.endDate,
         amount: computation.amount,
@@ -147,7 +147,7 @@ export const financePositionService = {
         tenantId,
         action: 'finance.closingEntry.created',
         resourceId: fiscalYear.id,
-        resourceLabel: fiscalYear.label,
+        resourceLabel: fiscalYearLabel(fiscalYear),
         sensitive: true,
         context: { accountCount: created.length },
       });
@@ -161,21 +161,21 @@ export const financePositionService = {
    * `SUPERSEDED`, un nouveau `FINAL` est créé — jamais d'édition en place
    * (mandat §8, immutabilité).
    */
-  recomputeClosingEntry: (tenantId: string, fiscalYearId: string, accountId: string, reason: string) =>
+  recomputeClosingEntry: (tenantId: string, fiscalYearId: string, cashboxId: string, reason: string) =>
     mockRequest(() => {
       const fiscalYear = fiscalYears.find((fy) => fy.id === fiscalYearId && fy.tenantId === tenantId);
       if (!fiscalYear) return undefined;
 
-      const outcome = recomputeClosingEntryEngine(ctxForTenant(tenantId), fiscalYear, accountId);
+      const outcome = recomputeClosingEntryEngine(ctxForTenant(tenantId), fiscalYear, cashboxId);
       if (!outcome.ok) return outcome;
 
-      const previous = finalClosingEntry(closingEntries, accountId, fiscalYearId);
+      const previous = finalClosingEntry(closingEntries, cashboxId, fiscalYearId);
       if (previous) previous.status = 'SUPERSEDED';
 
       const created: ClosingEntry = {
         id: `CE-${String(closingEntries.length + 1).padStart(3, '0')}`,
         tenantId,
-        accountId,
+        cashboxId,
         fiscalYearId: fiscalYear.id,
         date: fiscalYear.endDate,
         amount: outcome.amount,
@@ -188,7 +188,7 @@ export const financePositionService = {
         tenantId,
         action: 'finance.closingEntry.recomputed',
         resourceId: created.id,
-        resourceLabel: `${fiscalYear.label} · ${accountId}`,
+        resourceLabel: `${fiscalYearLabel(fiscalYear)} · ${cashboxId}`,
         before: previous ? { amount: previous.amount } : undefined,
         after: { amount: created.amount },
         context: { reason },
@@ -200,7 +200,7 @@ export const financePositionService = {
   /**
    * REPORT À NOUVEAU (étape 6) — calcule (via `computeCarryForward`, pur) puis
    * PERSISTE une `OpeningEntry FINAL` par caisse du tenant, `origin:
-   * 'CARRY_FORWARD'`. Ne touche jamais `AccountMembership` (mandat §6).
+   * 'CARRY_FORWARD'`. Ne touche jamais `CashboxMembership` (mandat §6).
    */
   carryForward: (tenantId: string, fromFiscalYearId: string, toFiscalYearId: string) =>
     mockRequest(() => {
@@ -216,7 +216,7 @@ export const financePositionService = {
       const created: OpeningEntry[] = outcome.computations.map((computation, index) => ({
         id: `OE-${String(base + index + 1).padStart(3, '0')}`,
         tenantId,
-        accountId: computation.accountId,
+        cashboxId: computation.cashboxId,
         fiscalYearId: toFiscalYear.id,
         date: computation.date,
         amount: computation.amount,
@@ -230,7 +230,7 @@ export const financePositionService = {
         tenantId,
         action: 'finance.carryForward.applied',
         resourceId: toFiscalYear.id,
-        resourceLabel: toFiscalYear.label,
+        resourceLabel: fiscalYearLabel(toFiscalYear),
         sensitive: true,
         context: { fromFiscalYearId: fromFiscalYear.id, accountCount: created.length },
       });
@@ -259,17 +259,17 @@ export const financePositionService = {
    * par cette voie. Refuse si une `OpeningEntry FINAL` existe déjà pour cette
    * caisse × cet exercice (jamais d'écrasement silencieux).
    */
-  createInitialOpeningEntry: (tenantId: string, accountId: string, fiscalYearId: string, amount: number) =>
+  createInitialOpeningEntry: (tenantId: string, cashboxId: string, fiscalYearId: string, amount: number) =>
     mockRequest(() => {
       const fiscalYear = fiscalYears.find((fy) => fy.id === fiscalYearId && fy.tenantId === tenantId);
-      const account = accounts.find((item) => item.id === accountId && item.tenantId === tenantId);
+      const account = cashboxes.find((item) => item.id === cashboxId && item.tenantId === tenantId);
       if (!fiscalYear || !account || !Number.isFinite(amount)) return undefined;
-      if (finalOpeningEntryForFiscalYear(openingEntries, accountId, fiscalYearId)) return undefined;
+      if (finalOpeningEntryForFiscalYear(openingEntries, cashboxId, fiscalYearId)) return undefined;
 
       const entry: OpeningEntry = {
         id: `OE-${String(openingEntries.length + 1).padStart(3, '0')}`,
         tenantId,
-        accountId,
+        cashboxId,
         fiscalYearId: fiscalYear.id,
         date: fiscalYear.startDate,
         amount,
@@ -282,7 +282,7 @@ export const financePositionService = {
         tenantId,
         action: 'finance.openingEntry.created',
         resourceId: entry.id,
-        resourceLabel: `${account.title} · ${fiscalYear.label}`,
+        resourceLabel: `${account.title} · ${fiscalYearLabel(fiscalYear)}`,
         sensitive: true,
         context: { origin: 'INITIAL', amount },
       });

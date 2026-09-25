@@ -31,7 +31,7 @@ function renderFinance(route: string) {
 describe('Finance → Comptes — le compte comme point d\'entrée des transactions', () => {
   it('la page Comptes propose « Toutes les transactions » vers le journal consolidé', async () => {
     const user = userEvent.setup();
-    renderFinance('/finance/accounts');
+    renderFinance('/finance/cashboxes');
     await screen.findByRole('table');
     await user.click(screen.getByRole('button', { name: /Toutes les transactions/i }));
     expect(await screen.findByRole('button', { name: /Ajouter une transaction/i })).toBeInTheDocument();
@@ -39,7 +39,7 @@ describe('Finance → Comptes — le compte comme point d\'entrée des transacti
 
   it('la fiche compte propose « Nouvelle transaction », qui pré-sélectionne et verrouille le compte', async () => {
     const user = userEvent.setup();
-    renderFinance('/finance/accounts/AC-002');
+    renderFinance('/finance/cashboxes/AC-002');
     await screen.findByRole('heading', { name: 'Épargne' });
     await user.click(screen.getByRole('button', { name: /Nouvelle transaction/i }));
 
@@ -51,7 +51,7 @@ describe('Finance → Comptes — le compte comme point d\'entrée des transacti
   it('une transaction créée depuis la fiche compte revient sur cette fiche, avec le solde à jour', async () => {
     const user = userEvent.setup();
     const marker = `Épargne depuis compte ${Date.now()}`;
-    renderFinance('/finance/accounts/AC-002');
+    renderFinance('/finance/cashboxes/AC-002');
     await screen.findByRole('heading', { name: 'Épargne' });
 
     await user.click(screen.getByRole('button', { name: /Nouvelle transaction/i }));

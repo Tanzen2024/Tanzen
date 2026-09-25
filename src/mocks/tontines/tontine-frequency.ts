@@ -7,10 +7,10 @@
  * reste toujours un acte unitaire et progressif, aucune génération en masse
  * de dates futures, contrairement à l'ancien module).
  *
- * WRAPPER, comme `src/mocks/settings/meeting-schedule.ts` : ne réimplémente
+ * WRAPPER, comme `src/mocks/settings/session-schedule.ts` : ne réimplémente
  * aucun calcul de date, délègue entièrement aux primitives neutres de
  * `src/lib/recurrence.ts` (extraites de l'ancien `tontine-frequency.ts` car
- * partagées avec les réunions d'exercice fiscal — aucun des deux domaines ne
+ * partagées avec les séances d'exercice fiscal — aucun des deux domaines ne
  * doit posséder l'autre).
  */
 import {

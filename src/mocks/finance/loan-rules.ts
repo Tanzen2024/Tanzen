@@ -19,10 +19,10 @@ export type LoanRuleStatus = 'ACTIVE' | 'INACTIVE';
 export type LoanRule = {
   id: string;
   tenantId: string;
-  /** Relation canonique : loan_rules.account_id -> accounts.id. Jamais Loan -> loan_rules (aucune FK directe confirmée). */
-  accountId: string;
+  /** Relation canonique : loan_rules.cashbox_id -> cashboxes.id. Jamais Loan -> loan_rules (aucune FK directe confirmée). */
+  cashboxId: string;
   /** Dénormalisé pour l'affichage, même convention que Loan.tenantName / Guarantor.borrowerName. */
-  accountNumber: string;
+  cashboxNumber: string;
   name: string;
   allowLoans: boolean;
   loanMode: LoanRuleLoanMode;
@@ -49,25 +49,25 @@ export type LoanRule = {
 
 export const loanRules: LoanRule[] = [
   {
-    id: 'LR-001', tenantId: 'T-001', accountId: 'AC-001', accountNumber: 'CS-001-TRÉS', name: 'Politique Trésorerie Sutura',
+    id: 'LR-001', tenantId: 'T-001', cashboxId: 'AC-001', cashboxNumber: 'CS-001-TRÉS', name: 'Politique Trésorerie Sutura',
     allowLoans: true, loanMode: 'INTERNAL', minAmount: 50_000, maxAmount: 2_000_000, interestRate: 12, interestType: 'REDUCING', interestPeriod: 'MONTHLY', durationMonths: 24,
     maxActiveLoans: 2, maxLoanExposure: 3_000_000, requiresGuarantor: true, minGuarantors: 1, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: false,
     requiresApproval: true, approvalLevel: 'ADMIN', status: 'ACTIVE', deletedAt: null,
   },
   {
-    id: 'LR-002', tenantId: 'T-002', accountId: 'AC-004', accountNumber: 'TH-002-TRÉS', name: 'Politique Trésorerie Horizon',
+    id: 'LR-002', tenantId: 'T-002', cashboxId: 'AC-004', cashboxNumber: 'TH-002-TRÉS', name: 'Politique Trésorerie Horizon',
     allowLoans: true, loanMode: 'BOTH', minAmount: 30_000, maxAmount: 1_500_000, interestRate: 10, interestType: 'FLAT', interestPeriod: 'MONTHLY', durationMonths: 18,
     maxActiveLoans: 1, maxLoanExposure: 1_500_000, requiresGuarantor: true, minGuarantors: 1, maxGuarantors: 1, guaranteeTypeRequired: 'GROUP', guaranteeRatio: 80, allowSelfGuarantee: false,
     requiresApproval: true, approvalLevel: 'BOARD', status: 'ACTIVE', deletedAt: null,
   },
   {
-    id: 'LR-003', tenantId: 'T-001', accountId: 'AC-002', accountNumber: 'CS-001-ÉPG', name: 'Politique Épargne Sutura',
+    id: 'LR-003', tenantId: 'T-001', cashboxId: 'AC-002', cashboxNumber: 'CS-001-ÉPG', name: 'Politique Épargne Sutura',
     allowLoans: false, loanMode: 'NONE', minAmount: 0, maxAmount: 500_000, interestRate: 8, interestType: 'FIXED', interestPeriod: 'YEARLY', durationMonths: 12,
     maxActiveLoans: 1, maxLoanExposure: null, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 1, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
     requiresApproval: false, approvalLevel: null, status: 'INACTIVE', deletedAt: null,
   },
   {
-    id: 'LR-004', tenantId: 'T-001', accountId: 'AC-009', accountNumber: 'CS-001-CX-001', name: 'Politique Épargne volontaire Sutura',
+    id: 'LR-004', tenantId: 'T-001', cashboxId: 'AC-009', cashboxNumber: 'CS-001-CX-001', name: 'Politique Épargne volontaire Sutura',
     allowLoans: true, loanMode: 'INTERNAL', minAmount: 20_000, maxAmount: 1_000_000, interestRate: 9, interestType: 'FLAT', interestPeriod: 'MONTHLY', durationMonths: 12,
     maxActiveLoans: 3, maxLoanExposure: 2_000_000, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
     requiresApproval: false, approvalLevel: null, status: 'ACTIVE', deletedAt: null,

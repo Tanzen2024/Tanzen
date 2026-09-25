@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeCarryForward, verifyCarryForwardIntegrity } from './carry-forward';
-import { makeAccount, makeClosingEntry, makeCtx, makeFiscalYear, makeOpeningEntry } from './__fixtures__/factories';
+import { makeCashbox, makeClosingEntry, makeCtx, makeFiscalYear, makeOpeningEntry } from './__fixtures__/factories';
 
 describe('computeCarryForward', () => {
   it('refuse (TENANT_MISMATCH) si les deux exercices n’appartiennent pas au même tenant', () => {
@@ -27,10 +27,10 @@ describe('computeCarryForward', () => {
   it('accepte une contiguïté stricte (endDate + 1 jour == startDate), y compris à cheval sur une année bissextile', () => {
     const from = makeFiscalYear({ id: 'FY-2027', tenantId: 'T-1', status: 'closed', endDate: '2027-12-31' });
     const to = makeFiscalYear({ id: 'FY-2028', tenantId: 'T-1', startDate: '2028-01-01' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
-      closingEntries: [makeClosingEntry({ id: 'CE-1', accountId: 'AC-1', fiscalYearId: 'FY-2027', amount: 100_000, status: 'FINAL' })],
+      cashboxes: [account],
+      closingEntries: [makeClosingEntry({ id: 'CE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-2027', amount: 100_000, status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
     expect(result.ok).toBe(true);
@@ -39,51 +39,51 @@ describe('computeCarryForward', () => {
   it('refuse (MISSING_CLOSING_ENTRIES) si une caisse du tenant n’a pas de ClosingEntry FINAL pour l’exercice source', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const a = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
-    const b = makeAccount({ id: 'AC-2', tenantId: 'T-1' });
+    const a = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
+    const b = makeCashbox({ id: 'AC-2', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [a, b],
-      closingEntries: [makeClosingEntry({ accountId: 'AC-1', fiscalYearId: 'FY-1', status: 'FINAL' })], // AC-2 manquant
+      cashboxes: [a, b],
+      closingEntries: [makeClosingEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-1', status: 'FINAL' })], // AC-2 manquant
     });
     const result = computeCarryForward(ctx, from, to);
-    expect(result).toEqual({ ok: false, reason: 'MISSING_CLOSING_ENTRIES', accountIds: ['AC-2'] });
+    expect(result).toEqual({ ok: false, reason: 'MISSING_CLOSING_ENTRIES', cashboxIds: ['AC-2'] });
   });
 
   it('refuse (ALREADY_CARRIED) si une caisse a déjà une OpeningEntry FINAL pour l’exercice cible — idempotence par refus', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
-      closingEntries: [makeClosingEntry({ accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'FINAL' })],
-      openingEntries: [makeOpeningEntry({ accountId: 'AC-1', fiscalYearId: 'FY-2', status: 'FINAL' })],
+      cashboxes: [account],
+      closingEntries: [makeClosingEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'FINAL' })],
+      openingEntries: [makeOpeningEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-2', status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
-    expect(result).toEqual({ ok: false, reason: 'ALREADY_CARRIED', accountIds: ['AC-1'] });
+    expect(result).toEqual({ ok: false, reason: 'ALREADY_CARRIED', cashboxIds: ['AC-1'] });
   });
 
   it('nominal — le montant est COPIÉ tel quel depuis le ClosingEntry, jamais recalculé', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
-      closingEntries: [makeClosingEntry({ id: 'CE-1', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 742_500, status: 'FINAL' })],
+      cashboxes: [account],
+      closingEntries: [makeClosingEntry({ id: 'CE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 742_500, status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
     expect(result).toEqual({
       ok: true,
-      computations: [{ accountId: 'AC-1', amount: 742_500, date: '2027-01-01', sourceClosingEntryId: 'CE-1' }],
+      computations: [{ cashboxId: 'AC-1', amount: 742_500, date: '2027-01-01', sourceClosingEntryId: 'CE-1' }],
     });
   });
 
   it('caisse sans transaction — closing == opening reporté à l’identique (solde plat)', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
-      closingEntries: [makeClosingEntry({ id: 'CE-1', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 0, status: 'FINAL' })],
+      cashboxes: [account],
+      closingEntries: [makeClosingEntry({ id: 'CE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 0, status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
     expect(result.ok).toBe(true);
@@ -93,30 +93,30 @@ describe('computeCarryForward', () => {
   it('caisse inactive — incluse au même titre qu’une caisse active', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const inactive = makeAccount({ id: 'AC-1', tenantId: 'T-1', status: 'inactive' });
+    const inactive = makeCashbox({ id: 'AC-1', tenantId: 'T-1', status: 'inactive' });
     const ctx = makeCtx({
-      accounts: [inactive],
-      closingEntries: [makeClosingEntry({ id: 'CE-1', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 50_000, status: 'FINAL' })],
+      cashboxes: [inactive],
+      closingEntries: [makeClosingEntry({ id: 'CE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 50_000, status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
     expect(result).toEqual({
       ok: true,
-      computations: [{ accountId: 'AC-1', amount: 50_000, date: '2027-01-01', sourceClosingEntryId: 'CE-1' }],
+      computations: [{ cashboxId: 'AC-1', amount: 50_000, date: '2027-01-01', sourceClosingEntryId: 'CE-1' }],
     });
   });
 
-  it('isolation tenant — une caisse d’un autre tenant n’est jamais reportée, même présente dans ctx.accounts', () => {
+  it('isolation tenant — une caisse d’un autre tenant n’est jamais reportée, même présente dans ctx.cashboxes', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'closed', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1', startDate: '2027-01-01' });
-    const t1Account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
-    const t2Account = makeAccount({ id: 'AC-2', tenantId: 'T-2' });
+    const t1Account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
+    const t2Account = makeCashbox({ id: 'AC-2', tenantId: 'T-2' });
     const ctx = makeCtx({
-      accounts: [t1Account, t2Account],
-      closingEntries: [makeClosingEntry({ id: 'CE-1', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 10_000, status: 'FINAL' })],
+      cashboxes: [t1Account, t2Account],
+      closingEntries: [makeClosingEntry({ id: 'CE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 10_000, status: 'FINAL' })],
     });
     const result = computeCarryForward(ctx, from, to);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.computations.map((c) => c.accountId)).toEqual(['AC-1']);
+    if (result.ok) expect(result.computations.map((c) => c.cashboxId)).toEqual(['AC-1']);
   });
 });
 
@@ -124,11 +124,11 @@ describe('verifyCarryForwardIntegrity', () => {
   it('aucun écart quand closing(N) == opening(N+1)', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
-      closingEntries: [makeClosingEntry({ accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'FINAL' })],
-      openingEntries: [makeOpeningEntry({ accountId: 'AC-1', fiscalYearId: 'FY-2', amount: 100_000, status: 'FINAL' })],
+      cashboxes: [account],
+      closingEntries: [makeClosingEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'FINAL' })],
+      openingEntries: [makeOpeningEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-2', amount: 100_000, status: 'FINAL' })],
     });
     expect(verifyCarryForwardIntegrity(ctx, from, to)).toEqual([]);
   });
@@ -136,23 +136,23 @@ describe('verifyCarryForwardIntegrity', () => {
   it('détecte un écart après reclôture de l’exercice source sans rejouer le report (cas de correction en cascade)', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      accounts: [account],
+      cashboxes: [account],
       closingEntries: [
-        makeClosingEntry({ id: 'CE-OLD', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'SUPERSEDED' }),
-        makeClosingEntry({ id: 'CE-NEW', accountId: 'AC-1', fiscalYearId: 'FY-1', amount: 150_000, status: 'FINAL' }), // corrigé après réouverture
+        makeClosingEntry({ id: 'CE-OLD', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 100_000, status: 'SUPERSEDED' }),
+        makeClosingEntry({ id: 'CE-NEW', cashboxId: 'AC-1', fiscalYearId: 'FY-1', amount: 150_000, status: 'FINAL' }), // corrigé après réouverture
       ],
-      openingEntries: [makeOpeningEntry({ accountId: 'AC-1', fiscalYearId: 'FY-2', amount: 100_000, status: 'FINAL' })], // pas encore rejoué
+      openingEntries: [makeOpeningEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-2', amount: 100_000, status: 'FINAL' })], // pas encore rejoué
     });
-    expect(verifyCarryForwardIntegrity(ctx, from, to)).toEqual([{ accountId: 'AC-1', closingAmount: 150_000, openingAmount: 100_000 }]);
+    expect(verifyCarryForwardIntegrity(ctx, from, to)).toEqual([{ cashboxId: 'AC-1', closingAmount: 150_000, openingAmount: 100_000 }]);
   });
 
   it('ne signale rien pour une caisse sans clôture ou sans ouverture (pas encore de report à comparer)', () => {
     const from = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', endDate: '2026-12-31' });
     const to = makeFiscalYear({ id: 'FY-2', tenantId: 'T-1' });
-    const account = makeAccount({ id: 'AC-1', tenantId: 'T-1' });
-    const ctx = makeCtx({ accounts: [account] });
+    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
+    const ctx = makeCtx({ cashboxes: [account] });
     expect(verifyCarryForwardIntegrity(ctx, from, to)).toEqual([]);
   });
 });

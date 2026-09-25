@@ -55,7 +55,7 @@ export function AppRouter() {
       >
         <Route path="/dashboard" element={<PermissionRoute permission="dashboard.read"><DashboardOverview /></PermissionRoute>} />
         <Route path="/organization/*" element={<PermissionRoute permission="tenants.read"><Suspense fallback={<RouteLoadingFallback />}><OrganizationModule /></Suspense></PermissionRoute>} />
-        <Route path="/finance/*" element={<PermissionRoute permission="accounts.read"><Suspense fallback={<RouteLoadingFallback />}><FinanceModule /></Suspense></PermissionRoute>} />
+        <Route path="/finance/*" element={<PermissionRoute permission="cashboxes.read"><Suspense fallback={<RouteLoadingFallback />}><FinanceModule /></Suspense></PermissionRoute>} />
         <Route path="/tontines/*" element={<PermissionRoute permission="tontines.read"><Suspense fallback={<RouteLoadingFallback />}><TontinesModule /></Suspense></PermissionRoute>} />
         <Route path="/operations/*" element={<PermissionRoute permission="workflows.read"><Suspense fallback={<RouteLoadingFallback />}><OperationsModule /></Suspense></PermissionRoute>} />
         <Route path="/access-security/*" element={<PermissionRoute permission="users.read"><Suspense fallback={<RouteLoadingFallback />}><AccessModule /></Suspense></PermissionRoute>} />

@@ -1,44 +1,44 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { accounts, hasAccountLabelConflict, isSystemAccount, normalizeAccountLabel, resolveAccount, type Account, type AccountRecord, type AccountType, type SystemAccountCode } from '@/mocks/finance/accounts';
-import { accountMemberships } from '@/mocks/finance/account-memberships';
+import { cashboxes, hasCashboxLabelConflict, isSystemCashbox, normalizeCashboxLabel, resolveCashbox, type Cashbox, type CashboxRecord, type CashboxType, type SystemCashboxCode } from '@/mocks/finance/cashboxes';
+import { cashboxMemberships } from '@/mocks/finance/cashbox-memberships';
 import { transactions, type Transaction, type TransactionType } from '@/mocks/finance/transactions';
 import { isClassificationValid, isTransactionCategory, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { contributions, contributionsByMonth } from '@/mocks/finance/contributions';
 import { distributions, type Distribution } from '@/mocks/finance/distributions';
 import { members } from '@/mocks/organization/members';
 import { tenants } from '@/mocks/organization/tenants';
-import { meetingService } from './meeting.service';
+import { validateSessionBelongsToExercise } from './fiscal-session.service';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
 
 /**
  * Formulaire simplifié « Nouvelle caisse » (mandat CAISSE §2/§3) : ni tenant
- * (implicite via `currentTenant`, jamais depuis l'input), ni n° de compte
+ * (implicite via `currentTenant`, jamais depuis l'input), ni n° de caisse
  * (généré ici), ni solde (matérialisé à 0 tant qu'aucun mouvement), ni statut
  * (toujours 'active' à la création). `type` (nature de cotisation) est la seule
  * dimension métier saisie.
  */
-export type AccountCreateInput = { title: string; type: AccountType; amount: number | null; description: string };
-export type AccountUpdateInput = Partial<AccountCreateInput>;
+export type CashboxCreateInput = { title: string; type: CashboxType; amount: number | null; description: string };
+export type CashboxUpdateInput = Partial<CashboxCreateInput>;
 export type DistributionInput = Pick<Distribution, 'beneficiary' | 'source' | 'amount' | 'date'>;
 
 /**
  * Saisie d'une transaction depuis le journal central (mandat « Transactions =
  * journal financier central » §4). `tenantId` reste le seul paramètre de
- * sécurité (toujours `currentTenant.id`, jamais l'input). `accountNumber` et
+ * sécurité (toujours `currentTenant.id`, jamais l'input). `cashboxNumber` et
  * `memberName` sont résolus côté appelant (déjà chargés pour peupler les
  * `<select>`), passés ici pour composer `fromAccount`/`toAccount` selon le sens,
- * sans réinventer une résolution de compte/adhérent.
+ * sans réinventer une résolution de caisse/adhérent.
  *
  * PAS de champ `date` : la « Date transaction » (`Transaction.recordedAt`, dite
  * `transaction_at`) est une donnée d'AUDIT générée exclusivement au moment du
  * INSERT (voir `createTransaction`). Le frontend ne l'envoie jamais et ne peut
- * pas la modifier. La seule date métier saisissable est celle de la réunion
- * (`meetingId` → `meetingDate`).
+ * pas la modifier. La seule date métier saisissable est celle de la séance
+ * (`sessionId` → `FiscalSession.date`).
  */
 export type TransactionInput = {
-  accountNumber: string;
+  cashboxNumber: string;
   memberId?: string;
   memberName?: string;
   category: TransactionCategory;
@@ -52,39 +52,38 @@ export type TransactionInput = {
   amount: number;
   description: string;
   /**
-   * Réunion à laquelle l'opération se rapporte (mandat « RÈGLE CENTRALE — DATES
-   * DE RÉUNION »). `meetingId` = `MTG-<fiscalYearId>-<YYYYMMDD>` généré par
-   * l'exercice fiscal (`meetingService`) — jamais une date saisie librement.
-   * `fiscalYearId` porte l'isolation §12 : `createTransaction` rejette la
-   * transaction si `meetingId` n'appartient pas à cet exercice / ce tenant.
-   * `meetingDate` est la date affichée (`meeting.meeting_date`), dérivée du
-   * `meetingId` — distincte de `transaction_at` (`recordedAt`, horodatage système).
+   * Séance à laquelle l'opération se rapporte (reconstruction complète du
+   * sous-module Exercices fiscaux / Séances — remplace l'ancien `meetingId`/
+   * `meetingDate` virtuels). `sessionId` = `FiscalSession.id`, une entité
+   * RÉELLEMENT PERSISTÉE (jamais un identifiant synthétique dérivé). `fiscalYearId`
+   * porte l'isolation : `createTransaction` rejette la transaction si `sessionId`
+   * n'appartient pas à cet exercice / ce tenant. La date affichée se lit depuis
+   * `FiscalSession.date` (résolue côté appelant), jamais dupliquée sur la transaction.
    */
-  meetingId?: string;
-  meetingDate?: string;
+  sessionId?: string;
   fiscalYearId?: string;
 };
 
-function isValidAccountType(type: unknown): type is AccountType {
+function isValidCashboxType(type: unknown): type is CashboxType {
   return type === 'LIBRE' || type === 'TAUX_FIXE';
 }
 
 /** LIBRE => montant toujours `null` (jamais transmis par l'UI, mais protégé ici en dernier rempart) ; TAUX_FIXE => montant obligatoire et strictement positif (0 n'a pas de sens pour une cotisation à taux fixe). */
-function normalizeAmount(type: AccountType, amount: number | null): number | null | undefined {
+function normalizeAmount(type: CashboxType, amount: number | null): number | null | undefined {
   if (type === 'LIBRE') return null;
   if (amount === null || amount === undefined || Number.isNaN(amount) || amount <= 0) return undefined;
   return amount;
 }
 
 /**
- * Contrôle d'unicité du libellé de caisse (règle métier `hasAccountLabelConflict`,
- * `@/mocks/finance/accounts`) — dernier rempart côté « backend » : refuse la
+ * Contrôle d'unicité du libellé de caisse (règle métier `hasCashboxLabelConflict`,
+ * `@/mocks/finance/cashboxes`) — dernier rempart côté « backend » : refuse la
  * création/modification même si le garde-fou du formulaire React est contourné.
  * Unicité sur (`tenantId` + libellé NORMALISÉ : trim, espaces réduits, sans
- * casse, sans accent). `excludeAccountId` laisse une caisse garder son libellé.
+ * casse, sans accent). `excludeCashboxId` laisse une caisse garder son libellé.
  */
-function isDuplicateTitle(tenantId: string, title: string, excludeAccountId?: string): boolean {
-  return hasAccountLabelConflict(accounts, tenantId, title, excludeAccountId);
+function isDuplicateTitle(tenantId: string, title: string, excludeCashboxId?: string): boolean {
+  return hasCashboxLabelConflict(cashboxes, tenantId, title, excludeCashboxId);
 }
 
 function todayISO(): string {
@@ -92,62 +91,70 @@ function todayISO(): string {
 }
 
 /**
- * COMPTES SYSTÈME (mandat « robustifier la caisse système Achat tontine »)
+ * CAISSES SYSTÈME (mandat « robustifier la caisse système Achat tontine »)
  * ————————————————————————————————————————————————————————————————————————
- * Un compte système est identifié par `systemCode`, JAMAIS par son libellé
- * (`title` reste une pure donnée d'affichage, modifiable — sauf pour un
- * compte système, cf. `updateAccount`). Garantie : au plus UN compte par
+ * Une caisse système est identifiée par `systemCode`, JAMAIS par son libellé
+ * (`title` reste une pure donnée d'affichage, modifiable — sauf pour une
+ * caisse système, cf. `updateCashbox`). Garantie : au plus UNE caisse par
  * (`tenantId`, `systemCode`) — cf. tests dédiés, aucune contrainte DB dans ce
  * projet mock, la garantie est donc portée par cette seule fonction d'entrée.
  */
-const SYSTEM_ACCOUNT_TITLES: Record<SystemAccountCode, string> = { TONTINE_PURCHASE: 'Achat tontine' };
+const SYSTEM_CASHBOX_TITLES: Record<SystemCashboxCode, string> = {
+  TONTINE_PURCHASE: 'Achat tontine',
+  SAVINGS: 'Épargne',
+  REGISTRATION: 'Inscription',
+  EMERGENCY_FUND: 'Secours',
+};
 
-/** Traçabilité des ambiguïtés de migration (mandat §23) — plusieurs comptes candidats pour un même (tenant, code) : jamais choisi arbitrairement, jamais fusionné/supprimé, seulement signalé. */
-export type SystemAccountMigrationConflict = { tenantId: string; systemCode: SystemAccountCode; candidateAccountIds: string[] };
-export const systemAccountMigrationConflicts: SystemAccountMigrationConflict[] = [];
+/** Les 4 codes système reconnus (mandat « centre financier ») — source unique pour toute itération, jamais une liste dupliquée ailleurs. */
+export const SYSTEM_CASHBOX_CODES: SystemCashboxCode[] = ['TONTINE_PURCHASE', 'SAVINGS', 'REGISTRATION', 'EMERGENCY_FUND'];
+
+/** Traçabilité des ambiguïtés de migration (mandat §23) — plusieurs caisses candidates pour un même (tenant, code) : jamais choisi arbitrairement, jamais fusionné/supprimé, seulement signalé. */
+export type SystemCashboxMigrationConflict = { tenantId: string; systemCode: SystemCashboxCode; candidateCashboxIds: string[] };
+export const systemCashboxMigrationConflicts: SystemCashboxMigrationConflict[] = [];
 
 function tenantNameFor(tenantId: string): string {
   return tenants.find((tenant) => tenant.id === tenantId)?.name ?? tenantId;
 }
 
 /**
- * GARANTIT (create-or-adopt, jamais de doublon) l'existence du compte système
+ * GARANTIT (create-or-adopt, jamais de doublon) l'existence de la caisse système
  * `code` pour `tenantId` :
- * 1. déjà marqué `systemCode` → le retourne tel quel (idempotent) ;
- * 2. sinon, EXACTEMENT UN compte du tenant porte encore le libellé canonique
+ * 1. déjà marquée `systemCode` → la retourne telle quelle (idempotent) ;
+ * 2. sinon, EXACTEMENT UNE caisse du tenant porte encore le libellé canonique
  *    sans `systemCode` (héritage de l'ancien mécanisme par libellé, mandat
- *    §23 migration) → il est ADOPTÉ (le `systemCode` lui est assigné), jamais
- *    dupliqué ;
- * 3. plusieurs candidats (ambiguïté) → AUCUNE adoption automatique, l'ambiguïté
- *    est tracée dans `systemAccountMigrationConflicts` pour résolution
- *    manuelle, et un compte système neuf et propre est tout de même créé (une
+ *    §23 migration) → elle est ADOPTÉE (le `systemCode` lui est assigné), jamais
+ *    dupliquée ;
+ * 3. plusieurs candidates (ambiguïté) → AUCUNE adoption automatique, l'ambiguïté
+ *    est tracée dans `systemCashboxMigrationConflicts` pour résolution
+ *    manuelle, et une caisse système neuve et propre est tout de même créée (une
  *    Tontine « avec achat » ne doit jamais rester sans caisse fonctionnelle
  *    pour autant) ;
- * 4. aucun candidat → création d'un compte système neuf.
+ * 4. aucune candidate → création d'une caisse système neuve.
  * Pure et synchrone (même convention que `insertTransaction`) : appelable
  * directement depuis la factory synchrone d'un autre service (`tontines.
  * service.ts`), jamais via `mockRequest` ici.
  */
-export function ensureSystemAccount(tenantId: string, code: SystemAccountCode): AccountRecord {
-  const existing = accounts.find((account) => account.tenantId === tenantId && account.systemCode === code);
+export function ensureSystemCashbox(tenantId: string, code: SystemCashboxCode): CashboxRecord {
+  const existing = cashboxes.find((cashbox) => cashbox.tenantId === tenantId && cashbox.systemCode === code);
   if (existing) return existing;
 
-  const canonicalTitle = normalizeAccountLabel(SYSTEM_ACCOUNT_TITLES[code]);
-  const candidates = accounts.filter((account) => account.tenantId === tenantId && !account.systemCode && normalizeAccountLabel(account.title) === canonicalTitle);
+  const canonicalTitle = normalizeCashboxLabel(SYSTEM_CASHBOX_TITLES[code]);
+  const candidates = cashboxes.filter((cashbox) => cashbox.tenantId === tenantId && !cashbox.systemCode && normalizeCashboxLabel(cashbox.title) === canonicalTitle);
   if (candidates.length === 1) {
     candidates[0].systemCode = code;
     return candidates[0];
   }
   if (candidates.length > 1) {
-    systemAccountMigrationConflicts.push({ tenantId, systemCode: code, candidateAccountIds: candidates.map((account) => account.id) });
+    systemCashboxMigrationConflicts.push({ tenantId, systemCode: code, candidateCashboxIds: candidates.map((cashbox) => cashbox.id) });
   }
 
   const tenantName = tenantNameFor(tenantId);
-  const created: AccountRecord = {
+  const created: CashboxRecord = {
     id: `AC-SYS-${tenantId}-${code}`,
     tenantId,
-    accountNumber: `SYS-${tenantId}-${code}`,
-    title: SYSTEM_ACCOUNT_TITLES[code],
+    cashboxNumber: `SYS-${tenantId}-${code}`,
+    title: SYSTEM_CASHBOX_TITLES[code],
     type: 'LIBRE',
     amount: null,
     description: 'Caisse système gérée automatiquement par Tanzen — ne pas modifier ni supprimer manuellement.',
@@ -158,41 +165,45 @@ export function ensureSystemAccount(tenantId: string, code: SystemAccountCode): 
     openedOn: todayISO(),
     systemCode: code,
   };
-  accounts.push(created);
+  cashboxes.push(created);
   return created;
 }
 
-/** Résolution du compte système `code` de `tenantId`, en le garantissant au passage (`ensureSystemAccount`) — jamais par le libellé. */
-export function resolveSystemAccount(tenantId: string, code: SystemAccountCode): AccountRecord {
-  return ensureSystemAccount(tenantId, code);
+/** Résolution de la caisse système `code` de `tenantId`, en la garantissant au passage (`ensureSystemCashbox`) — jamais par le libellé. */
+export function resolveSystemCashbox(tenantId: string, code: SystemCashboxCode): CashboxRecord {
+  return ensureSystemCashbox(tenantId, code);
 }
 
-// Couverture immédiate de tous les tenants déjà connus (mandat §6) — idempotent,
-// n'écrase ni ne duplique un compte existant (adoption des caisses « Achat
-// tontine » historiques AC-015/AC-016 par libellé, création pour les tenants
-// qui n'en ont encore aucune). Un futur tenant, lui, est couvert paresseusement
-// au premier besoin réel via `resolveSystemAccount`/`ensureSystemAccount`.
-for (const tenant of tenants) ensureSystemAccount(tenant.id, 'TONTINE_PURCHASE');
+// Couverture immédiate de tous les tenants déjà connus, pour les 4 codes
+// système (mandat « centre financier ») — idempotent, n'écrase ni ne duplique
+// une caisse existante (adoption des caisses historiques par libellé : « Achat
+// tontine » AC-015/AC-016, « Epargne »/« Inscription »/« Secours » AC-009/
+// AC-010/AC-011, création pour les tenants qui n'en ont encore aucune). Un
+// futur tenant, lui, est couvert paresseusement au premier besoin réel via
+// `resolveSystemCashbox`/`ensureSystemCashbox`.
+for (const tenant of tenants) {
+  for (const code of SYSTEM_CASHBOX_CODES) ensureSystemCashbox(tenant.id, code);
+}
 
-/** IDs des membres dont l'adhésion à cette caisse est ACTIVE (non clôturée) — source du cache `Account.memberIds`. */
-function activeMemberIdsOf(tenantId: string, accountId: string): string[] {
+/** IDs des membres dont l'adhésion à cette caisse est ACTIVE (non clôturée) — source du cache `Cashbox.memberIds`. */
+function activeMemberIdsOf(tenantId: string, cashboxId: string): string[] {
   return [
     ...new Set(
-      accountMemberships
-        .filter((m) => m.tenantId === tenantId && m.accountId === accountId && m.endDate === null)
+      cashboxMemberships
+        .filter((m) => m.tenantId === tenantId && m.cashboxId === cashboxId && m.endDate === null)
         .map((m) => m.memberId),
     ),
   ];
 }
 
 /**
- * Projette une caisse stockée vers l'`Account` complet : solde + dernier
- * mouvement calculés depuis le journal (`resolveAccount`), et `memberIds` projeté
- * depuis `AccountMembership` (adhésions actives) — le champ stocké devient un
+ * Projette une caisse stockée vers la `Cashbox` complète : solde + dernier
+ * mouvement calculés depuis le journal (`resolveCashbox`), et `memberIds` projeté
+ * depuis `CashboxMembership` (adhésions actives) — le champ stocké devient un
  * simple cache, jamais faisant autorité.
  */
-function withComputedBalance(account: AccountRecord): Account {
-  return { ...resolveAccount(account, transactions), memberIds: activeMemberIdsOf(account.tenantId, account.id) };
+function withComputedBalance(cashbox: CashboxRecord): Cashbox {
+  return { ...resolveCashbox(cashbox, transactions), memberIds: activeMemberIdsOf(cashbox.tenantId, cashbox.id) };
 }
 
 /**
@@ -213,7 +224,7 @@ function withComputedBalance(account: AccountRecord): Account {
  */
 export function insertTransaction(tenantId: string, input: TransactionInput): Transaction | undefined {
   const amount = Number(input.amount);
-  if (!input.accountNumber || !Number.isFinite(amount) || amount <= 0) return undefined;
+  if (!input.cashboxNumber || !Number.isFinite(amount) || amount <= 0) return undefined;
   // Validations de classification (mandat §22) : catégorie officielle, et
   // combinaison catégorie/sous-catégorie cohérente (AUTRES ⇔ sous-catégorie
   // valide ; EPARGNE/PRET/REMBOURSEMENT ⇒ aucune sous-catégorie). Empêche
@@ -221,11 +232,11 @@ export function insertTransaction(tenantId: string, input: TransactionInput): Tr
   // catégorie (ex. `EPARGNE` + `FRAIS`).
   if (!isTransactionCategory(input.category)) return undefined;
   if (!isClassificationValid(input.category, input.subcategory ?? null)) return undefined;
-  // Isolation §12 : une réunion sélectionnée DOIT appartenir à l'exercice fiscal
-  // ET au tenant de l'opération (l'id `MTG-<fiscalYearId>-…` encode les deux).
-  if (input.meetingId) {
+  // Isolation : une séance sélectionnée DOIT appartenir à l'exercice fiscal ET
+  // au tenant de l'opération — jamais une séance d'un autre exercice/tenant.
+  if (input.sessionId) {
     if (!input.fiscalYearId) return undefined;
-    if (!meetingService.validateMeetingBelongsToExercise(input.meetingId, input.fiscalYearId, tenantId)) return undefined;
+    if (!validateSessionBelongsToExercise(input.sessionId, input.fiscalYearId, tenantId)) return undefined;
   }
   const subcategory = input.category === 'AUTRES' ? input.subcategory ?? undefined : undefined;
   const now = new Date();
@@ -241,15 +252,13 @@ export function insertTransaction(tenantId: string, input: TransactionInput): Tr
     category: input.category,
     subcategory,
     status: 'completed',
-    // Même convention que le seed / `transactionAccountLabel` : pour un crédit
-    // les fonds vont vers le compte, pour un débit ils en sortent.
-    fromAccount: input.type === 'credit' ? (memberName ?? input.accountNumber) : input.accountNumber,
-    toAccount: input.type === 'credit' ? input.accountNumber : (memberName ?? input.accountNumber),
+    // Même convention que le seed / `transactionCashboxLabel` : pour un crédit
+    // les fonds vont vers la caisse, pour un débit ils en sortent.
+    fromAccount: input.type === 'credit' ? (memberName ?? input.cashboxNumber) : input.cashboxNumber,
+    toAccount: input.type === 'credit' ? input.cashboxNumber : (memberName ?? input.cashboxNumber),
     description: input.description.trim(),
     memberId: input.memberId || undefined,
-    meetingId: input.meetingId || undefined,
-    // `meetingDate` affichée = date résolue depuis `meetingId` (jamais une saisie libre).
-    meetingDate: input.meetingId ? meetingService.resolveMeetingDate(input.meetingId) ?? input.meetingDate ?? undefined : undefined,
+    sessionId: input.sessionId || undefined,
     fiscalYearId: input.fiscalYearId || undefined,
     recordedAt: now.toISOString(),
   };
@@ -258,25 +267,25 @@ export function insertTransaction(tenantId: string, input: TransactionInput): Tr
 }
 
 export const financeService = {
-  listAccounts: (tenantId: string) => mockRequest(() => accounts.filter((account) => account.tenantId === tenantId).map(withComputedBalance)),
-  getAccount: (tenantId: string, accountId: string) =>
+  listCashboxes: (tenantId: string) => mockRequest(() => cashboxes.filter((cashbox) => cashbox.tenantId === tenantId).map(withComputedBalance)),
+  getCashbox: (tenantId: string, cashboxId: string) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      return account ? withComputedBalance(account) : undefined;
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      return cashbox ? withComputedBalance(cashbox) : undefined;
     }),
 
-  createAccount: (tenantId: string, tenantName: string, input: AccountCreateInput) =>
+  createCashbox: (tenantId: string, tenantName: string, input: CashboxCreateInput) =>
     mockRequest(() => {
       const title = input.title.trim();
-      if (!title || !isValidAccountType(input.type)) return undefined;
+      if (!title || !isValidCashboxType(input.type)) return undefined;
       const amount = normalizeAmount(input.type, input.amount);
       if (amount === undefined) return undefined;
       if (isDuplicateTitle(tenantId, title)) return undefined;
-      const account: AccountRecord = {
-        id: `AC-${String(accounts.length + 1).padStart(3, '0')}`,
+      const cashbox: CashboxRecord = {
+        id: `AC-${String(cashboxes.length + 1).padStart(3, '0')}`,
         tenantId,
         tenantName,
-        accountNumber: `CX-${tenantId}-${String(accounts.length + 1).padStart(3, '0')}`,
+        cashboxNumber: `CX-${tenantId}-${String(cashboxes.length + 1).padStart(3, '0')}`,
         title,
         type: input.type,
         amount,
@@ -288,36 +297,36 @@ export const financeService = {
         status: 'active',
         openedOn: new Date().toISOString().slice(0, 10),
       };
-      accounts.push(account);
-      return withComputedBalance(account);
+      cashboxes.push(cashbox);
+      return withComputedBalance(cashbox);
     }),
 
-  updateAccount: (tenantId: string, accountId: string, patch: AccountUpdateInput) =>
+  updateCashbox: (tenantId: string, cashboxId: string, patch: CashboxUpdateInput) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return undefined;
-      const nextType = patch.type ?? account.type;
-      if (!isValidAccountType(nextType)) return undefined;
-      const nextTitle = (patch.title ?? account.title).trim();
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
+      const nextType = patch.type ?? cashbox.type;
+      if (!isValidCashboxType(nextType)) return undefined;
+      const nextTitle = (patch.title ?? cashbox.title).trim();
       if (!nextTitle) return undefined;
       /**
-       * PROTECTION COMPTE SYSTÈME (mandat « robustifier Achat tontine » §10) —
-       * `systemCode` n'est pas dans `AccountUpdateInput` (jamais modifiable via
+       * PROTECTION CAISSE SYSTÈME (mandat « robustifier Achat tontine » §10) —
+       * `systemCode` n'est pas dans `CashboxUpdateInput` (jamais modifiable via
        * cette API, par construction du type). Seule son IDENTITÉ VISIBLE
        * (`title`) reste théoriquement atteignable par ce patch : un renommage
        * réel (le libellé normalisé change effectivement) est refusé — un
        * simple ré-enregistrement du MÊME libellé (formulaire non modifié)
        * reste autorisé, jamais bloqué inutilement.
        */
-      if (isSystemAccount(account) && normalizeAccountLabel(nextTitle) !== normalizeAccountLabel(account.title)) return undefined;
-      if (patch.title && isDuplicateTitle(tenantId, nextTitle, accountId)) return undefined;
-      const nextAmount = normalizeAmount(nextType, patch.amount !== undefined ? patch.amount : account.amount);
+      if (isSystemCashbox(cashbox) && normalizeCashboxLabel(nextTitle) !== normalizeCashboxLabel(cashbox.title)) return undefined;
+      if (patch.title && isDuplicateTitle(tenantId, nextTitle, cashboxId)) return undefined;
+      const nextAmount = normalizeAmount(nextType, patch.amount !== undefined ? patch.amount : cashbox.amount);
       if (nextAmount === undefined) return undefined;
-      account.title = nextTitle;
-      account.type = nextType;
-      account.amount = nextAmount;
-      if (patch.description !== undefined) account.description = patch.description.trim();
-      return withComputedBalance(account);
+      cashbox.title = nextTitle;
+      cashbox.type = nextType;
+      cashbox.amount = nextAmount;
+      if (patch.description !== undefined) cashbox.description = patch.description.trim();
+      return withComputedBalance(cashbox);
     }),
 
   /**
@@ -326,40 +335,40 @@ export const financeService = {
    * uniquement à corriger la situation antérieure au journal. Le solde courant
    * reste `openingBalance + Σ journal`, recalculé à la lecture.
    */
-  recordAccountMovement: (tenantId: string, accountId: string, amount: number) =>
+  recordCashboxMovement: (tenantId: string, cashboxId: string, amount: number) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return undefined;
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
       if (!Number.isFinite(amount) || amount <= 0) return undefined;
-      account.openingBalance += amount;
-      account.openedOn = new Date().toISOString().slice(0, 10);
-      return withComputedBalance(account);
+      cashbox.openingBalance += amount;
+      cashbox.openedOn = new Date().toISOString().slice(0, 10);
+      return withComputedBalance(cashbox);
     }),
 
   /**
-   * Ne supprime jamais un compte ayant déjà des mouvements (§8) : bascule sur
+   * Ne supprime jamais une caisse ayant déjà des mouvements (§8) : bascule sur
    * une désactivation logique à la place. `deleted: true` uniquement si la
    * suppression physique a réellement eu lieu.
    *
-   * PROTECTION COMPTE SYSTÈME (mandat « robustifier Achat tontine » §11/§12) —
+   * PROTECTION CAISSE SYSTÈME (mandat « robustifier Achat tontine » §11/§12) —
    * refusée EXPLICITEMENT avant toute autre logique, qu'elle aurait sinon
    * supprimé physiquement OU désactivé : une Tontine « avec achat » ne doit
    * jamais se retrouver avec une caisse système absente/inactive suite à une
    * action utilisateur ordinaire. `systemProtected: true` distingue ce refus
-   * du cas générique (compte introuvable → `undefined`).
+   * du cas générique (caisse introuvable → `undefined`).
    */
-  deleteAccount: (tenantId: string, accountId: string) =>
+  deleteCashbox: (tenantId: string, cashboxId: string) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return undefined;
-      if (isSystemAccount(account)) return { deleted: false, deactivated: false, systemProtected: true } as const;
-      const hasMovements = transactions.some((transaction) => transaction.fromAccount === account.accountNumber || transaction.toAccount === account.accountNumber);
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
+      if (isSystemCashbox(cashbox)) return { deleted: false, deactivated: false, systemProtected: true } as const;
+      const hasMovements = transactions.some((transaction) => transaction.fromAccount === cashbox.cashboxNumber || transaction.toAccount === cashbox.cashboxNumber);
       if (hasMovements) {
-        account.status = 'inactive';
+        cashbox.status = 'inactive';
         return { deleted: false, deactivated: true } as const;
       }
-      const index = accounts.findIndex((item) => item.id === accountId);
-      accounts.splice(index, 1);
+      const index = cashboxes.findIndex((item) => item.id === cashboxId);
+      cashboxes.splice(index, 1);
       return { deleted: true, deactivated: false } as const;
     }),
 
@@ -367,18 +376,18 @@ export const financeService = {
    * RÉACTIVATION (mandat « Évolution du cycle de vie des exercices fiscaux »
    * §33/§36 — audit des objets clôturables) : seul objet, hors exercice
    * fiscal, où la réouverture transverse a été jugée justifiée — une caisse
-   * `inactive` (désactivée par `deleteAccount` faute de pouvoir la supprimer,
+   * `inactive` (désactivée par `deleteCashbox` faute de pouvoir la supprimer,
    * cf. ci-dessus) ne perd aucune donnée financière, réactiver n'est qu'un
    * flip de statut sans risque d'incohérence comptable. Refuse si la caisse
    * n'existe pas ou n'est pas `inactive` (pas de no-op silencieux sur une
    * caisse déjà `active`). Auditée directement dans `auditEvents` (canonique,
    * `src/mocks/audit/audit-events.ts`) — aucun second système d'audit créé.
    */
-  reactivateAccount: (tenantId: string, accountId: string) =>
+  reactivateCashbox: (tenantId: string, cashboxId: string) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account || account.status !== 'inactive') return undefined;
-      account.status = 'active';
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox || cashbox.status !== 'inactive') return undefined;
+      cashbox.status = 'active';
       const event: AuditEvent = {
         id: `AUD-FIN-${Date.now()}-${auditEvents.length}`,
         tenantId,
@@ -386,72 +395,72 @@ export const financeService = {
         actorId: currentUser.id,
         actorName: currentUser.name,
         module: 'finance',
-        action: 'finance.account.reactivated',
+        action: 'finance.cashbox.reactivated',
         eventType: 'action',
-        resourceType: 'account',
-        resourceId: account.id,
-        resourceLabel: account.title,
+        resourceType: 'cashbox',
+        resourceId: cashbox.id,
+        resourceLabel: cashbox.title,
         status: 'success',
         sensitive: false,
-        correlationId: account.id,
+        correlationId: cashbox.id,
         before: { status: 'inactive' },
         after: { status: 'active' },
       };
       auditEvents.push(event);
-      return withComputedBalance(account);
+      return withComputedBalance(cashbox);
     }),
 
-  /** Adhérents actuellement adhérents d'une caisse — dérivé de `AccountMembership` (adhésions actives), filtré tenant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
-  listAccountMembers: (tenantId: string, accountId: string) =>
+  /** Adhérents actuellement adhérents d'une caisse — dérivé de `CashboxMembership` (adhésions actives), filtré tenant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
+  listCashboxMembers: (tenantId: string, cashboxId: string) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return [];
-      const active = new Set(activeMemberIdsOf(tenantId, accountId));
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return [];
+      const active = new Set(activeMemberIdsOf(tenantId, cashboxId));
       return members.filter((member) => member.tenantId === tenantId && active.has(member.id));
     }),
 
   /** Toutes les adhésions du tenant (actives et clôturées) — source de vérité datée pour le moteur de position. */
-  listAccountMemberships: (tenantId: string) =>
-    mockRequest(() => accountMemberships.filter((membership) => membership.tenantId === tenantId)),
+  listCashboxMemberships: (tenantId: string) =>
+    mockRequest(() => cashboxMemberships.filter((membership) => membership.tenantId === tenantId)),
 
-  /** Affecte des membres à une caisse — ouvre une `AccountMembership` (à ce jour) pour chaque membre éligible qui n'en a pas déjà une active. `Account.memberIds` (cache) se recalcule à la projection. */
-  addAccountMembers: (tenantId: string, accountId: string, memberIds: string[]) =>
+  /** Affecte des membres à une caisse — ouvre une `CashboxMembership` (à ce jour) pour chaque membre éligible qui n'en a pas déjà une active. `Cashbox.memberIds` (cache) se recalcule à la projection. */
+  addCashboxMembers: (tenantId: string, cashboxId: string, memberIds: string[]) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return undefined;
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
       const eligibleIds = members
         .filter((member) => member.tenantId === tenantId && memberIds.includes(member.id))
         .map((member) => member.id);
       const day = todayISO();
       for (const memberId of eligibleIds) {
-        const alreadyActive = accountMemberships.some(
-          (m) => m.tenantId === tenantId && m.accountId === accountId && m.memberId === memberId && m.endDate === null,
+        const alreadyActive = cashboxMemberships.some(
+          (m) => m.tenantId === tenantId && m.cashboxId === cashboxId && m.memberId === memberId && m.endDate === null,
         );
         if (alreadyActive) continue;
-        accountMemberships.push({
-          id: `AM-${String(accountMemberships.length + 1).padStart(3, '0')}`,
+        cashboxMemberships.push({
+          id: `AM-${String(cashboxMemberships.length + 1).padStart(3, '0')}`,
           tenantId,
-          accountId,
+          cashboxId,
           memberId,
           startDate: day,
           endDate: null,
           status: 'active',
         });
       }
-      return withComputedBalance(account);
+      return withComputedBalance(cashbox);
     }),
 
   /** Retire des membres d'une caisse — CLÔT leur adhésion active (`endDate` = aujourd'hui), jamais de suppression : l'historique reste reconstructible. */
-  removeAccountMembers: (tenantId: string, accountId: string, memberIds: string[]) =>
+  removeCashboxMembers: (tenantId: string, cashboxId: string, memberIds: string[]) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === accountId, tenantId);
-      if (!account) return undefined;
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
       const toRemove = new Set(memberIds);
       const day = todayISO();
-      for (const membership of accountMemberships) {
+      for (const membership of cashboxMemberships) {
         if (
           membership.tenantId === tenantId &&
-          membership.accountId === accountId &&
+          membership.cashboxId === cashboxId &&
           membership.endDate === null &&
           toRemove.has(membership.memberId)
         ) {
@@ -459,7 +468,7 @@ export const financeService = {
           membership.status = 'ended';
         }
       }
-      return withComputedBalance(account);
+      return withComputedBalance(cashbox);
     }),
 
   listTransactions: (tenantId: string) => mockRequest(() => transactions.filter((transaction) => transaction.tenantId === tenantId)),
@@ -467,7 +476,7 @@ export const financeService = {
    * Vue consolidée du tenant bornée par un Fiscal Year (mandat « Finance →
    * Transactions ») — `startDate`/`endDate` sont toujours celles du
    * `FiscalYear` déjà résolu côté appelant via `useFiscalYear()` (jamais une
-   * caisse/compte particulier comme périmètre). `tenantId` reste le seul
+   * caisse particulière comme périmètre). `tenantId` reste le seul
    * paramètre de sécurité, comme partout ailleurs dans ce service — toujours
    * `currentTenant.id`, jamais une valeur fournie par un formulaire. Bornes
    * inclusives, comparables lexicographiquement (`Transaction.date` et les
@@ -488,8 +497,8 @@ export const financeService = {
    * `recordedAt` (`transaction_at`) = horodatage d'AUDIT, généré ICI au moment
    * de l'écriture (jamais fourni par l'appelant, jamais modifiable ensuite via
    * l'UI — cf. `updateTransaction`). `date` reprend le jour de cet horodatage :
-   * c'est un dérivé de `recordedAt`, pas une saisie. `meetingDate` porte, elle,
-   * la date métier de la réunion.
+   * c'est un dérivé de `recordedAt`, pas une saisie. La date métier de la
+   * séance se lit, elle, via `FiscalSession.date` (`sessionId`).
    */
   createTransaction: (tenantId: string, input: TransactionInput) => mockRequest(() => insertTransaction(tenantId, input)),
 
@@ -498,7 +507,7 @@ export const financeService = {
    * le patch : une correction historique doit passer par un mécanisme
    * d'annulation/correction, jamais par une réécriture de l'horodatage.
    */
-  updateTransaction: (tenantId: string, transactionId: string, patch: Partial<Pick<Transaction, 'category' | 'subcategory' | 'type' | 'amount' | 'description' | 'meetingId' | 'meetingDate'>>) =>
+  updateTransaction: (tenantId: string, transactionId: string, patch: Partial<Pick<Transaction, 'category' | 'subcategory' | 'type' | 'amount' | 'description' | 'sessionId'>>) =>
     mockRequest(() => {
       const transaction = getTenantScoped(transactions, (item) => item.id === transactionId, tenantId);
       if (!transaction || transaction.status === 'cancelled') return undefined;
@@ -520,17 +529,14 @@ export const financeService = {
       }
       if (patch.type !== undefined) transaction.type = patch.type;
       if (patch.description !== undefined) transaction.description = patch.description.trim();
-      if (patch.meetingId !== undefined) {
-        const nextMeetingId = patch.meetingId || undefined;
-        // Isolation §12 : une nouvelle réunion doit rester dans l'exercice/tenant de la transaction.
-        if (nextMeetingId) {
+      if (patch.sessionId !== undefined) {
+        const nextSessionId = patch.sessionId || undefined;
+        // Isolation : une nouvelle séance doit rester dans l'exercice/tenant de la transaction.
+        if (nextSessionId) {
           if (!transaction.fiscalYearId) return undefined;
-          if (!meetingService.validateMeetingBelongsToExercise(nextMeetingId, transaction.fiscalYearId, tenantId)) return undefined;
+          if (!validateSessionBelongsToExercise(nextSessionId, transaction.fiscalYearId, tenantId)) return undefined;
         }
-        transaction.meetingId = nextMeetingId;
-        transaction.meetingDate = nextMeetingId ? meetingService.resolveMeetingDate(nextMeetingId) ?? undefined : undefined;
-      } else if (patch.meetingDate !== undefined) {
-        transaction.meetingDate = patch.meetingDate || undefined;
+        transaction.sessionId = nextSessionId;
       }
       return transaction;
     }),

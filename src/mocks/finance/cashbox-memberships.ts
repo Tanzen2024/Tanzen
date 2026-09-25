@@ -1,6 +1,6 @@
 /**
  * ADHÉSION D'UN MEMBRE À UNE CAISSE — entité datée (mandat « moteur de position
- * financière », phase 1). Comble le GAP architectural : `Account.memberIds` était
+ * financière », phase 1). Comble le GAP architectural : `Cashbox.memberIds` était
  * un simple ensemble d'IDs, sans date ni historique, et vide dans 100 % du seed.
  *
  * Règle métier : pour un adhérent, « Toutes les caisses » = les caisses dont il
@@ -12,19 +12,19 @@
  * Forme calquée sur `Position { role, startDate, endDate }` (gouvernance) — le
  * seul patron de relation datée déjà présent dans le modèle.
  *
- * `Account.memberIds` est CONSERVÉ comme cache dénormalisé (adhésions actives du
+ * `Cashbox.memberIds` est CONSERVÉ comme cache dénormalisé (adhésions actives du
  * jour), projeté à la lecture par `financeService` — jamais supprimé brutalement.
  */
-import type { AccountRecord } from './accounts';
+import type { CashboxRecord } from './cashboxes';
 
-export type AccountMembershipStatus = 'active' | 'ended';
+export type CashboxMembershipStatus = 'active' | 'ended';
 
-export type AccountMembership = {
+export type CashboxMembership = {
   id: string;
   /** Isolation stricte — jamais traversée, comme partout ailleurs dans le modèle. */
   tenantId: string;
-  /** → `Account.id`. */
-  accountId: string;
+  /** → `Cashbox.id`. */
+  cashboxId: string;
   /** → `Member.id` (même tenant, vérifié à l'écriture par le service). */
   memberId: string;
   /** Adhésion effective — ISO `YYYY-MM-DD`, comparable lexicographiquement. */
@@ -32,12 +32,12 @@ export type AccountMembership = {
   /** Résiliation — `null` = adhésion en cours. Un retrait CLÔT l'adhésion (jamais de suppression). */
   endDate: string | null;
   /** Dérivable de `endDate` vs aujourd'hui ; matérialisé pour la lisibilité et les filtres. */
-  status: AccountMembershipStatus;
+  status: CashboxMembershipStatus;
 };
 
 /**
  * Seed — tenant T-001 (Coopérative Sutura), membres réellement seedés
- * (M-001 Fatou Ndiaye, M-006 Cheikh Diop) et caisses réelles (`accounts.ts`).
+ * (M-001 Fatou Ndiaye, M-006 Cheikh Diop) et caisses réelles (`cashboxes.ts`).
  *
  *   Fatou (M-001) — « cas Jean Dupont » : adhérente de 3 caisses, dont une SANS
  *   transaction (Secours / AC-011) qui doit tout de même apparaître à 0 FCFA
@@ -49,13 +49,13 @@ export type AccountMembership = {
  *
  * T-002 : une adhésion pour prouver l'isolation multi-tenant.
  */
-export const accountMemberships: AccountMembership[] = [
-  { id: 'AM-001', tenantId: 'T-001', accountId: 'AC-001', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
-  { id: 'AM-002', tenantId: 'T-001', accountId: 'AC-002', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
-  { id: 'AM-003', tenantId: 'T-001', accountId: 'AC-011', memberId: 'M-001', startDate: '2026-08-01', endDate: null, status: 'active' },
-  { id: 'AM-004', tenantId: 'T-001', accountId: 'AC-001', memberId: 'M-006', startDate: '2026-01-01', endDate: null, status: 'active' },
-  { id: 'AM-005', tenantId: 'T-001', accountId: 'AC-002', memberId: 'M-006', startDate: '2026-01-01', endDate: '2026-06-30', status: 'ended' },
-  { id: 'AM-006', tenantId: 'T-002', accountId: 'AC-004', memberId: 'M-002', startDate: '2026-01-01', endDate: null, status: 'active' },
+export const cashboxMemberships: CashboxMembership[] = [
+  { id: 'AM-001', tenantId: 'T-001', cashboxId: 'AC-001', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'AM-002', tenantId: 'T-001', cashboxId: 'AC-002', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'AM-003', tenantId: 'T-001', cashboxId: 'AC-011', memberId: 'M-001', startDate: '2026-08-01', endDate: null, status: 'active' },
+  { id: 'AM-004', tenantId: 'T-001', cashboxId: 'AC-001', memberId: 'M-006', startDate: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'AM-005', tenantId: 'T-001', cashboxId: 'AC-002', memberId: 'M-006', startDate: '2026-01-01', endDate: '2026-06-30', status: 'ended' },
+  { id: 'AM-006', tenantId: 'T-002', cashboxId: 'AC-004', memberId: 'M-002', startDate: '2026-01-01', endDate: null, status: 'active' },
 ];
 
 /**
@@ -65,10 +65,10 @@ export const accountMemberships: AccountMembership[] = [
  * accès aux singletons, donc trivial à tester en isolation.
  */
 export function membershipsAsOf(
-  memberships: AccountMembership[],
+  memberships: CashboxMembership[],
   memberId: string,
   asOfDate: string,
-): AccountMembership[] {
+): CashboxMembership[] {
   return memberships.filter(
     (m) =>
       m.memberId === memberId &&
@@ -78,36 +78,36 @@ export function membershipsAsOf(
 }
 
 /** IDs de caisses dont le membre est adhérent à `asOfDate` — dédoublonnés. */
-export function accountIdsOfMemberAsOf(
-  memberships: AccountMembership[],
+export function cashboxIdsOfMemberAsOf(
+  memberships: CashboxMembership[],
   memberId: string,
   asOfDate: string,
 ): string[] {
-  return [...new Set(membershipsAsOf(memberships, memberId, asOfDate).map((m) => m.accountId))];
+  return [...new Set(membershipsAsOf(memberships, memberId, asOfDate).map((m) => m.cashboxId))];
 }
 
 /**
- * Caisses (objets) dont le membre est adhérent à `asOfDate`. `accounts` est le
+ * Caisses (objets) dont le membre est adhérent à `asOfDate`. `cashboxes` est le
  * tableau tenant-scopé fourni par l'appelant ; l'ordre d'origine est préservé.
  */
-export function accountsOfMemberAsOf<T extends Pick<AccountRecord, 'id'>>(
-  memberships: AccountMembership[],
-  accounts: T[],
+export function cashboxesOfMemberAsOf<T extends Pick<CashboxRecord, 'id'>>(
+  memberships: CashboxMembership[],
+  cashboxes: T[],
   memberId: string,
   asOfDate: string,
 ): T[] {
-  const ids = new Set(accountIdsOfMemberAsOf(memberships, memberId, asOfDate));
-  return accounts.filter((account) => ids.has(account.id));
+  const ids = new Set(cashboxIdsOfMemberAsOf(memberships, memberId, asOfDate));
+  return cashboxes.filter((cashbox) => ids.has(cashbox.id));
 }
 
 /** `true` si le membre est adhérent de cette caisse précise à `asOfDate`. */
-export function isMemberOfAccountAsOf(
-  memberships: AccountMembership[],
+export function isMemberOfCashboxAsOf(
+  memberships: CashboxMembership[],
   memberId: string,
-  accountId: string,
+  cashboxId: string,
   asOfDate: string,
 ): boolean {
-  return membershipsAsOf(memberships, memberId, asOfDate).some((m) => m.accountId === accountId);
+  return membershipsAsOf(memberships, memberId, asOfDate).some((m) => m.cashboxId === cashboxId);
 }
 
 /**
@@ -118,24 +118,24 @@ export function isMemberOfAccountAsOf(
  * active le jour de chaque transaction, restent comptés — cf. `flows`).
  */
 export function membershipsOverlapping(
-  memberships: AccountMembership[],
+  memberships: CashboxMembership[],
   memberId: string,
   from: string,
   to: string,
-): AccountMembership[] {
+): CashboxMembership[] {
   return memberships.filter(
     (m) => m.memberId === memberId && m.startDate <= to && (m.endDate === null || from <= m.endDate),
   );
 }
 
 /** Caisses (objets) dont le membre a été adhérent à un moment de `[from, to]`. */
-export function accountsOfMemberDuring<T extends Pick<AccountRecord, 'id'>>(
-  memberships: AccountMembership[],
-  accounts: T[],
+export function cashboxesOfMemberDuring<T extends Pick<CashboxRecord, 'id'>>(
+  memberships: CashboxMembership[],
+  cashboxes: T[],
   memberId: string,
   from: string,
   to: string,
 ): T[] {
-  const ids = new Set(membershipsOverlapping(memberships, memberId, from, to).map((m) => m.accountId));
-  return accounts.filter((account) => ids.has(account.id));
+  const ids = new Set(membershipsOverlapping(memberships, memberId, from, to).map((m) => m.cashboxId));
+  return cashboxes.filter((cashbox) => ids.has(cashbox.id));
 }

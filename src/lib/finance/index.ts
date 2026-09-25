@@ -20,7 +20,7 @@ export type {
   FinanceCtx,
   BalanceLine,
   BalanceResult,
-  FlowAccountLine,
+  FlowCashboxLine,
   FlowResult,
   BaselineResolution,
   ClosingComputation,
@@ -29,11 +29,11 @@ export type {
   OpeningComputation,
   CarryForwardOutcome,
   IntegrityMismatch,
-  MemberAccountLine,
+  MemberCashboxLine,
   MemberCreditSummary,
   MemberFinancialPosition,
 } from './types';
-export { scopeKey, accountsOfAsOf, accountsOfDuring, type Perimeter } from './scope';
+export { scopeKey, cashboxesOfAsOf, cashboxesOfDuring, type Perimeter } from './scope';
 export { balanceAsOf, resolveBaseline } from './balance';
 export { flows } from './flows';
 export { referenceDate } from './reference-date';

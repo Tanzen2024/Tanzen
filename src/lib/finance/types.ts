@@ -1,6 +1,6 @@
-import type { AccountRecord } from '@/mocks/finance/accounts';
+import type { CashboxRecord } from '@/mocks/finance/cashboxes';
 import type { Transaction } from '@/mocks/finance/transactions';
-import type { AccountMembership } from '@/mocks/finance/account-memberships';
+import type { CashboxMembership } from '@/mocks/finance/cashbox-memberships';
 import type { OpeningEntry } from '@/mocks/finance/opening-entries';
 import type { ClosingEntry } from '@/mocks/finance/closing-entries';
 import type { Loan } from '@/mocks/finance/loans';
@@ -9,16 +9,16 @@ import type { Repayment } from '@/mocks/finance/repayments';
 /**
  * Périmètre d'une consultation financière. « Toutes les caisses » a DEUX
  * significations distinctes selon le point de vue :
- *   - TENANT_ALL_ACCOUNTS  → toutes les caisses du tenant
- *   - MEMBER_ALL_ACCOUNTS  → uniquement les caisses dont le membre est adhérent
- *                            à la date considérée (source = AccountMembership,
+ *   - TENANT_ALL_CASHBOXES  → toutes les caisses du tenant
+ *   - MEMBER_ALL_CASHBOXES  → uniquement les caisses dont le membre est adhérent
+ *                            à la date considérée (source = CashboxMembership,
  *                            jamais les transactions trouvées)
  */
 export type FinancialScope =
-  | { kind: 'TENANT_ALL_ACCOUNTS' }
-  | { kind: 'ACCOUNT'; accountId: string }
-  | { kind: 'MEMBER_ALL_ACCOUNTS'; memberId: string }
-  | { kind: 'MEMBER_ACCOUNT'; memberId: string; accountId: string };
+  | { kind: 'TENANT_ALL_CASHBOXES' }
+  | { kind: 'CASHBOX'; cashboxId: string }
+  | { kind: 'MEMBER_ALL_CASHBOXES'; memberId: string }
+  | { kind: 'MEMBER_CASHBOX'; memberId: string; cashboxId: string };
 
 /**
  * Données d'entrée du moteur — TOUJOURS déjà filtrées par tenant (c'est le
@@ -27,13 +27,13 @@ export type FinancialScope =
  * ordre-indépendants et exécutables un par un.
  */
 export type FinanceCtx = {
-  accounts: AccountRecord[];
+  cashboxes: CashboxRecord[];
   transactions: Transaction[];
-  memberships: AccountMembership[];
+  memberships: CashboxMembership[];
   /**
    * Étape 6 — OPTIONNELS pour ne rien casser des fixtures/tests existants
    * (steps 1-5) : absent ou vide ⇒ `baseline()` retombe sur le comportement
-   * LEGACY inchangé (`Account.openingBalance`, sans condition de date). Voir
+   * LEGACY inchangé (`Cashbox.openingBalance`, sans condition de date). Voir
    * `balance.ts` (`baseline`) et `closing.ts`/`carry-forward.ts`.
    */
   openingEntries?: OpeningEntry[];
@@ -42,7 +42,7 @@ export type FinanceCtx = {
    * Étape 7 — OPTIONNELS, même raison qu'`openingEntries`/`closingEntries` :
    * absents ⇒ `memberFinancialPosition` traite le membre comme sans prêt/
    * remboursement (`credit` reste `undefined`). `balanceAsOf`/`flows` ne les
-   * lisent jamais (Loan n'a pas d'`accountId` — hors de leur périmètre).
+   * lisent jamais (Loan n'a pas d'`cashboxId` — hors de leur périmètre).
    */
   loans?: Loan[];
   repayments?: Repayment[];
@@ -51,12 +51,12 @@ export type FinanceCtx = {
 /**
  * Une ligne du résultat, par caisse du périmètre.
  *
- * `TENANT_ALL_ACCOUNTS` / `ACCOUNT` — SOLDE COMPTABLE de la caisse à `asOfDate` :
- *   `opening` (= `account.openingBalance` tant qu'il n'existe pas d'OpeningEntry)
+ * `TENANT_ALL_CASHBOXES` / `CASHBOX` — SOLDE COMPTABLE de la caisse à `asOfDate` :
+ *   `opening` (= `cashbox.openingBalance` tant qu'il n'existe pas d'OpeningEntry)
  *   `+ credits − debits` (effets cumulés des transactions `completed` ≤ `asOfDate`
  *   touchant la caisse).
  *
- * `MEMBER_ALL_ACCOUNTS` / `MEMBER_ACCOUNT` — FLUX NET CUMULÉ DU MEMBRE dans cette
+ * `MEMBER_ALL_CASHBOXES` / `MEMBER_CASHBOX` — FLUX NET CUMULÉ DU MEMBRE dans cette
  *   caisse à `asOfDate` (Σ effets des seules transactions du membre, sur les
  *   jours où son adhésion était active). `opening` vaut 0 : le report d'ouverture
  *   d'une caisse n'appartient pas à un membre. Ce n'est PAS la « position
@@ -64,9 +64,9 @@ export type FinanceCtx = {
  *   épargne / encours de prêt / autres, décision encore ouverte).
  */
 export type BalanceLine = {
-  accountId: string;
-  accountNumber: string;
-  accountTitle: string;
+  cashboxId: string;
+  cashboxNumber: string;
+  cashboxTitle: string;
   opening: number;
   credits: number;
   debits: number;
@@ -78,23 +78,23 @@ export type BalanceLine = {
 export type BalanceResult = {
   scopeKey: string;
   asOfDate: string;
-  /** Σ des `balance` de `byAccount`. */
+  /** Σ des `balance` de `byCashbox`. */
   total: number;
-  byAccount: BalanceLine[];
+  byCashbox: BalanceLine[];
   /**
    * `true` pour un scope membre quand le membre n'est adhérent d'AUCUNE caisse
-   * du périmètre à `asOfDate` (MEMBER_ALL_ACCOUNTS sans adhésion, ou
-   * MEMBER_ACCOUNT sur une caisse non adhérée / inexistante). `total` vaut alors
-   * 0 et `byAccount` est vide.
+   * du périmètre à `asOfDate` (MEMBER_ALL_CASHBOXES sans adhésion, ou
+   * MEMBER_CASHBOX sur une caisse non adhérée / inexistante). `total` vaut alors
+   * 0 et `byCashbox` est vide.
    */
   outOfScope: boolean;
 };
 
-export type FlowAccountLine = {
-  accountId: string;
-  accountNumber: string;
-  accountTitle: string;
-  /** Sorties de CETTE caisse sur la période (perspective caisse, `accountEntryEffect`). */
+export type FlowCashboxLine = {
+  cashboxId: string;
+  cashboxNumber: string;
+  cashboxTitle: string;
+  /** Sorties de CETTE caisse sur la période (perspective caisse, `cashboxEntryEffect`). */
   debit: number;
   /** Entrées de CETTE caisse sur la période. */
   credit: number;
@@ -110,7 +110,7 @@ export type FlowResult = {
   totalCredit: number;
   count: number;
   transactionIds: string[];
-  byAccount: FlowAccountLine[];
+  byCashbox: FlowCashboxLine[];
   outOfScope: boolean;
 };
 
@@ -132,22 +132,22 @@ export type BaselineResolution = {
 
 /** Une caisse par ligne de calcul — utilisé en interne par `computeFiscalYearClosing` et exposé pour `recomputeClosingEntry`. */
 export type ClosingComputation = {
-  accountId: string;
+  cashboxId: string;
   amount: number;
   openingEntryId?: string;
 };
 
 export type CloseFiscalYearOutcome =
   | { ok: true; computations: ClosingComputation[] }
-  | { ok: false; reason: 'FISCAL_YEAR_NOT_OPEN' | 'ALREADY_CLOSED'; accountIds?: string[] };
+  | { ok: false; reason: 'FISCAL_YEAR_NOT_OPEN' | 'ALREADY_CLOSED'; cashboxIds?: string[] };
 
 export type RecomputeClosingOutcome =
   | { ok: true; amount: number; openingEntryId?: string }
-  | { ok: false; reason: 'ACCOUNT_NOT_FOUND' | 'FISCAL_YEAR_TENANT_MISMATCH' };
+  | { ok: false; reason: 'CASHBOX_NOT_FOUND' | 'FISCAL_YEAR_TENANT_MISMATCH' };
 
 /** Une caisse par ouverture à créer — `amount` toujours COPIÉ depuis le `ClosingEntry` source, jamais recalculé. */
 export type OpeningComputation = {
-  accountId: string;
+  cashboxId: string;
   amount: number;
   date: string;
   sourceClosingEntryId: string;
@@ -158,12 +158,12 @@ export type CarryForwardOutcome =
   | {
       ok: false;
       reason: 'TENANT_MISMATCH' | 'FROM_NOT_CLOSED' | 'NOT_CONTIGUOUS' | 'MISSING_CLOSING_ENTRIES' | 'ALREADY_CARRIED';
-      accountIds?: string[];
+      cashboxIds?: string[];
     };
 
 /** Écart entre le `ClosingEntry` d'un exercice et l'`OpeningEntry` de l'exercice suivant pour une même caisse — cf. scénario de correction en cascade après réouverture (§7 du design). */
 export type IntegrityMismatch = {
-  accountId: string;
+  cashboxId: string;
   closingAmount: number;
   openingAmount: number;
 };
@@ -176,10 +176,10 @@ export type IntegrityMismatch = {
  * leur source est `Loan`/`Repayment` (agrégés au niveau membre/tenant, voir
  * `MemberFinancialPosition.credit`), pas le journal.
  */
-export type MemberAccountLine = {
-  accountId: string;
-  accountNumber: string;
-  accountTitle: string;
+export type MemberCashboxLine = {
+  cashboxId: string;
+  cashboxNumber: string;
+  cashboxTitle: string;
   savings: number;
   /** `AUTRES`, hors `DISTRIBUTION` (agrégée à part) et `TRANSFERT` (jamais mélangé, voir `internalTransfers`). */
   otherMovements: number;
@@ -192,7 +192,7 @@ export type MemberAccountLine = {
 
 /**
  * Agrégat crédit d'un membre — TOUJOURS tenant/membre-scopé, JAMAIS par
- * caisse (`Loan` n'a pas d'`accountId` : rattacher un prêt à une caisse
+ * caisse (`Loan` n'a pas d'`cashboxId` : rattacher un prêt à une caisse
  * précise serait une donnée inventée, explicitement exclue).
  *
  * `outstanding` est RECALCULÉ à une date (`Loan.totalRepayable − Σ
@@ -212,17 +212,17 @@ export type MemberFinancialPosition = {
   asOfDate: string;
   /** Concerne UNIQUEMENT le périmètre caisse (adhésions) — `credit`/`distributions` restent calculés même si `true` (un prêt n'exige aucune adhésion à une caisse). */
   outOfScope: boolean;
-  byAccount: MemberAccountLine[];
-  /** Σ `byAccount.savings`. */
+  byCashbox: MemberCashboxLine[];
+  /** Σ `byCashbox.savings`. */
   savings: number;
-  /** Σ `byAccount.otherMovements`. */
+  /** Σ `byCashbox.otherMovements`. */
   otherMovements: number;
-  /** Σ `byAccount.internalTransfers` — jamais dans un total financier. */
+  /** Σ `byCashbox.internalTransfers` — jamais dans un total financier. */
   internalTransfers: number;
-  /** MEMBER_ALL_ACCOUNTS uniquement (voir `MemberCreditSummary`). */
+  /** MEMBER_ALL_CASHBOXES uniquement (voir `MemberCreditSummary`). */
   credit?: MemberCreditSummary;
   /**
-   * MEMBER_ALL_ACCOUNTS uniquement — Σ `Transaction.amount` où
+   * MEMBER_ALL_CASHBOXES uniquement — Σ `Transaction.amount` où
    * `category === 'AUTRES'`, `subcategory === 'DISTRIBUTION'`, `memberId`
    * correspond. `Distribution.beneficiary` (registre séparé, texte libre,
    * sans `memberId`) n'est JAMAIS consulté — un rapprochement par nom serait

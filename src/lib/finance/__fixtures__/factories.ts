@@ -1,6 +1,6 @@
-import type { AccountRecord } from '@/mocks/finance/accounts';
+import type { CashboxRecord } from '@/mocks/finance/cashboxes';
 import type { Transaction } from '@/mocks/finance/transactions';
-import type { AccountMembership } from '@/mocks/finance/account-memberships';
+import type { CashboxMembership } from '@/mocks/finance/cashbox-memberships';
 import type { OpeningEntry } from '@/mocks/finance/opening-entries';
 import type { ClosingEntry } from '@/mocks/finance/closing-entries';
 import type { FiscalYear } from '@/mocks/settings/fiscal-years';
@@ -17,12 +17,12 @@ import type { FinanceCtx } from '../types';
 let seq = 0;
 const nextId = (prefix: string) => `${prefix}-${String(++seq).padStart(3, '0')}`;
 
-export function makeAccount(over: Partial<AccountRecord> = {}): AccountRecord {
+export function makeCashbox(over: Partial<CashboxRecord> = {}): CashboxRecord {
   const id = over.id ?? nextId('AC');
   return {
     id,
     tenantId: 'T-1',
-    accountNumber: over.accountNumber ?? `CX-${id}`,
+    cashboxNumber: over.cashboxNumber ?? `CX-${id}`,
     title: over.title ?? `Caisse ${id}`,
     type: 'LIBRE',
     amount: null,
@@ -54,12 +54,12 @@ export function makeTransaction(over: Partial<Transaction> = {}): Transaction {
   };
 }
 
-export function makeMembership(over: Partial<AccountMembership> = {}): AccountMembership {
+export function makeMembership(over: Partial<CashboxMembership> = {}): CashboxMembership {
   const id = over.id ?? nextId('AM');
   return {
     id,
     tenantId: 'T-1',
-    accountId: 'AC-001',
+    cashboxId: 'AC-001',
     memberId: 'M-1',
     startDate: '2026-01-01',
     endDate: null,
@@ -69,7 +69,7 @@ export function makeMembership(over: Partial<AccountMembership> = {}): AccountMe
 }
 
 export function makeCtx(over: Partial<FinanceCtx> = {}): FinanceCtx {
-  return { accounts: [], transactions: [], memberships: [], ...over };
+  return { cashboxes: [], transactions: [], memberships: [], ...over };
 }
 
 export function makeFiscalYear(over: Partial<FiscalYear> = {}): FiscalYear {
@@ -77,7 +77,6 @@ export function makeFiscalYear(over: Partial<FiscalYear> = {}): FiscalYear {
   return {
     id,
     tenantId: 'T-1',
-    label: `Exercice ${id}`,
     startDate: '2026-01-01',
     endDate: '2026-12-31',
     status: 'open',
@@ -94,7 +93,7 @@ export function makeOpeningEntry(over: Partial<OpeningEntry> = {}): OpeningEntry
   return {
     id,
     tenantId: 'T-1',
-    accountId: 'AC-001',
+    cashboxId: 'AC-001',
     fiscalYearId: 'FY-1',
     date: '2026-01-01',
     amount: 0,
@@ -110,7 +109,7 @@ export function makeClosingEntry(over: Partial<ClosingEntry> = {}): ClosingEntry
   return {
     id,
     tenantId: 'T-1',
-    accountId: 'AC-001',
+    cashboxId: 'AC-001',
     fiscalYearId: 'FY-1',
     date: '2026-12-31',
     amount: 0,

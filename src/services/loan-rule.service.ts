@@ -1,11 +1,11 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
 import { loanRules, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleInterestType, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
-import { accounts } from '@/mocks/finance/accounts';
+import { cashboxes } from '@/mocks/finance/cashboxes';
 
-/** accountId reste immuable après création — jamais reproposé par UPDATE (§9 du mandat : "intégrité account_id"). */
+/** cashboxId reste immuable après création — jamais reproposé par UPDATE (§9 du mandat : "intégrité account_id"). */
 export type LoanRuleInput = {
-  accountId: string;
+  cashboxId: string;
   name: string;
   allowLoans: boolean;
   loanMode: LoanRuleLoanMode;
@@ -26,7 +26,7 @@ export type LoanRuleInput = {
   requiresApproval: boolean;
   approvalLevel: LoanRuleApprovalLevel | null;
 };
-export type LoanRuleUpdateInput = Partial<Omit<LoanRuleInput, 'accountId'>>;
+export type LoanRuleUpdateInput = Partial<Omit<LoanRuleInput, 'cashboxId'>>;
 
 function isLive(rule: LoanRule): boolean {
   return rule.deletedAt === null;
@@ -63,14 +63,14 @@ export const loanRuleService = {
    */
   createLoanRule: (tenantId: string, input: LoanRuleInput) =>
     mockRequest(() => {
-      const account = getTenantScoped(accounts, (item) => item.id === input.accountId, tenantId);
+      const account = getTenantScoped(cashboxes, (item) => item.id === input.cashboxId, tenantId);
       if (!account) return undefined;
       if (violatesCanonicalConstraints(input)) return undefined;
-      const duplicateAccount = loanRules.some((rule) => rule.tenantId === tenantId && rule.accountId === input.accountId && isLive(rule));
+      const duplicateAccount = loanRules.some((rule) => rule.tenantId === tenantId && rule.cashboxId === input.cashboxId && isLive(rule));
       if (duplicateAccount) return undefined;
       const duplicateName = loanRules.some((rule) => rule.tenantId === tenantId && rule.name === input.name && isLive(rule));
       if (duplicateName) return undefined;
-      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, accountNumber: account.accountNumber, status: 'ACTIVE', deletedAt: null, ...input };
+      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, cashboxNumber: account.cashboxNumber, status: 'ACTIVE', deletedAt: null, ...input };
       loanRules.push(rule);
       return rule;
     }),

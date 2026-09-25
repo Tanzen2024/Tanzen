@@ -33,7 +33,7 @@ describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (ten
     expect(within(table).getAllByText('Cheikh Diop').length).toBe(1);
   });
 
-  it('AC03/AC08: le filtre Adhérent ne liste que les membres ayant réellement une transaction dans l’exercice, jamais via Account.memberIds', async () => {
+  it('AC03/AC08: le filtre Adhérent ne liste que les membres ayant réellement une transaction dans l’exercice, jamais via Cashbox.memberIds', async () => {
     renderFinance('/finance/transactions');
     await screen.findByRole('table');
     const memberSelect = screen.getByLabelText('Adhérent');
@@ -97,7 +97,7 @@ describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (ten
     await screen.findByRole('table');
     const accountSelect = screen.getByLabelText('Libelle de caisse');
     expect(within(accountSelect).getByRole('option', { name: 'Toutes les caisses' })).toBeInTheDocument();
-    // Libellés réels seedés pour T-001 (accounts.ts) — présents, non inventés.
+    // Libellés réels seedés pour T-001 (cashboxes.ts) — présents, non inventés.
     for (const title of ['Trésorerie', 'Compte courant', 'Inscription', 'Fond de solidarité']) {
       expect(within(accountSelect).getByRole('option', { name: title })).toBeInTheDocument();
     }

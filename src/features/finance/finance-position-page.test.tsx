@@ -4,14 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
-import { accounts, resolveAccount } from '@/mocks/finance/accounts';
+import { cashboxes, resolveCashbox } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
 
 /**
  * Mandat « Finalisation Finance/Tontines », Priorité N°1 : le nouveau moteur
  * financier (`balanceAsOf`) doit être atteignable depuis l'interface ET rester
  * cohérent avec l'ancien calcul déjà utilisé par la liste des comptes/fiche
- * caisse (`resolveAccount`) — « un même compte doit afficher le même solde ».
+ * caisse (`resolveCashbox`) — « un même compte doit afficher le même solde ».
  * Ce test compare directement les deux résultats pour un compte réel du seed
  * (CS-001-TRÉS, tenant T-001 par défaut) à la date du jour.
  */
@@ -23,14 +23,14 @@ function renderFinance(route: string) {
 }
 
 describe('Finance → Position financière (moteur balanceAsOf branché à l’UI)', () => {
-  it('le solde affiché pour un compte à la date du jour correspond exactement à resolveAccount()', async () => {
+  it('le solde affiché pour un compte à la date du jour correspond exactement à resolveCashbox()', async () => {
     const user = userEvent.setup();
     renderFinance('/finance/position');
     await screen.findByRole('option', { name: /CS-001-TRÉS/ });
     await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'AC-001');
 
-    const account = accounts.find((item) => item.id === 'AC-001')!;
-    const expectedBalance = resolveAccount(account, transactions).balance;
+    const account = cashboxes.find((item) => item.id === 'AC-001')!;
+    const expectedBalance = resolveCashbox(account, transactions).balance;
 
     const soldeLabel = await screen.findByText('Solde');
     const card = soldeLabel.closest('div') as HTMLElement;
@@ -53,7 +53,7 @@ describe('Finance → Position financière (moteur balanceAsOf branché à l’U
 
   it('reste accessible depuis la page Comptes via le bouton « Position financière »', async () => {
     const user = userEvent.setup();
-    renderFinance('/finance/accounts');
+    renderFinance('/finance/cashboxes');
     await user.click(await screen.findByRole('button', { name: /Position financière/ }));
     expect(await screen.findByText('Solde à une date')).toBeInTheDocument();
   });

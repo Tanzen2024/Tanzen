@@ -1,12 +1,12 @@
 /**
  * Primitives PURES de calcul de dates calendaires (jour du mois, n-ième jour
  * de semaine d'un mois, parcours de mois consécutifs) — sans dépendance React
- * ni service, sans aucune notion métier (ni Tontine, ni Réunion). Extrait de
- * `src/mocks/tontines/tontine-frequency.ts` (module Tontines, en cours de
- * reconstruction complète) car `src/mocks/settings/meeting-schedule.ts`
- * (récurrence des réunions d'exercice fiscal, domaine totalement distinct)
- * en dépendait déjà : aucun des deux domaines ne doit posséder l'autre, donc
- * ce module neutre est la seule source de vérité du calcul de date pur.
+ * ni service, sans aucune notion métier (ni Tontine, ni Séance). Extrait de
+ * `src/mocks/tontines/tontine-frequency.ts` (module Tontines) car
+ * `src/mocks/settings/session-schedule.ts` (récurrence des séances d'exercice
+ * fiscal, domaine totalement distinct) en dépend aussi : aucun des deux
+ * domaines ne doit posséder l'autre, donc ce module neutre est la seule
+ * source de vérité du calcul de date pur.
  *
  * Un jour/combinaison inexistant (31 en février, 5ᵉ lundi absent) est
  * simplement omis par les fonctions qui en dépendent — jamais de décalage

@@ -19,12 +19,11 @@ import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { organizationService } from '@/services/organization.service';
 import { settingsService } from '@/services/settings.service';
-import { deriveFiscalMeetings } from '@/services/meeting.service';
 import { queryKeys } from '@/services/query-keys';
 import { supportedLocales } from '@/i18n';
-import type { FiscalYear, FiscalYearStatus } from '@/mocks/settings/fiscal-years';
-import { isValidMeetingScheduleConfig, formatMeetingScheduleDescription, meetingFrequencyLabel, meetingRuleLabel, type MeetingScheduleConfig } from '@/mocks/settings/meeting-schedule';
-import { MeetingScheduleFields } from './meeting-schedule-fields';
+import { fiscalYearLabel, type FiscalYear, type FiscalYearStatus } from '@/mocks/settings/fiscal-years';
+import { isValidSessionScheduleConfig, formatSessionScheduleDescription, sessionFrequencyLabel, sessionRuleLabel, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
+import { SessionScheduleFields } from './session-schedule-fields';
 import { FiscalYearCreateDialog } from './fiscal-year-create-dialog';
 import type { DateFormat, NumberFormatStyle } from '@/mocks/settings/localization-settings';
 import type { NotificationChannel, NotificationChannelType, NotificationRule, NotificationRuleTrigger } from '@/mocks/settings/notification-settings';
@@ -137,9 +136,9 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const [reopenTarget, setReopenTarget] = useState<FiscalYear | null>(null);
   const [reopenJustification, setReopenJustification] = useState('');
   const [reopenError, setReopenError] = useState<string | undefined>();
-  /** Détail « Calendrier des réunions » d'un exercice (§11) — lecture + configuration si l'exercice n'est pas clôturé. */
+  /** Détail « Fréquence des séances » d'un exercice — lecture + configuration si l'exercice n'est pas clôturé. */
   const [calendarTarget, setCalendarTarget] = useState<FiscalYear | null>(null);
-  const [calendarDraft, setCalendarDraft] = useState<Partial<MeetingScheduleConfig>>({});
+  const [calendarDraft, setCalendarDraft] = useState<Partial<SessionScheduleConfig>>({});
   /** Prorogation (mandat §6) — modifie uniquement `endDate`, jamais un indicateur de clôture. */
   const [extendTarget, setExtendTarget] = useState<FiscalYear | null>(null);
   const [extendEndDate, setExtendEndDate] = useState('');
@@ -187,18 +186,18 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       setReopenError(undefined);
     },
   });
-  /** §2/§11 — configure / met à jour / retire le calendrier des réunions d'un exercice existant (autorisé tant qu'il n'est pas clôturé, cf. `updateFiscalYearMeetingSchedule`). */
-  const meetingScheduleMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateFiscalYearMeetingSchedule>>, { fiscalYearId: string; config: MeetingScheduleConfig | null }>({
-    mutationFn: ({ fiscalYearId, config }) => settingsService.updateFiscalYearMeetingSchedule(currentTenant.id, fiscalYearId, config),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), ['meetings']],
+  /** Configure / met à jour / retire la fréquence des séances d'un exercice existant (autorisé tant qu'il n'est pas clôturé, cf. `updateFiscalYearSessionSchedule`). */
+  const sessionScheduleMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateFiscalYearSessionSchedule>>, { fiscalYearId: string; config: SessionScheduleConfig | null }>({
+    mutationFn: ({ fiscalYearId, config }) => settingsService.updateFiscalYearSessionSchedule(currentTenant.id, fiscalYearId, config),
+    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.finance.sessions.next(currentTenant.id, undefined)],
     onSuccess: (year, variables) => {
       if (!year) { notify.error(t('settings', 'fiscalYearInvalid')); return; }
-      notify.success(t('settings', variables.config ? 'meetingScheduleSaved' : 'meetingScheduleRemoved'));
+      notify.success(t('settings', variables.config ? 'sessionScheduleSaved' : 'sessionScheduleRemoved'));
       setCalendarTarget(null);
     },
   });
-  const openCalendar = (year: FiscalYear) => { setCalendarTarget(year); setCalendarDraft(year.meetingSchedule ?? {}); };
-  const saveCalendar = () => { if (calendarTarget && isValidMeetingScheduleConfig(calendarDraft)) meetingScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: calendarDraft }); };
+  const openCalendar = (year: FiscalYear) => { setCalendarTarget(year); setCalendarDraft(year.sessionSchedule ?? {}); };
+  const saveCalendar = () => { if (calendarTarget && isValidSessionScheduleConfig(calendarDraft)) sessionScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: calendarDraft }); };
   const handleReopenRequest = () => {
     if (!reopenTarget) return;
     if (!reopenJustification.trim()) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
@@ -212,7 +211,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     extendMutation.mutate({ fiscalYearId: extendTarget.id, newEndDate: extendEndDate });
   };
   const columns: TableColumn<FiscalYear>[] = [
-    { key: 'label', header: t('settings', 'fiscalYear'), render: (row) => <span className="font-semibold">{row.label}</span> },
+    { key: 'label', header: t('settings', 'fiscalYear'), render: (row) => <span className="font-semibold">{fiscalYearLabel(row)}</span> },
     { key: 'startDate', header: t('settings', 'startDate'), render: (row) => formatDate(row.startDate) },
     { key: 'endDate', header: t('settings', 'endDate'), render: (row) => formatDate(row.endDate) },
     { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1">
@@ -220,13 +219,13 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
       {pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}
       {row.status === 'closed' && row.closedAt && <p className="text-[11px] text-muted-foreground">{t('settings', 'closedAtBy', { date: formatDate(row.closedAt), actor: row.closedBy ?? '—' })}</p>}
     </div> },
-    { key: 'meetingSchedule', header: t('settings', 'meetingCalendar'), render: (row) => (
-      <span className="text-xs text-muted-foreground">{row.meetingSchedule ? formatMeetingScheduleDescription(row.meetingSchedule, locale) : t('settings', 'noMeetingSchedule')}</span>
+    { key: 'sessionSchedule', header: t('settings', 'sessionScheduleTitle'), render: (row) => (
+      <span className="text-xs text-muted-foreground">{row.sessionSchedule ? formatSessionScheduleDescription(row.sessionSchedule, locale) : t('settings', 'noSessionSchedule')}</span>
     ) },
     { key: 'actions', header: '', className: 'w-64', render: (row) => {
       const pendingRequest = pendingReopenByYearId.get(row.id);
       return <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => openCalendar(row)}><CalendarDays size={14} />{t('settings', 'viewMeetingCalendar')}</Button>
+        <Button variant="ghost" size="sm" onClick={() => openCalendar(row)}><CalendarDays size={14} />{t('settings', 'viewSessionSchedule')}</Button>
         {row.status !== 'closed' && <PermissionGate permission="fiscalYears.manage"><Button variant="ghost" size="sm" onClick={() => openExtend(row)}>{t('settings', 'extendFiscalYear')}</Button></PermissionGate>}
         {row.status === 'upcoming' && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => setOpenTarget(row)}>{t('settings', 'openFiscalYear')}</Button></PermissionGate>}
         {row.status === 'closed' && pendingRequest && <Button variant="outline" size="sm" onClick={() => navigate(`/operations/workflows/${pendingRequest.id}`)}><Eye size={14} />{t('settings', 'viewReopenRequest')}</Button>}
@@ -238,12 +237,12 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')}><EmptyState icon={Lock} title={t('system', 'unauthorizedTitle')} description={t('system', 'unauthorizedDescription')} /></Page>;
   }
   return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')} actions={<div className="flex gap-2">{current && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" onClick={() => setCloseTarget(true)}>{t('settings', 'closeFiscalYear')}</Button></PermissionGate>}<PermissionGate permission="fiscalYears.manage"><Button onClick={() => setCreateOpen(true)}><Plus size={16} />{t('settings', 'createFiscalYear')}</Button></PermissionGate></div>}>
-    {current && <Card className="border-primary/30 bg-primary/5"><CardContent className="flex items-center gap-4 p-5"><span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><Landmark size={20} /></span><div><p className="text-xs text-muted-foreground">{t('settings', 'currentFiscalYear')}</p><p className="text-lg font-semibold">{current.label}</p><p className="text-xs text-muted-foreground">{formatDate(current.startDate)} → {formatDate(current.endDate)}</p></div></CardContent></Card>}
+    {current && <Card className="border-primary/30 bg-primary/5"><CardContent className="flex items-center gap-4 p-5"><span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><Landmark size={20} /></span><div><p className="text-xs text-muted-foreground">{t('settings', 'currentFiscalYear')}</p><p className="text-lg font-semibold">{fiscalYearLabel(current)}</p><p className="text-xs text-muted-foreground">{formatDate(current.startDate)} → {formatDate(current.endDate)}</p></div></CardContent></Card>}
     <Card><CardHeader><CardTitle className="text-sm">{t('settings', 'history')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={years} empty={<EmptyState icon={Landmark} title={t('settings', 'noFiscalYears')} />} /></CardContent></Card>
     {closeTarget && <ConfirmDialog open title={t('settings', 'closeFiscalYear')} description={t('settings', 'closeFiscalYearConfirm')} confirmLabel={t('settings', 'closeFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => closeMutation.mutate()} onCancel={() => setCloseTarget(false)} />}
     {openTarget && <ConfirmDialog open title={t('settings', 'openFiscalYear')} description={t('settings', 'openFiscalYearConfirm')} confirmLabel={t('settings', 'openFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => openMutation.mutate(openTarget.id)} onCancel={() => setOpenTarget(null)} />}
     <FiscalYearCreateDialog open={createOpen} onOpenChange={setCreateOpen} tenantId={currentTenant.id} years={years} />
-    {reopenTarget && <ConfirmDialog open title={t('settings', 'requestReopenFiscalYear')} description={t('settings', 'requestReopenFiscalYearDescription', { label: reopenTarget.label })} confirmLabel={t('settings', 'submitReopenRequest')} cancelLabel={t('settings', 'cancel')} onConfirm={handleReopenRequest} onCancel={() => { setReopenTarget(null); setReopenJustification(''); setReopenError(undefined); }}>
+    {reopenTarget && <ConfirmDialog open title={t('settings', 'requestReopenFiscalYear')} description={t('settings', 'requestReopenFiscalYearDescription', { label: fiscalYearLabel(reopenTarget) })} confirmLabel={t('settings', 'submitReopenRequest')} cancelLabel={t('settings', 'cancel')} onConfirm={handleReopenRequest} onCancel={() => { setReopenTarget(null); setReopenJustification(''); setReopenError(undefined); }}>
       <div className="mt-4 space-y-1 text-left">
         <Label htmlFor="fy-reopen-justification">{t('settings', 'reopenJustificationLabel')}</Label>
         <Textarea id="fy-reopen-justification" value={reopenJustification} onChange={(event) => setReopenJustification(event.target.value)} aria-invalid={Boolean(reopenError)} />
@@ -251,7 +250,7 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         <p className="text-xs text-muted-foreground">{t('settings', 'reopenApprovalNotice')}</p>
       </div>
     </ConfirmDialog>}
-    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: extendTarget.label, current: formatDate(extendTarget.endDate) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
+    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: fiscalYearLabel(extendTarget), current: formatDate(extendTarget.endDate) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
       <div className="mt-4 space-y-1 text-left">
         <Label htmlFor="fy-extend-end-date">{t('settings', 'newEndDate')}</Label>
         <Input id="fy-extend-end-date" type="date" value={extendEndDate} onChange={(event) => setExtendEndDate(event.target.value)} aria-invalid={Boolean(extendError)} />
@@ -260,36 +259,26 @@ function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
     </ConfirmDialog>}
     {calendarTarget && (() => {
       const editable = calendarTarget.status !== 'closed' && can('fiscalYears.manage');
-      const previewSchedule = editable ? (isValidMeetingScheduleConfig(calendarDraft) ? calendarDraft : undefined) : calendarTarget.meetingSchedule;
-      const meetings = deriveFiscalMeetings({ ...calendarTarget, meetingSchedule: previewSchedule });
+      const previewSchedule = editable ? (isValidSessionScheduleConfig(calendarDraft) ? calendarDraft : undefined) : calendarTarget.sessionSchedule;
       return <ConfirmDialog
         open
-        title={`${t('settings', 'meetingCalendar')} — ${calendarTarget.label}`}
-        description={t('settings', 'meetingCalendarDescription')}
-        confirmLabel={editable ? t('settings', 'save') : t('settings', 'meetingCalendarClose')}
-        cancelLabel={editable ? t('settings', 'cancel') : t('settings', 'meetingCalendarClose')}
+        title={`${t('settings', 'sessionScheduleTitle')} — ${fiscalYearLabel(calendarTarget)}`}
+        description={t('settings', 'sessionScheduleDescription')}
+        confirmLabel={editable ? t('settings', 'save') : t('settings', 'sessionScheduleClose')}
+        cancelLabel={editable ? t('settings', 'cancel') : t('settings', 'sessionScheduleClose')}
         onConfirm={() => { if (editable) saveCalendar(); else setCalendarTarget(null); }}
         onCancel={() => setCalendarTarget(null)}
       >
         <div className="mt-4 max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-left">
-          {calendarTarget.status === 'closed' && <p className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('settings', 'meetingScheduleClosedYearNotice')}</p>}
-          {editable && <MeetingScheduleFields locale={locale} value={calendarDraft} onChange={setCalendarDraft} idPrefix="fy-calendar-meeting" />}
-          {!editable && !calendarTarget.meetingSchedule && <p className="text-sm text-muted-foreground">{t('settings', 'noMeetingSchedule')}</p>}
-          {previewSchedule && <>
-            <div className="grid grid-cols-2 gap-3 rounded-lg border border-border p-3 text-xs">
-              <div><p className="text-muted-foreground">{t('settings', 'meetingCalFrequency')}</p><p className="font-medium">{meetingFrequencyLabel(previewSchedule.frequency, locale)}</p></div>
-              <div><p className="text-muted-foreground">{t('settings', 'meetingCalRule')}</p><p className="font-medium">{previewSchedule.rule ? meetingRuleLabel(previewSchedule.rule, locale) : '—'}</p></div>
-              <div className="col-span-2"><p className="text-muted-foreground">{t('settings', 'preview')}</p><p className="font-medium">{formatMeetingScheduleDescription(previewSchedule, locale)}</p></div>
-              <div className="col-span-2"><p className="text-muted-foreground">{t('settings', 'meetingCalCount')}</p><p className="font-medium">{meetings.length}</p></div>
-            </div>
-            <div>
-              <p className="mb-1 text-xs font-semibold text-foreground">{t('settings', 'meetingCalDates')}</p>
-              <div className="flex flex-wrap gap-1.5">
-                {meetings.map((meeting) => <span key={meeting.id} className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium">{formatDate(meeting.date)}</span>)}
-              </div>
-            </div>
-          </>}
-          {editable && calendarTarget.meetingSchedule && <button type="button" onClick={() => meetingScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: null })} className="text-xs font-medium text-destructive hover:underline">{t('settings', 'removeMeetingSchedule')}</button>}
+          {calendarTarget.status === 'closed' && <p className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('settings', 'sessionScheduleClosedYearNotice')}</p>}
+          {editable && <SessionScheduleFields locale={locale} value={calendarDraft} onChange={setCalendarDraft} idPrefix="fy-calendar-session" />}
+          {!editable && !calendarTarget.sessionSchedule && <p className="text-sm text-muted-foreground">{t('settings', 'noSessionSchedule')}</p>}
+          {previewSchedule && <div className="grid grid-cols-2 gap-3 rounded-lg border border-border p-3 text-xs">
+            <div><p className="text-muted-foreground">{t('settings', 'sessionScheduleFrequency')}</p><p className="font-medium">{sessionFrequencyLabel(previewSchedule.frequency, locale)}</p></div>
+            <div><p className="text-muted-foreground">{t('settings', 'sessionScheduleRule')}</p><p className="font-medium">{previewSchedule.rule ? sessionRuleLabel(previewSchedule.rule, locale) : '—'}</p></div>
+            <div className="col-span-2"><p className="text-muted-foreground">{t('settings', 'preview')}</p><p className="font-medium">{formatSessionScheduleDescription(previewSchedule, locale)}</p></div>
+          </div>}
+          {editable && calendarTarget.sessionSchedule && <button type="button" onClick={() => sessionScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: null })} className="text-xs font-medium text-destructive hover:underline">{t('settings', 'removeSessionSchedule')}</button>}
         </div>
       </ConfirmDialog>;
     })()}

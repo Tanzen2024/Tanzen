@@ -6,7 +6,7 @@ import { useTenant } from '@/contexts/tenant-context';
 import { usePermissions } from '@/contexts/permission-context';
 import { useClickOutside } from '@/hooks/use-click-outside';
 import { FiscalYearCreateDialog } from '@/features/settings/fiscal-year-create-dialog';
-import type { FiscalYearStatus } from '@/mocks/settings/fiscal-years';
+import { fiscalYearLabel, type FiscalYearStatus } from '@/mocks/settings/fiscal-years';
 
 const STATUS_DOT: Record<FiscalYearStatus, string> = { open: 'bg-emerald-500', closed: 'bg-slate-400', upcoming: 'bg-blue-500' };
 
@@ -44,7 +44,7 @@ export function FiscalYearSelector({ compact = false }: { compact?: boolean }) {
         <span className={`grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 ${compact ? 'text-primary' : 'text-primary'}`}><CalendarDays size={15} /></span>
         <span className={`min-w-0 flex-1 ${compact ? 'text-white' : ''}`}>
           <span className={`block truncate text-[10px] ${compact ? 'text-slate-400' : 'text-muted-foreground'}`}>{t('shell', 'currentFiscalYearLabel')}</span>
-          <span className="block truncate text-xs font-semibold">{selectedFiscalYear.label}{selectedFiscalYear.isCurrent && <span className="ml-1 font-normal text-emerald-500">· {t('shell', 'fiscalYearCurrentBadge')}</span>}</span>
+          <span className="block truncate text-xs font-semibold">{fiscalYearLabel(selectedFiscalYear)}{selectedFiscalYear.isCurrent && <span className="ml-1 font-normal text-emerald-500">· {t('shell', 'fiscalYearCurrentBadge')}</span>}</span>
         </span>
         <ChevronDown size={14} className={`shrink-0 transition-transform ${compact ? 'text-slate-400' : 'text-muted-foreground'} ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -60,7 +60,7 @@ export function FiscalYearSelector({ compact = false }: { compact?: boolean }) {
               className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-muted ${year.id === selectedFiscalYear.id ? 'bg-muted/70 font-semibold' : ''}`}
             >
               <span className={`size-2 shrink-0 rounded-full ${STATUS_DOT[year.status]}`} />
-              <span className="min-w-0 flex-1 truncate">{year.label}</span>
+              <span className="min-w-0 flex-1 truncate">{fiscalYearLabel(year)}</span>
               {year.isCurrent && <span className="shrink-0 text-[10px] font-semibold text-emerald-600">{t('shell', 'fiscalYearCurrentBadge')}</span>}
               {year.id === selectedFiscalYear.id && <Check size={14} className="shrink-0 text-primary" />}
             </button>

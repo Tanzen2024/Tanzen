@@ -2,12 +2,12 @@ import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
 import { tontines, tontineAdhesions, tontineCycles, type Tontine, type TontineAdhesion, type TontineCycle } from '@/mocks/tontines/tontines';
 import { isValidFrequencyConfig } from '@/mocks/tontines/tontine-frequency';
-import { accounts } from '@/mocks/finance/accounts';
+import { cashboxes } from '@/mocks/finance/cashboxes';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
 import { members } from '@/mocks/organization/members';
-import { resolveSystemAccount } from './finance.service';
+import { resolveSystemCashbox } from './finance.service';
 
-export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'withPurchase' | 'contributionAmount' | 'item' | 'quantity' | 'unit' | 'accountId'
+export type TontineInput = Pick<Tontine, 'name' | 'valueType' | 'tenantId' | 'withPurchase' | 'contributionAmount' | 'item' | 'quantity' | 'unit' | 'cashboxId'
   | 'frequency' | 'weekday' | 'monthlyRule' | 'monthlyDayOfMonth' | 'monthlyOrdinal' | 'monthlyWeekday'
   | 'quarterlyRule' | 'quarterlyMonth' | 'quarterlyDayOfMonth' | 'quarterlyOrdinal' | 'quarterlyWeekday'>;
 /**
@@ -45,14 +45,14 @@ function keepOnlyFieldsForValueType(tontine: Tontine): void {
   }
   delete tontine.currency;
   delete tontine.withPurchase;
-  delete tontine.purchaseAccountId;
+  delete tontine.purchaseCashboxId;
   delete tontine.contributionAmount;
-  delete tontine.accountId;
+  delete tontine.cashboxId;
 }
 
-function isValidAccountLink(tenantId: string, accountId: string | undefined): boolean {
-  if (!accountId) return true;
-  return accounts.some((account) => account.id === accountId && account.tenantId === tenantId);
+function isValidAccountLink(tenantId: string, cashboxId: string | undefined): boolean {
+  if (!cashboxId) return true;
+  return cashboxes.some((account) => account.id === cashboxId && account.tenantId === tenantId);
 }
 
 /** Source unique de la devise d'une tontine MONEY : Paramètres > Organisation, jamais le formulaire (aucun repli XAF/défaut silencieux). */
@@ -63,13 +63,13 @@ function getOrganizationCurrency(tenantId: string): string | undefined {
 /**
  * Résolution automatique de la caisse système TONTINE_PURCHASE — jamais un
  * choix utilisateur (pas de champ « Caisse liée »), et jamais par le libellé
- * (`financeService.resolveSystemAccount` identifie par `systemCode`,
+ * (`financeService.resolveSystemCashbox` identifie par `systemCode`,
  * garantit/adopte le compte au passage, ne le laisse jamais absent).
  */
 function resolveWithPurchase(tontine: Tontine): void {
-  delete tontine.purchaseAccountId;
+  delete tontine.purchaseCashboxId;
   if (tontine.valueType === 'MONEY' && tontine.withPurchase) {
-    tontine.purchaseAccountId = resolveSystemAccount(tontine.tenantId, 'TONTINE_PURCHASE').id;
+    tontine.purchaseCashboxId = resolveSystemCashbox(tontine.tenantId, 'TONTINE_PURCHASE').id;
   }
 }
 
@@ -119,7 +119,7 @@ export const tontinesService = {
     mockRequest(() => {
       if (!isValidTontineConfiguration(input)) return undefined;
       if (!isValidFrequencyConfig(input)) return undefined;
-      if (!isValidAccountLink(input.tenantId, input.accountId)) return undefined;
+      if (!isValidAccountLink(input.tenantId, input.cashboxId)) return undefined;
       const organizationCurrency = getOrganizationCurrency(input.tenantId);
       if (input.valueType === 'MONEY' && !organizationCurrency) return undefined;
       const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', createdAt: new Date().toISOString().slice(0, 10), ...input, currency: input.valueType === 'MONEY' ? organizationCurrency : undefined };
@@ -162,7 +162,7 @@ export const tontinesService = {
         unit: patch.unit ?? tontine.unit,
       };
       if (!isValidTontineConfiguration(nextConfiguration)) return undefined;
-      if ('accountId' in patch && !isValidAccountLink(tenantId, patch.accountId)) return undefined;
+      if ('cashboxId' in patch && !isValidAccountLink(tenantId, patch.cashboxId)) return undefined;
       if (patchTouchesFrequency(patch)) {
         const nextFrequencyConfig = {
           frequency: 'frequency' in patch ? patch.frequency : tontine.frequency,

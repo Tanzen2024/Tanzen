@@ -9,8 +9,8 @@ import {
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { workflowService } from './workflow.service';
-import { insertTransaction, resolveSystemAccount } from './finance.service';
-import { accounts, type AccountRecord } from '@/mocks/finance/accounts';
+import { insertTransaction, resolveSystemCashbox } from './finance.service';
+import { cashboxes, type CashboxRecord } from '@/mocks/finance/cashboxes';
 import { members } from '@/mocks/organization/members';
 
 export type PlanPermutationInput = { planAId: string; planBId: string; requestedBy: string; requestedByUserId?: string; justification?: string };
@@ -197,42 +197,42 @@ export function isPlanningComplete(tenantId: string, tontineId: string): boolean
   return eligibleAdhesionIds.every((id) => plannedAdhesionIds.has(id));
 }
 
-function resolveTontineAccount(tenantId: string, tontineId: string): AccountRecord | undefined {
+function resolveTontineCashbox(tenantId: string, tontineId: string): CashboxRecord | undefined {
   const tontine = tontines.find((item) => item.tenantId === tenantId && item.id === tontineId);
-  if (!tontine?.accountId) return undefined;
-  return accounts.find((account) => account.id === tontine.accountId && account.tenantId === tenantId);
+  if (!tontine?.cashboxId) return undefined;
+  return cashboxes.find((account) => account.id === tontine.cashboxId && account.tenantId === tenantId);
 }
 
 /**
- * RÈGLE FINANCIÈRE CRITIQUE — distincte de `resolveTontineAccount` : seul le
+ * RÈGLE FINANCIÈRE CRITIQUE — distincte de `resolveTontineCashbox` : seul le
  * montant d'ACHAT transite par cette caisse, jamais les cotisations/
  * réceptions « nettes ». `undefined` si `withPurchase` est faux (donc jamais
- * de `purchaseAccountId`, cf. `tontines.service.ts`).
+ * de `purchaseCashboxId`, cf. `tontines.service.ts`).
  *
  * CORRECTIF (bug « Régler échoue dès que le montant d'achat > 0 ») —
- * `resolveWithPurchase` ne garantit `purchaseAccountId` que pour les
+ * `resolveWithPurchase` ne garantit `purchaseCashboxId` que pour les
  * Tontines créées/modifiées via `tontinesService` ; un enregistrement
  * existant AVANT cette garantie (ex. seed historique tel que TON-004) peut
- * légitimement porter `withPurchase: true` sans `purchaseAccountId`. Avant
+ * légitimement porter `withPurchase: true` sans `purchaseCashboxId`. Avant
  * ce correctif, `recordReception` refusait alors TOUT règlement dès que
  * `purchaseAmount > 0` (jamais quand il valait 0, d'où le symptôme). On
  * répare ici la référence via le MÊME résolveur de compte système que
- * `resolveWithPurchase` (`resolveSystemAccount`, idempotent, jamais une
+ * `resolveWithPurchase` (`resolveSystemCashbox`, idempotent, jamais une
  * seconde caisse) — la caisse « Achat tontine » reste un compte système
  * dédié, jamais transformée en caisse générale de la Tontine.
  */
-function resolveTontinePurchaseAccount(tenantId: string, tontineId: string): AccountRecord | undefined {
+function resolveTontinePurchaseCashbox(tenantId: string, tontineId: string): CashboxRecord | undefined {
   const tontine = tontines.find((item) => item.tenantId === tenantId && item.id === tontineId);
   if (!tontine || tontine.valueType !== 'MONEY' || !tontine.withPurchase) return undefined;
-  if (!tontine.purchaseAccountId) tontine.purchaseAccountId = resolveSystemAccount(tenantId, 'TONTINE_PURCHASE').id;
-  return accounts.find((account) => account.id === tontine.purchaseAccountId && account.tenantId === tenantId);
+  if (!tontine.purchaseCashboxId) tontine.purchaseCashboxId = resolveSystemCashbox(tenantId, 'TONTINE_PURCHASE').id;
+  return cashboxes.find((account) => account.id === tontine.purchaseCashboxId && account.tenantId === tenantId);
 }
 
 /** Best-effort, non bloquant : si `insertTransaction` refuse, l'opération Tontine reste la source de vérité de son propre état — jamais annulée a posteriori. Jamais appelé pour un montant nul/négatif. */
-function postTontineTransaction(tenantId: string, params: { account: AccountRecord; memberId: string; memberName: string; amount: number | undefined; direction: 'credit' | 'debit'; category: 'EPARGNE' | 'AUTRES'; subcategory?: 'DISTRIBUTION' | 'AUTRE'; description: string }): void {
+function postTontineTransaction(tenantId: string, params: { account: CashboxRecord; memberId: string; memberName: string; amount: number | undefined; direction: 'credit' | 'debit'; category: 'EPARGNE' | 'AUTRES'; subcategory?: 'DISTRIBUTION' | 'AUTRE'; description: string }): void {
   if (!params.amount || params.amount <= 0) return;
   insertTransaction(tenantId, {
-    accountNumber: params.account.accountNumber,
+    cashboxNumber: params.account.cashboxNumber,
     memberId: params.memberId,
     memberName: params.memberName,
     category: params.category,
@@ -790,7 +790,7 @@ export const tontineOperationsService = {
       const contribution: TontineContribution = { id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId, amount, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name };
       tontineContributions.push(contribution);
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
-      const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+      const account = resolveTontineCashbox(tenantId, occurrence.tontineId);
       if (account) {
         postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount, direction: 'credit', category: 'EPARGNE', description: `Cotisation tontine ${tontine?.name ?? ''} — tour ${occurrence.occurrenceNumber}`.trim() });
       }
@@ -848,7 +848,7 @@ export const tontineOperationsService = {
       if (!adhesion || !isAvailableForOccurrencePlanning(tenantId, occurrence, adhesion)) return undefined;
       const amountDue = tontineOperationsService.getExpectedContributionAmount(tontine);
       const currentPaid = Math.max(0, tontineContributions.filter((item) => item.tenantId === tenantId && item.occurrenceId === occurrenceId && item.adhesionId === adhesionId).reduce((sum, item) => sum + item.amount, 0));
-      const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+      const account = resolveTontineCashbox(tenantId, occurrence.tontineId);
       const description = `Cotisation tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`;
 
       if (paid) {
@@ -890,7 +890,7 @@ export const tontineOperationsService = {
         const missing = amountDue - currentPaid;
         if (missing <= 0) continue;
         tontineContributions.push({ id: uniqueId('CTB'), tenantId, occurrenceId, adhesionId: adhesion.id, amount: missing, date: new Date().toISOString().slice(0, 10), createdBy: currentUser.name });
-        const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+        const account = resolveTontineCashbox(tenantId, occurrence.tontineId);
         if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: missing, direction: 'credit', category: 'EPARGNE', description: `Cotisation tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}` });
         writeAuditEvent({ tenantId, action: 'tontines.contributionPaymentToggled', resourceType: 'tontineContribution', resourceId: adhesion.id, resourceLabel: `${tontine.name} — tour ${occurrence.occurrenceNumber} — ${adhesion.memberName}`, sensitive: false, correlationId: occurrenceId, before: { amountPaid: String(currentPaid), paid: 'false' }, after: { amountPaid: String(amountDue), paid: 'true' }, context: { adhesionId: adhesion.id, occurrenceId, amount: missing, batch: 'true' } });
         updated += 1;
@@ -905,7 +905,7 @@ export const tontineOperationsService = {
    * TONTINE_PURCHASE, jamais mélangé au montant net posté vers la caisse
    * générale.
    *
-   * DERNIER REMPART — `resolveTontinePurchaseAccount` s'auto-répare
+   * DERNIER REMPART — `resolveTontinePurchaseCashbox` s'auto-répare
    * désormais (voir son commentaire) et ne renvoie `undefined` que si le
    * tenant lui-même n'a aucun compte système résolvable (corruption de
    * données) : dans ce cas précis, TOUTE l'opération est refusée AVANT toute
@@ -920,7 +920,7 @@ export const tontineOperationsService = {
       const occurrence = tontineOccurrences.find((item) => item.id === beneficiary.occurrenceId);
       if (!occurrence || occurrence.status === 'REALIZED') return undefined;
       const tontine = getTenantScoped(tontines, (item) => item.id === occurrence.tontineId, tenantId);
-      if (tontine?.withPurchase && purchaseAmount && purchaseAmount > 0 && !resolveTontinePurchaseAccount(tenantId, occurrence.tontineId)) return undefined;
+      if (tontine?.withPurchase && purchaseAmount && purchaseAmount > 0 && !resolveTontinePurchaseCashbox(tenantId, occurrence.tontineId)) return undefined;
       const statusBefore = getBeneficiaryPaymentStatus(beneficiary);
       const amountPaidBefore = beneficiary.amountPaid;
       const amountPurchasedBefore = beneficiary.amountPurchased;
@@ -931,9 +931,9 @@ export const tontineOperationsService = {
       beneficiary.paidAt = new Date().toISOString().slice(0, 10);
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === beneficiary.adhesionId, tenantId);
       if (adhesion && tontine?.valueType === 'MONEY') {
-        const account = resolveTontineAccount(tenantId, occurrence.tontineId);
+        const account = resolveTontineCashbox(tenantId, occurrence.tontineId);
         if (account) postTontineTransaction(tenantId, { account, memberId: adhesion.memberId, memberName: adhesion.memberName, amount, direction: 'debit', category: 'AUTRES', subcategory: 'DISTRIBUTION', description: `Réception tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`.trim() });
-        const purchaseAccount = resolveTontinePurchaseAccount(tenantId, occurrence.tontineId);
+        const purchaseAccount = resolveTontinePurchaseCashbox(tenantId, occurrence.tontineId);
         if (purchaseAccount) postTontineTransaction(tenantId, { account: purchaseAccount, memberId: adhesion.memberId, memberName: adhesion.memberName, amount: purchaseAmount, direction: 'credit', category: 'AUTRES', subcategory: 'AUTRE', description: `Achat tontine ${tontine.name} — tour ${occurrence.occurrenceNumber}`.trim() });
       }
       writeAuditEvent({

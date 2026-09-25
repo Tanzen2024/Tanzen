@@ -8,7 +8,7 @@ import { FinanceModule } from './finance-module';
  * Règle d'audit « Date transaction » : `transaction_at` (`Transaction.recordedAt`)
  * est générée par le système au moment de l'enregistrement effectif. Elle n'est
  * jamais saisie ni modifiable dans l'UI. La seule date métier saisissable au
- * formulaire est celle de la réunion (`meetingId` → `meetingDate`).
+ * formulaire est celle de la séance (`sessionId` → `FiscalSession.date`).
  *
  * Fichier dédié (pas de soumission de formulaire) : n'écrit rien dans le journal
  * `transactions` partagé, donc ne pollue aucun autre test.
@@ -23,7 +23,7 @@ describe('Finance → Transactions — « Date de transaction » système', () =
     expect(field.type).not.toBe('date');
     expect(field).toHaveAttribute('readonly');
     expect(field).toBeDisabled();
-    // la date métier saisissable reste celle de la réunion
-    expect(screen.getByLabelText('Date de réunion')).toBeInTheDocument();
+    // la date métier saisissable reste celle de la séance
+    expect(screen.getByLabelText('Séance')).toBeInTheDocument();
   });
 });

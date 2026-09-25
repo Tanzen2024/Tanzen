@@ -1,4 +1,4 @@
-import type { AccountRecord } from '@/mocks/finance/accounts';
+import type { CashboxRecord } from '@/mocks/finance/cashboxes';
 import type { FiscalYear } from '@/mocks/settings/fiscal-years';
 import { finalClosingEntry } from '@/mocks/finance/closing-entries';
 import { balanceAsOf, resolveBaseline } from './balance';
@@ -19,12 +19,12 @@ import type { CloseFiscalYearOutcome, FinanceCtx, RecomputeClosingOutcome } from
  */
 function computeClosingAmount(
   ctx: FinanceCtx,
-  account: AccountRecord,
+  account: CashboxRecord,
   fiscalYear: FiscalYear,
 ): { amount: number; openingEntryId?: string } {
-  const result = balanceAsOf({ kind: 'ACCOUNT', accountId: account.id }, ctx, fiscalYear.endDate);
+  const result = balanceAsOf({ kind: 'CASHBOX', cashboxId: account.id }, ctx, fiscalYear.endDate);
   const base = resolveBaseline(account, ctx, fiscalYear.endDate);
-  return { amount: result.byAccount[0]?.balance ?? 0, openingEntryId: base.openingEntryId };
+  return { amount: result.byCashbox[0]?.balance ?? 0, openingEntryId: base.openingEntryId };
 }
 
 /**
@@ -50,18 +50,18 @@ export function computeFiscalYearClosing(ctx: FinanceCtx, fiscalYear: FiscalYear
     return { ok: false, reason: 'FISCAL_YEAR_NOT_OPEN' };
   }
 
-  const tenantAccounts = ctx.accounts.filter((account) => account.tenantId === fiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
-  const alreadyClosedAccountIds = tenantAccounts
+  const alreadyClosedAccountIds = tenantCashboxes
     .filter((account) => finalClosingEntry(closingEntries, account.id, fiscalYear.id))
     .map((account) => account.id);
   if (alreadyClosedAccountIds.length > 0) {
-    return { ok: false, reason: 'ALREADY_CLOSED', accountIds: alreadyClosedAccountIds };
+    return { ok: false, reason: 'ALREADY_CLOSED', cashboxIds: alreadyClosedAccountIds };
   }
 
-  const computations = tenantAccounts.map((account) => {
+  const computations = tenantCashboxes.map((account) => {
     const { amount, openingEntryId } = computeClosingAmount(ctx, account, fiscalYear);
-    return { accountId: account.id, amount, openingEntryId };
+    return { cashboxId: account.id, amount, openingEntryId };
   });
   return { ok: true, computations };
 }
@@ -77,10 +77,10 @@ export function computeFiscalYearClosing(ctx: FinanceCtx, fiscalYear: FiscalYear
 export function recomputeClosingEntry(
   ctx: FinanceCtx,
   fiscalYear: FiscalYear,
-  accountId: string,
+  cashboxId: string,
 ): RecomputeClosingOutcome {
-  const account = ctx.accounts.find((item) => item.id === accountId);
-  if (!account) return { ok: false, reason: 'ACCOUNT_NOT_FOUND' };
+  const account = ctx.cashboxes.find((item) => item.id === cashboxId);
+  if (!account) return { ok: false, reason: 'CASHBOX_NOT_FOUND' };
   if (account.tenantId !== fiscalYear.tenantId) return { ok: false, reason: 'FISCAL_YEAR_TENANT_MISMATCH' };
 
   const { amount, openingEntryId } = computeClosingAmount(ctx, account, fiscalYear);

@@ -1,8 +1,8 @@
 import { mockRequest } from './api-client';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
 import { localizationSettingsList } from '@/mocks/settings/localization-settings';
-import { fiscalYears, type FiscalYear } from '@/mocks/settings/fiscal-years';
-import { isValidMeetingScheduleConfig, type MeetingScheduleConfig } from '@/mocks/settings/meeting-schedule';
+import { fiscalYears, fiscalYearLabel, hasFiscalYearOverlap, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { isValidSessionScheduleConfig, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
@@ -19,7 +19,6 @@ import { moduleConfigs, type ModuleKey } from '@/mocks/settings/modules';
 import { integrations } from '@/mocks/settings/integrations';
 
 export type CreateFiscalYearInput = {
-  label: string;
   startDate: string;
   endDate: string;
   /**
@@ -37,12 +36,12 @@ export type CreateFiscalYearInput = {
    */
   transferSelections?: string[];
   /**
-   * Calendrier des réunions de l'exercice (mandat « RÈGLE CENTRALE — DATES DE
-   * RÉUNION » §2/§3). Optionnel à la création — un exercice peut être créé sans
-   * calendrier puis configuré ensuite (`updateFiscalYearMeetingSchedule`).
-   * Ignoré s'il est structurellement incomplet.
+   * Fréquence des séances de l'exercice (reconstruction complète du
+   * sous-module Exercices fiscaux / Séances). Optionnelle à la création — un
+   * exercice peut être créé sans fréquence puis configurée ensuite
+   * (`updateFiscalYearSessionSchedule`). Ignorée si structurellement incomplète.
    */
-  meetingSchedule?: MeetingScheduleConfig;
+  sessionSchedule?: SessionScheduleConfig;
 };
 
 export type CloseCurrentFiscalYearOutcome =
@@ -79,7 +78,7 @@ function recordFiscalYearAudit(params: { tenantId: string; action: string; year:
     eventType: 'action',
     resourceType: 'fiscalYear',
     resourceId: params.year.id,
-    resourceLabel: params.year.label,
+    resourceLabel: fiscalYearLabel(params.year),
     status: 'success',
     sensitive: params.sensitive,
     correlationId: params.year.id,
@@ -151,46 +150,46 @@ export const settingsService = {
    * copie aucune donnée métier d'un exercice existant (D-FY-01, hors
    * périmètre — cf. mandat §24).
    *
-   * Validations volontairement limitées aux incohérences temporelles
-   * « évidentes » (mandat §11 point 4) — aucune règle de chevauchement
-   * partiel n'est inventée (signalé TECHNICAL DETAIL REQUIRED par
-   * `docs/P1_GLOBAL_FISCAL_YEAR_DECISION_GATE_CLOSURE.md` §5) :
-   * - `endDate` doit être strictement postérieure à `startDate` ;
-   * - pas de doublon exact (même `label`, ou même couple `startDate`/`endDate`) pour ce tenant.
+   * Validations (§23 du mandat « reconstruction Exercices fiscaux / Séances ») :
+   * - `startDate`/`endDate` obligatoires, `endDate` strictement postérieure à `startDate` ;
+   * - pas de doublon exact (même couple `startDate`/`endDate`) pour ce tenant ;
+   * - pas de CHEVAUCHEMENT avec un exercice existant du même tenant (`hasFiscalYearOverlap`) —
+   *   nouvelle règle explicitement demandée, absente de l'ancien mécanisme.
+   * Le libellé n'est jamais saisi ni stocké : `fiscalYearLabel(year)` le dérive
+   * toujours des dates (§5/§12 du mandat).
    */
   createFiscalYear: (tenantId: string, input: CreateFiscalYearInput) =>
     mockRequest(() => {
-      const label = input.label.trim();
-      if (!label || !input.startDate || !input.endDate) return undefined;
+      if (!input.startDate || !input.endDate) return undefined;
       if (new Date(input.endDate) <= new Date(input.startDate)) return undefined;
       const tenantYears = fiscalYears.filter((item) => item.tenantId === tenantId);
-      const duplicate = tenantYears.some((item) => item.label === label || (item.startDate === input.startDate && item.endDate === input.endDate));
+      const duplicate = tenantYears.some((item) => item.startDate === input.startDate && item.endDate === input.endDate);
       if (duplicate) return undefined;
-      const meetingSchedule = isValidMeetingScheduleConfig(input.meetingSchedule) ? input.meetingSchedule : undefined;
+      if (hasFiscalYearOverlap(fiscalYears, tenantId, input.startDate, input.endDate)) return undefined;
+      const sessionSchedule = isValidSessionScheduleConfig(input.sessionSchedule) ? input.sessionSchedule : undefined;
       // Suffixe aléatoire (même correctif que `workflowService.createRequest`) : `Date.now()` seul
       // colliderait entre deux créations survenant dans la même milliseconde (`VITE_MOCK_API_DELAY=0`
       // en tests rend ce cas réel, pas seulement théorique).
-      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, label, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), closedAt: null, closedBy: null, meetingSchedule };
+      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), closedAt: null, closedBy: null, sessionSchedule };
       fiscalYears.push(year);
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(','), meetingFrequency: meetingSchedule?.frequency ?? '' }, sensitive: false });
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(','), sessionFrequency: sessionSchedule?.frequency ?? '' }, sensitive: false });
       return year;
     }),
 
   /**
-   * Configure / met à jour le calendrier des réunions d'un exercice (mandat
-   * « RÈGLE CENTRALE — DATES DE RÉUNION » §2). Autorisé tant que l'exercice
-   * n'est pas `closed` (un exercice clôturé est verrouillé, cohérent avec le
-   * cycle de vie). `config = null` retire le calendrier. Régénère implicitement
-   * les occurrences (dérivées) — aucune donnée de réunion n'est stockée.
+   * Configure / met à jour la fréquence des séances d'un exercice. Autorisé
+   * tant que l'exercice n'est pas `closed` (un exercice clôturé est verrouillé,
+   * cohérent avec le cycle de vie). `config = null` retire la fréquence.
+   * Ne crée jamais de séance — sert uniquement à alimenter `suggestNextSessionDate`.
    */
-  updateFiscalYearMeetingSchedule: (tenantId: string, fiscalYearId: string, config: MeetingScheduleConfig | null) =>
+  updateFiscalYearSessionSchedule: (tenantId: string, fiscalYearId: string, config: SessionScheduleConfig | null) =>
     mockRequest(() => {
       const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
       if (!year || year.status === 'closed') return undefined;
-      if (config !== null && !isValidMeetingScheduleConfig(config)) return undefined;
-      const before = year.meetingSchedule?.frequency ?? '';
-      year.meetingSchedule = config ?? undefined;
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.meetingScheduleUpdated', year, before: { meetingFrequency: before }, after: { meetingFrequency: year.meetingSchedule?.frequency ?? '' }, sensitive: false });
+      if (config !== null && !isValidSessionScheduleConfig(config)) return undefined;
+      const before = year.sessionSchedule?.frequency ?? '';
+      year.sessionSchedule = config ?? undefined;
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.sessionScheduleUpdated', year, before: { sessionFrequency: before }, after: { sessionFrequency: year.sessionSchedule?.frequency ?? '' }, sensitive: false });
       return year;
     }),
 
@@ -267,7 +266,7 @@ export const settingsService = {
    * chevaucher le prochain exercice déjà existant du tenant — aucune règle de
    * chevauchement plus large n'est inventée (même prudence que `createFiscalYear`,
    * `TECHNICAL DETAIL REQUIRED` documenté par `docs/P1_GLOBAL_FISCAL_YEAR_DECISION_GATE_CLOSURE.md`).
-   * Refusée si l'exercice est `closed` (verrouillé, même règle que `meetingSchedule`).
+   * Refusée si l'exercice est `closed` (verrouillé, même règle que `sessionSchedule`).
    */
   extendFiscalYearEndDate: (tenantId: string, fiscalYearId: string, newEndDate: string): Promise<ExtendFiscalYearEndDateOutcome> =>
     mockRequest(() => {
@@ -325,7 +324,7 @@ export const settingsService = {
     const alreadyPending = workflowRequests.some((request) => request.tenantId === tenantId && request.domain === 'settings' && request.entityType === 'fiscalYear' && request.entityId === fiscalYearId && (request.status === 'pending' || request.status === 'inProgress'));
     if (alreadyPending) return null;
     const warnings = computeReopenWarnings(tenantId, year);
-    const request = await workflowService.createRequest(tenantId, 'WD-005', { entityId: year.id, entityLabel: year.label, requestedBy: currentUser.name, requestedByUserId: currentUser.id, justification: trimmed, warnings });
+    const request = await workflowService.createRequest(tenantId, 'WD-005', { entityId: year.id, entityLabel: fiscalYearLabel(year), requestedBy: currentUser.name, requestedByUserId: currentUser.id, justification: trimmed, warnings });
     if (!request) return null;
     recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopenRequested', year, context: { requestId: request.id, justification: trimmed, warningCount: warnings.length }, sensitive: true });
     return request;

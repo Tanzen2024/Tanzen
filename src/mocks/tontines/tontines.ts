@@ -54,7 +54,7 @@ export type Tontine = {
   valueType: ValueType;
   /** MONEY uniquement — code ISO 4217, résolu automatiquement depuis `organizationSettingsList` à la création, jamais choisi ni modifié ensuite (même si la devise de l'organisation change plus tard). */
   currency?: string;
-  /** MONEY uniquement — « Avec achat » dans l'UI. `false` par défaut. ON déclenche la résolution automatique de `purchaseAccountId` (caisse « Achat tontine » du tenant) — une pure association, jamais une transaction créée à ce moment. */
+  /** MONEY uniquement — « Avec achat » dans l'UI. `false` par défaut. ON déclenche la résolution automatique de `purchaseCashboxId` (caisse « Achat tontine » du tenant) — une pure association, jamais une transaction créée à ce moment. */
   withPurchase?: boolean;
   /** Montant de cotisation, MONEY uniquement — obligatoire et strictement positif. Partagé par toutes les Adhésions (aucun taux/pourcentage/coefficient nulle part dans le modèle). */
   contributionAmount?: number;
@@ -67,9 +67,9 @@ export type Tontine = {
   status: TontineStatus;
   createdAt: string;
   /** Caisse Finance recevant les cotisations et finançant les réceptions (MONEY uniquement) — intégration Tontine ↔ Finance, optionnelle et rétrocompatible. */
-  accountId?: string;
+  cashboxId?: string;
   /** Caisse « Achat tontine » du tenant — auto-résolue par le service, JAMAIS choisie manuellement (pas de champ « Caisse liée » dans l'UI). `undefined` si `withPurchase` est faux ou si le tenant n'a pas cette caisse. */
-  purchaseAccountId?: string;
+  purchaseCashboxId?: string;
 } & { frequency: FrequencyConfig['frequency'] } & Partial<Omit<FrequencyConfig, 'frequency'>>;
 
 export type AdhesionStatus = 'active' | 'exited';

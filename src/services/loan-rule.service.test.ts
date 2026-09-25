@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { loanRuleService, type LoanRuleInput } from './loan-rule.service';
 
 const validInput: LoanRuleInput = {
-  accountId: 'AC-003', name: 'Nouvelle politique test', allowLoans: true, loanMode: 'INTERNAL',
+  cashboxId: 'AC-003', name: 'Nouvelle politique test', allowLoans: true, loanMode: 'INTERNAL',
   minAmount: 10_000, maxAmount: 500_000, interestRate: 9, interestType: 'FIXED', interestPeriod: 'MONTHLY', durationMonths: 12,
   maxActiveLoans: 1, maxLoanExposure: 600_000, requiresGuarantor: true, minGuarantors: 1, maxGuarantors: 1,
   guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: false, requiresApproval: true, approvalLevel: 'ADMIN',
@@ -18,7 +18,7 @@ describe('loanRuleService — tenant isolation', () => {
   });
 
   it('DENY: createLoanRule refuses an account belonging to another tenant', async () => {
-    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, accountId: 'AC-004' });
+    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, cashboxId: 'AC-004' });
     expect(result).toBeNull();
   });
 
@@ -31,44 +31,44 @@ describe('loanRuleService — tenant isolation', () => {
   });
 });
 
-describe('loanRuleService — Account relation (loan_rules.account_id -> accounts.id)', () => {
+describe('loanRuleService — Cashbox relation (loan_rules.account_id -> cashboxes.id)', () => {
   it('ALLOW: createLoanRule succeeds for an account of the same tenant', async () => {
     const rule = await loanRuleService.createLoanRule('T-001', validInput);
     expect(rule).not.toBeNull();
     expect(rule?.tenantId).toBe('T-001');
-    expect(rule?.accountId).toBe('AC-003');
-    expect(rule?.accountNumber).toBe('CS-001-COUR');
+    expect(rule?.cashboxId).toBe('AC-003');
+    expect(rule?.cashboxNumber).toBe('CS-001-COUR');
     expect(rule?.status).toBe('ACTIVE');
     expect(rule?.deletedAt).toBeNull();
   });
 
   it('DENY: createLoanRule refuses an unknown account id', async () => {
-    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, accountId: 'AC-999' });
+    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, cashboxId: 'AC-999' });
     expect(result).toBeNull();
   });
 });
 
 describe('loanRuleService — UNIQUE(tenant_id, account_id) / UNIQUE(tenant_id, name)', () => {
   it('DENY: createLoanRule refuses a second rule for an account that already has a live rule', async () => {
-    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, accountId: 'AC-001', name: 'Autre nom' });
+    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, cashboxId: 'AC-001', name: 'Autre nom' });
     expect(result).toBeNull();
   });
 
   it('DENY: createLoanRule refuses a duplicate name within the same tenant', async () => {
     const [existing] = await loanRuleService.listLoanRules('T-001');
-    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, accountId: 'AC-002', name: existing.name });
+    const result = await loanRuleService.createLoanRule('T-001', { ...validInput, cashboxId: 'AC-002', name: existing.name });
     expect(result).toBeNull();
   });
 });
 
 describe('loanRuleService — canonical CHECK constraints', () => {
   it('DENY: createLoanRule refuses maxAmount < minAmount (ck_amount_valid)', async () => {
-    const result = await loanRuleService.createLoanRule('T-002', { ...validInput, accountId: 'AC-005', name: 'Test contrainte', minAmount: 100_000, maxAmount: 50_000 });
+    const result = await loanRuleService.createLoanRule('T-002', { ...validInput, cashboxId: 'AC-005', name: 'Test contrainte', minAmount: 100_000, maxAmount: 50_000 });
     expect(result).toBeNull();
   });
 
   it('DENY: createLoanRule refuses guaranteeRatio outside 0-100 (ck_guarantee_ratio)', async () => {
-    const result = await loanRuleService.createLoanRule('T-002', { ...validInput, accountId: 'AC-005', name: 'Test ratio', guaranteeRatio: 150 });
+    const result = await loanRuleService.createLoanRule('T-002', { ...validInput, cashboxId: 'AC-005', name: 'Test ratio', guaranteeRatio: 150 });
     expect(result).toBeNull();
   });
 });
@@ -93,7 +93,7 @@ describe('loanRuleService — Activate/Deactivate (D-CREDIT-LR-02, status only)'
 describe('loanRuleService — DELETE (soft delete, D-CREDIT-LR-02)', () => {
   /** Chaque test crée sa propre règle (compte T-002 encore libre) pour ne pas dépendre de l'ordre d'exécution des autres tests sur le même tableau mock partagé. */
   async function createDisposableT002Rule(name: string) {
-    const rule = await loanRuleService.createLoanRule('T-002', { ...validInput, accountId: 'AC-005', name });
+    const rule = await loanRuleService.createLoanRule('T-002', { ...validInput, cashboxId: 'AC-005', name });
     if (!rule) throw new Error('setup failed: could not create disposable T-002 rule');
     return rule;
   }
@@ -129,9 +129,9 @@ describe('loanRuleService — DELETE (soft delete, D-CREDIT-LR-02)', () => {
   it('a live rule can be recreated for the same account after the previous one was soft-deleted (RESTORE hors périmètre, §12 du mandat)', async () => {
     const first = await createDisposableT002Rule('Règle jetable 5');
     await loanRuleService.deleteLoanRule('T-002', first.id);
-    const recreated = await loanRuleService.createLoanRule('T-002', { ...validInput, accountId: 'AC-005', name: 'Règle jetable 5 bis' });
+    const recreated = await loanRuleService.createLoanRule('T-002', { ...validInput, cashboxId: 'AC-005', name: 'Règle jetable 5 bis' });
     expect(recreated).not.toBeNull();
-    expect(recreated?.accountId).toBe('AC-005');
+    expect(recreated?.cashboxId).toBe('AC-005');
   });
 
   it('RESTORE is not implemented (hors périmètre, §12 du mandat)', () => {
@@ -140,11 +140,11 @@ describe('loanRuleService — DELETE (soft delete, D-CREDIT-LR-02)', () => {
 });
 
 describe('loanRuleService — UPDATE', () => {
-  it('ALLOW: updateLoanRule modifies business fields without changing accountId', async () => {
+  it('ALLOW: updateLoanRule modifies business fields without changing cashboxId', async () => {
     const [rule] = await loanRuleService.listLoanRules('T-001');
     const result = await loanRuleService.updateLoanRule('T-001', rule.id, { interestRate: 15 });
     expect(result?.interestRate).toBe(15);
-    expect(result?.accountId).toBe(rule.accountId);
+    expect(result?.cashboxId).toBe(rule.cashboxId);
   });
 
   it('DENY: updateLoanRule refuses a change that would violate a canonical CHECK constraint', async () => {

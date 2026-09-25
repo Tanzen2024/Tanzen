@@ -1,5 +1,5 @@
-export * from './accounts';
-export * from './account-memberships';
+export * from './cashboxes';
+export * from './cashbox-memberships';
 export * from './transaction-classification';
 export * from './transactions';
 export * from './contributions';

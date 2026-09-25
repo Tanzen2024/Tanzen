@@ -35,23 +35,22 @@ export type Transaction = {
    * relation fiable. `memberId` reprend exactement l'identité déjà encodée
    * par ces noms dans le jeu de données existant (même tenant, même nom
    * complet qu'un `Member` réellement seedé), sans changer aucune valeur
-   * `fromAccount`/`toAccount` déjà affichée ailleurs (AccountDetail, etc.).
+   * `fromAccount`/`toAccount` déjà affichée ailleurs (CashboxDetail, etc.).
    */
   memberId?: string;
   /**
-   * Rattachement à la réunion à laquelle l'opération se rapporte (mandat §10).
-   * `meetingId` = relation vers `Meeting.id` ; `meetingDate` = date RÉELLE de
-   * cette réunion (distincte de `recordedAt`, l'horodatage de SAISIE dans le
-   * système). Optionnels : une opération purement inter-comptes ou une écriture
-   * hors réunion n'en a pas. Le seed historique ne les renseigne pas.
+   * Rattachement à la SÉANCE (`FiscalSession.id`) à laquelle l'opération se
+   * rapporte (reconstruction complète — remplace l'ancien `meetingId`/
+   * `meetingDate` virtuels). La date de la séance se lit via
+   * `FiscalSession.date` (`fiscalSessionService`), jamais dupliquée ici —
+   * `Transaction.date` reste la date propre de la transaction. Optionnel :
+   * une opération purement inter-comptes ou une écriture hors séance n'en a pas.
    */
-  meetingId?: string;
-  meetingDate?: string;
+  sessionId?: string;
   /**
-   * Exercice fiscal de rattachement (mandat « RÈGLE CENTRALE — DATES DE RÉUNION »
-   * §12). Porte l'isolation : `meetingId` doit être une réunion générée par CET
-   * exercice (`meetingService.validateMeetingBelongsToExercise`). Le seed
-   * historique ne le renseigne pas (réunions de gouvernance d'avant la règle).
+   * Exercice fiscal de rattachement. Porte l'isolation : `sessionId` doit être
+   * une séance de CET exercice (`fiscalSessionService.validateSessionBelongsToExercise`).
+   * Le seed historique ne le renseigne pas (transactions d'avant la règle).
    */
   fiscalYearId?: string;
   /** Date/heure d'enregistrement de la transaction dans le système (ISO). Posé par `financeService.createTransaction`. Fallback d'affichage : `date`. */
@@ -88,7 +87,7 @@ export const transactions: Transaction[] = [
   { id: 'TR-009', tenantId: 'T-005', reference: 'REF-2026-0009', date: '2026-08-04', amount: 60_000, type: 'credit', category: 'EPARGNE', status: 'pending', fromAccount: 'Awa Cissé', toAccount: 'TA-005-SAV', description: 'Contribution cycle 1 - Tontine Avenir', memberId: 'M-005' },
   { id: 'TR-010', tenantId: 'T-001', reference: 'REF-2026-0010', date: '2026-08-03', amount: 500_000, type: 'debit', category: 'AUTRES', subcategory: 'TRANSFERT', status: 'completed', fromAccount: 'CS-001-TRÉS', toAccount: 'CS-001-COUR', description: 'Virement interne trésorerie vers courant' },
   { id: 'TR-011', tenantId: 'T-005', reference: 'REF-2026-0011', date: '2026-08-02', amount: 95_000, type: 'credit', category: 'REMBOURSEMENT', status: 'completed', fromAccount: 'Awa Cissé', toAccount: 'TA-005-SAV', description: 'Remboursement prêt L-003 - Mensualité 5', memberId: 'M-005' },
-  { id: 'TR-012', tenantId: 'T-001', reference: 'REF-2026-0012', date: '2026-08-01', amount: 50_000, type: 'credit', category: 'EPARGNE', status: 'completed', fromAccount: 'Fatou Ndiaye', toAccount: 'CS-001-ÉPG', description: 'Contribution cycle 3 - Tontine Horizon', memberId: 'M-001', meetingId: 'MTG-FY-T001-2026-20260714', meetingDate: '2026-07-14', fiscalYearId: 'FY-T001-2026', recordedAt: '2026-08-01T10:12:00' },
+  { id: 'TR-012', tenantId: 'T-001', reference: 'REF-2026-0012', date: '2026-08-01', amount: 50_000, type: 'credit', category: 'EPARGNE', status: 'completed', fromAccount: 'Fatou Ndiaye', toAccount: 'CS-001-ÉPG', description: 'Contribution cycle 3 - Tontine Horizon', memberId: 'M-001', sessionId: 'FS-001', fiscalYearId: 'FY-T001-2026', recordedAt: '2026-08-01T10:12:00' },
   { id: 'TR-013', tenantId: 'T-002', reference: 'REF-2026-0013', date: '2026-07-30', amount: 1_200_000, type: 'debit', category: 'PRET', status: 'completed', fromAccount: 'TH-002-TRÉS', toAccount: 'Mamadou Sow', description: 'Décaissement prêt L-002', memberId: 'M-002' },
   { id: 'TR-014', tenantId: 'T-003', reference: 'REF-2026-0014', date: '2026-07-28', amount: 45_000, type: 'debit', category: 'AUTRES', subcategory: 'PENALITE', status: 'failed', fromAccount: 'Ibrahima Sarr', toAccount: 'MT-003-TRÉS', description: 'Pénalité - échec prélèvement', memberId: 'M-008' },
   { id: 'TR-015', tenantId: 'T-002', reference: 'REF-2026-0015', date: '2026-07-25', amount: 200_000, type: 'debit', category: 'AUTRES', subcategory: 'DISTRIBUTION', status: 'completed', fromAccount: 'TH-002-TRÉS', toAccount: 'Tontine Horizon - Cycle 4', description: 'Distribution tirage cycle 4' },

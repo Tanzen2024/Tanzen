@@ -1,16 +1,16 @@
-import { accountEntryEffect, accountLedgerEntries } from '@/mocks/finance/accounts';
-import { isMemberOfAccountAsOf } from '@/mocks/finance/account-memberships';
+import { cashboxEntryEffect, cashboxLedgerEntries } from '@/mocks/finance/cashboxes';
+import { isMemberOfCashboxAsOf } from '@/mocks/finance/cashbox-memberships';
 import type { Loan } from '@/mocks/finance/loans';
 import type { Repayment } from '@/mocks/finance/repayments';
 import { referenceDate } from './reference-date';
-import { accountsOfAsOf, scopeKey } from './scope';
-import type { FinanceCtx, FinancialScope, MemberAccountLine, MemberCreditSummary, MemberFinancialPosition } from './types';
+import { cashboxesOfAsOf, scopeKey } from './scope';
+import type { FinanceCtx, FinancialScope, MemberCashboxLine, MemberCreditSummary, MemberFinancialPosition } from './types';
 
-type MemberScope = Extract<FinancialScope, { kind: 'MEMBER_ALL_ACCOUNTS' | 'MEMBER_ACCOUNT' }>;
+type MemberScope = Extract<FinancialScope, { kind: 'MEMBER_ALL_CASHBOXES' | 'MEMBER_CASHBOX' }>;
 
 /**
  * Agrégat CRÉDIT d'un membre (mandat étape 7) — TOUJOURS tenant/membre-scopé,
- * jamais par caisse (`Loan` n'a pas d'`accountId` : voir `types.ts`,
+ * jamais par caisse (`Loan` n'a pas d'`cashboxId` : voir `types.ts`,
  * `MemberCreditSummary`).
  *
  * SOURCE DE VÉRITÉ : `Loan`/`Repayment` UNIQUEMENT.
@@ -68,7 +68,7 @@ function memberLoanSummary(
 
 /**
  * POSITION FINANCIÈRE D'UN MEMBRE (étape 7) — RÉUTILISE le périmètre
- * `AccountMembership` déjà établi par `scope.ts`/`accountsOfAsOf` (étapes
+ * `CashboxMembership` déjà établi par `scope.ts`/`cashboxesOfAsOf` (étapes
  * 3-5) : aucune nouvelle règle de périmètre, aucune caisse du tenant
  * n'apparaît si le membre n'y est pas adhérent à `asOfDate`, une caisse
  * adhérée SANS transaction apparaît à 0 (héritage direct, pas de code
@@ -83,27 +83,27 @@ function memberLoanSummary(
  *   - `PRET`/`REMBOURSEMENT`                 → JAMAIS comptés ici (source = `Loan`/`Repayment`, `credit`)
  *
  * `credit` (prêts) et `distributions` ne sont calculés QUE pour
- * `MEMBER_ALL_ACCOUNTS` (mandat §2 : `Loan` n'a pas d'`accountId`, un prêt
+ * `MEMBER_ALL_CASHBOXES` (mandat §2 : `Loan` n'a pas d'`cashboxId`, un prêt
  * n'est jamais attribuable à une seule caisse) — restent `undefined` pour
- * `MEMBER_ACCOUNT`, jamais une valeur inventée (répartition par caisse,
+ * `MEMBER_CASHBOX`, jamais une valeur inventée (répartition par caisse,
  * moyenne, etc.).
  */
 export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asOfDate: string): MemberFinancialPosition {
   const memberId = scope.memberId;
-  const { accounts, outOfScope } = accountsOfAsOf(scope, ctx, asOfDate);
+  const { cashboxes: accounts, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
 
   const upToDate = ctx.transactions.filter((tx) => tx.status === 'completed' && referenceDate(tx) <= asOfDate);
 
-  const byAccount: MemberAccountLine[] = accounts.map((account) => {
-    const entries = accountLedgerEntries(account, upToDate).filter(
-      (tx) => tx.memberId === memberId && isMemberOfAccountAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
+  const byCashbox: MemberCashboxLine[] = accounts.map((account) => {
+    const entries = cashboxLedgerEntries(account, upToDate).filter(
+      (tx) => tx.memberId === memberId && isMemberOfCashboxAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
     );
 
     let savings = 0;
     let otherMovements = 0;
     let internalTransfers = 0;
     for (const tx of entries) {
-      const effect = accountEntryEffect(account.accountNumber, tx);
+      const effect = cashboxEntryEffect(account.cashboxNumber, tx);
       if (tx.category === 'EPARGNE') {
         savings += effect;
       } else if (tx.category === 'AUTRES') {
@@ -120,15 +120,15 @@ export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asO
     const active = ctx.memberships.find(
       (m) =>
         m.memberId === memberId &&
-        m.accountId === account.id &&
+        m.cashboxId === account.id &&
         m.startDate <= asOfDate &&
         (m.endDate === null || asOfDate <= m.endDate),
     );
 
     return {
-      accountId: account.id,
-      accountNumber: account.accountNumber,
-      accountTitle: account.title,
+      cashboxId: account.id,
+      cashboxNumber: account.cashboxNumber,
+      cashboxTitle: account.title,
       savings,
       otherMovements,
       internalTransfers,
@@ -137,25 +137,25 @@ export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asO
     };
   });
 
-  const savings = byAccount.reduce((sum, line) => sum + line.savings, 0);
-  const otherMovements = byAccount.reduce((sum, line) => sum + line.otherMovements, 0);
-  const internalTransfers = byAccount.reduce((sum, line) => sum + line.internalTransfers, 0);
+  const savings = byCashbox.reduce((sum, line) => sum + line.savings, 0);
+  const otherMovements = byCashbox.reduce((sum, line) => sum + line.otherMovements, 0);
+  const internalTransfers = byCashbox.reduce((sum, line) => sum + line.internalTransfers, 0);
 
   const result: MemberFinancialPosition = {
     scopeKey: scopeKey(scope),
     asOfDate,
     outOfScope,
-    byAccount,
+    byCashbox,
     savings,
     otherMovements,
     internalTransfers,
   };
 
-  if (scope.kind === 'MEMBER_ALL_ACCOUNTS') {
-    // Défense tenant dérivée de `ctx.accounts` (déjà tenant-scopé par le service), même
+  if (scope.kind === 'MEMBER_ALL_CASHBOXES') {
+    // Défense tenant dérivée de `ctx.cashboxes` (déjà tenant-scopé par le service), même
     // patron que `flows.ts` — `credit`/`distributions` ne sont pas gated par l'adhésion
     // (un prêt n'exige aucune caisse adhérée), donc calculés même si `outOfScope`.
-    const perimeterTenants = new Set(ctx.accounts.map((account) => account.tenantId));
+    const perimeterTenants = new Set(ctx.cashboxes.map((account) => account.tenantId));
 
     result.credit = memberLoanSummary(ctx.loans ?? [], ctx.repayments ?? [], memberId, perimeterTenants, asOfDate);
 
@@ -180,12 +180,12 @@ export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asO
 /** Version batch — un `memberFinancialPosition` par membre, même scope (caisse unique ou toutes ses caisses). */
 export function memberFinancialPositions(
   memberIds: string[],
-  accountId: string | undefined,
+  cashboxId: string | undefined,
   ctx: FinanceCtx,
   asOfDate: string,
 ): MemberFinancialPosition[] {
   return memberIds.map((memberId) => {
-    const scope: MemberScope = accountId ? { kind: 'MEMBER_ACCOUNT', memberId, accountId } : { kind: 'MEMBER_ALL_ACCOUNTS', memberId };
+    const scope: MemberScope = cashboxId ? { kind: 'MEMBER_CASHBOX', memberId, cashboxId } : { kind: 'MEMBER_ALL_CASHBOXES', memberId };
     return memberFinancialPosition(scope, ctx, asOfDate);
   });
 }

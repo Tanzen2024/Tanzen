@@ -17,7 +17,7 @@ const MODULE_KEYS: ModuleKey[] = ['dashboard', 'organization', 'finance', 'credi
 const REQUIRED_PERMISSION: Record<ModuleKey, string | null> = {
   dashboard: null,
   organization: 'tenants.read',
-  finance: 'accounts.read',
+  finance: 'cashboxes.read',
   credit: 'applications.read',
   tontines: 'tontines.read',
   operations: 'workflows.read',

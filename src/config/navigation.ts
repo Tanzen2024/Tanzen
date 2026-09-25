@@ -72,6 +72,7 @@ export const navigationTree: NavigationNode[] = [
   {
     label: 'Finance', path: '/finance', icon: Landmark, children: [
       { label: 'Accounts', path: '/finance/accounts', icon: WalletCards },
+      { label: 'Fiscal Years', path: '/finance/fiscal-years', icon: CalendarDays },
       { label: 'Tontines', path: '/tontines', icon: Sparkles },
     ],
   },

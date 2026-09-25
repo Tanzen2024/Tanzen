@@ -63,10 +63,11 @@ describe('navigationTree — Finance (mandat « Le Compte comme point d\'entrée
   const finance = navigationTree.find((node) => node.label === 'Finance');
   const paths = flattenNavigation(navigationTree).map((node) => node.path);
 
-  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Tontines] — Transactions is no longer a menu entry', () => {
+  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Fiscal Years, Tontines] — Transactions is no longer a menu entry', () => {
     expect(finance?.path).toBe('/finance');
-    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Tontines']);
+    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Fiscal Years', 'Tontines']);
     expect(finance?.children?.find((child) => child.label === 'Accounts')?.path).toBe('/finance/accounts');
+    expect(finance?.children?.find((child) => child.label === 'Fiscal Years')?.path).toBe('/finance/fiscal-years');
   });
 
   it('ALLOW: Tontines is a direct child of Finance and keeps its existing /tontines URL — only the sidebar depth changes', () => {

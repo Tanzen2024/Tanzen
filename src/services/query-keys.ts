@@ -40,15 +40,17 @@ export const queryKeys = {
     voteOptions: (voteId: string) => ['governance', 'vote-options', voteId] as const,
     memberVotes: (voteId: string) => ['governance', 'member-votes', voteId] as const,
   },
-  /** Réunions dérivées d'un exercice fiscal (source de vérité des « Date de réunion »), cf. `meeting.service.ts`. */
-  meetings: {
-    forFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['meetings', 'for-fiscal-year', tenantId, fiscalYearId] as const,
-    nearest: (tenantId: string, fiscalYearId: string | undefined, currentDate: string) => ['meetings', 'nearest', tenantId, fiscalYearId, currentDate] as const,
-  },
   finance: {
-    accounts: (tenantId: string) => ['finance', 'accounts', tenantId] as const,
-    account: (id: string) => ['finance', 'accounts', 'detail', id] as const,
-    accountMemberships: (tenantId: string) => ['finance', 'account-memberships', tenantId] as const,
+    /** Séances d'un exercice fiscal — reconstruction complète, remplace l'ancien `meetings` (réunions virtuelles). */
+    sessions: {
+      list: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'sessions', 'list', tenantId, fiscalYearId] as const,
+      next: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'sessions', 'next', tenantId, fiscalYearId] as const,
+      /** Toutes les séances du tenant, tous exercices confondus — journal consolidé. */
+      all: (tenantId: string) => ['finance', 'sessions', 'all', tenantId] as const,
+    },
+    cashboxes: (tenantId: string) => ['finance', 'cashboxes', tenantId] as const,
+    cashbox: (id: string) => ['finance', 'cashboxes', 'detail', id] as const,
+    cashboxMemberships: (tenantId: string) => ['finance', 'cashbox-memberships', tenantId] as const,
     /** Moteur de position — `scopeKey` provient de `@/lib/finance`. */
     position: {
       balance: (tenantId: string, scopeKey: string, asOfDate: string) => ['finance', 'position', 'balance', tenantId, scopeKey, asOfDate] as const,
@@ -58,7 +60,7 @@ export const queryKeys = {
       openingEntries: (tenantId: string, fiscalYearId: string) => ['finance', 'position', 'opening-entries', tenantId, fiscalYearId] as const,
       carryForwardIntegrity: (tenantId: string, fromFiscalYearId: string, toFiscalYearId: string) =>
         ['finance', 'position', 'carry-forward-integrity', tenantId, fromFiscalYearId, toFiscalYearId] as const,
-      /** Étape 7 — position d'un membre (`scopeKey` = `member:<id>` ou `member:<id>:account:<id>`). */
+      /** Étape 7 — position d'un membre (`scopeKey` = `member:<id>` ou `member:<id>:cashbox:<id>`). */
       memberPosition: (tenantId: string, scopeKey: string, asOfDate: string) => ['finance', 'position', 'member', tenantId, scopeKey, asOfDate] as const,
     },
     transactions: (tenantId: string) => ['finance', 'transactions', tenantId] as const,

@@ -5,7 +5,7 @@ import { loans, type Loan } from '@/mocks/finance/loans';
 import { repayments, type Repayment, type RepaymentStatus } from '@/mocks/finance/repayments';
 import { guarantors, type Guarantor } from '@/mocks/finance/guarantors';
 import { loanRules, type LoanRule } from '@/mocks/finance/loan-rules';
-import { accounts } from '@/mocks/finance/accounts';
+import { cashboxes } from '@/mocks/finance/cashboxes';
 import { members } from '@/mocks/organization/members';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
@@ -22,7 +22,7 @@ export type GuarantorInput = Pick<Guarantor, 'loanId' | 'guarantorName' | 'guara
 
 export type SubmitLoanApplicationInput = {
   memberId: string;
-  accountId: string;
+  cashboxId: string;
   requestedAmount: number;
   purpose: string;
   creditScore?: number;
@@ -31,7 +31,7 @@ export type SubmitLoanApplicationInput = {
 };
 
 export type CreateLoanTransactionInput = {
-  accountId: string;
+  cashboxId: string;
   memberId: string;
   principal: number;
   purpose?: string;
@@ -68,8 +68,8 @@ function today(): string {
  * service contournait donc entièrement la politique). Ne retient qu'une règle
  * ACTIVE et non supprimée qui autorise les prêts (`allowLoans`).
  */
-function resolveActiveLoanRule(tenantId: string, accountId: string): LoanRule | undefined {
-  return loanRules.find((rule) => rule.tenantId === tenantId && rule.accountId === accountId && rule.status === 'ACTIVE' && rule.deletedAt === null && rule.allowLoans);
+function resolveActiveLoanRule(tenantId: string, cashboxId: string): LoanRule | undefined {
+  return loanRules.find((rule) => rule.tenantId === tenantId && rule.cashboxId === cashboxId && rule.status === 'ACTIVE' && rule.deletedAt === null && rule.allowLoans);
 }
 
 /**
@@ -202,9 +202,9 @@ export const creditService = {
   submitLoanApplication: async (tenantId: string, input: SubmitLoanApplicationInput, requestedBy: string, requestedByUserId?: string): Promise<{ application: Application; request: WorkflowRequest } | undefined> => {
       const member = getTenantScoped(members, (item) => item.id === input.memberId, tenantId);
       if (!member) return undefined;
-      const account = getTenantScoped(accounts, (item) => item.id === input.accountId, tenantId);
+      const account = getTenantScoped(cashboxes, (item) => item.id === input.cashboxId, tenantId);
       if (!account) return undefined;
-      const rule = resolveActiveLoanRule(tenantId, input.accountId);
+      const rule = resolveActiveLoanRule(tenantId, input.cashboxId);
       if (!rule) return undefined;
       if (!Number.isFinite(input.requestedAmount) || input.requestedAmount < rule.minAmount || input.requestedAmount > rule.maxAmount) return undefined;
       if (countActiveLoans(tenantId, input.memberId) >= rule.maxActiveLoans) return undefined;
@@ -217,7 +217,7 @@ export const creditService = {
         tenantId,
         applicant,
         memberId: input.memberId,
-        accountId: input.accountId,
+        cashboxId: input.cashboxId,
         requestedAmount: input.requestedAmount,
         purpose: input.purpose,
         submittedDate: today(),
@@ -285,19 +285,19 @@ export const creditService = {
   /** Pas de `mockRequest()` — voir la note sur `submitLoanApplication`. */
   disburseLoan: async (tenantId: string, applicationId: string): Promise<{ application: Application; loan: Loan } | undefined> => {
       const application = getTenantScoped(applications, (item) => item.id === applicationId, tenantId);
-      if (!application || application.stage !== 'stageApproved' || !application.memberId || !application.accountId) return undefined;
-      const rule = resolveActiveLoanRule(tenantId, application.accountId);
+      if (!application || application.stage !== 'stageApproved' || !application.memberId || !application.cashboxId) return undefined;
+      const rule = resolveActiveLoanRule(tenantId, application.cashboxId);
       if (!rule) return undefined;
       if (rule.requiresGuarantor) {
         const valid = (application.pendingGuarantors ?? []).filter((item) => item.guarantorName.trim() && item.guaranteedAmount > 0);
         if (valid.length < rule.minGuarantors) return undefined;
       }
-      const account = getTenantScoped(accounts, (item) => item.id === application.accountId, tenantId);
+      const account = getTenantScoped(cashboxes, (item) => item.id === application.cashboxId, tenantId);
       const member = getTenantScoped(members, (item) => item.id === application.memberId as string, tenantId);
       if (!account || !member) return undefined;
 
       const transactionInput: TransactionInput = {
-        accountNumber: account.accountNumber,
+        cashboxNumber: account.cashboxNumber,
         memberId: member.id,
         memberName: `${member.firstName} ${member.lastName}`,
         category: 'PRET',
@@ -358,9 +358,9 @@ export const creditService = {
   createLoanTransaction: async (tenantId: string, input: CreateLoanTransactionInput): Promise<{ application: Application; loan: Loan; transaction: NonNullable<Awaited<ReturnType<typeof financeService.createTransaction>>> } | undefined> => {
       const member = getTenantScoped(members, (item) => item.id === input.memberId, tenantId);
       if (!member) return undefined;
-      const account = getTenantScoped(accounts, (item) => item.id === input.accountId, tenantId);
+      const account = getTenantScoped(cashboxes, (item) => item.id === input.cashboxId, tenantId);
       if (!account) return undefined;
-      const rule = resolveActiveLoanRule(tenantId, input.accountId);
+      const rule = resolveActiveLoanRule(tenantId, input.cashboxId);
       if (!rule) return undefined;
       if (!Number.isFinite(input.principal) || input.principal < rule.minAmount || input.principal > rule.maxAmount) return undefined;
       if (countActiveLoans(tenantId, input.memberId) >= rule.maxActiveLoans) return undefined;
@@ -379,7 +379,7 @@ export const creditService = {
         tenantId,
         applicant: `${member.firstName} ${member.lastName}`,
         memberId: input.memberId,
-        accountId: input.accountId,
+        cashboxId: input.cashboxId,
         requestedAmount: input.principal,
         purpose: input.purpose ?? '',
         submittedDate: transaction.date,

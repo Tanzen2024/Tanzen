@@ -16,7 +16,7 @@ describe('fiscalYearTransferCategories — TRANSFER SELECTION CORRECTION (D-FY-0
 
   it('exactly the 4 permanent/tenant-scoped categories are transferable, not all 9', () => {
     const transferableIds = fiscalYearTransferCategories.filter((c) => c.transferable).map((c) => c.id);
-    expect(transferableIds.sort()).toEqual(['accountsConfig', 'activeMembers', 'loanRules', 'tontineConfig'].sort());
+    expect(transferableIds.sort()).toEqual(['cashboxesConfig', 'activeMembers', 'loanRules', 'tontineConfig'].sort());
   });
 
   it('historical/operational categories remain locked as NOT_TRANSFERABLE, not silently reclassified as transferable', () => {
@@ -102,7 +102,7 @@ describe('settingsService — REGRESSION: fiscal year isCurrent invariant (Phase
 describe('settingsService — IMPLEMENTATION GO: createFiscalYear (D-FY-01, CREATE ≠ CLOSE)', () => {
   it('ALLOW: createFiscalYear creates a new upcoming fiscal year for the requesting tenant, without touching the current one', async () => {
     const before = await settingsService.listFiscalYears('T-002');
-    const created = await settingsService.createFiscalYear('T-002', { label: 'Exercice 2028', startDate: '2028-01-01', endDate: '2028-12-31' });
+    const created = await settingsService.createFiscalYear('T-002', { startDate: '2028-01-01', endDate: '2028-12-31' });
     expect(created?.status).toBe('upcoming');
     expect(created?.isCurrent).toBe(false);
     expect(created?.tenantId).toBe('T-002');
@@ -112,26 +112,37 @@ describe('settingsService — IMPLEMENTATION GO: createFiscalYear (D-FY-01, CREA
     expect(current?.id).toBe('FY-T002-2026'); // unchanged — creating a FY never closes/replaces the current one
   });
 
-  it('DENY: createFiscalYear rejects a duplicate (same label already used by this tenant)', async () => {
-    const result = await settingsService.createFiscalYear('T-002', { label: 'Exercice 2026', startDate: '2029-01-01', endDate: '2029-12-31' });
+  it('DENY: createFiscalYear rejects an exact duplicate period already used by this tenant', async () => {
+    const result = await settingsService.createFiscalYear('T-002', { startDate: '2028-01-01', endDate: '2028-12-31' });
     expect(result).toBeNull();
   });
 
+  it('DENY: createFiscalYear rejects a period that overlaps an existing exercise of this tenant (mandat §23)', async () => {
+    // FY-T002-2027 (upcoming, seed) couvre 2027-01-01 → 2027-12-31 : un exercice qui déborde dessus doit être refusé.
+    const result = await settingsService.createFiscalYear('T-002', { startDate: '2027-06-01', endDate: '2028-06-01' });
+    expect(result).toBeNull();
+  });
+
+  it('ALLOW: createFiscalYear accepts a period strictly contiguous to an existing exercise (no gap, no overlap)', async () => {
+    const result = await settingsService.createFiscalYear('T-002', { startDate: '2029-01-01', endDate: '2029-12-31' });
+    expect(result).not.toBeNull();
+  });
+
   it('DENY: createFiscalYear rejects an invalid period (endDate not after startDate)', async () => {
-    const result = await settingsService.createFiscalYear('T-002', { label: 'Exercice invalide', startDate: '2030-06-01', endDate: '2030-01-01' });
+    const result = await settingsService.createFiscalYear('T-002', { startDate: '2030-06-01', endDate: '2030-01-01' });
     expect(result).toBeNull();
   });
 
   it('ALLOW: createFiscalYear never touches another tenant\'s fiscal years', async () => {
     const t004Before = await settingsService.listFiscalYears('T-004');
-    await settingsService.createFiscalYear('T-002', { label: 'Exercice 2031', startDate: '2031-01-01', endDate: '2031-12-31' });
+    await settingsService.createFiscalYear('T-002', { startDate: '2031-01-01', endDate: '2031-12-31' });
     const t004After = await settingsService.listFiscalYears('T-004');
     expect(t004After.length).toBe(t004Before.length);
   });
 
   it('AUDIT (D-FY-06): createFiscalYear records a fiscalYears.create event in audit_logs', async () => {
     const before = auditEvents.length;
-    const created = await settingsService.createFiscalYear('T-002', { label: 'Exercice 2032', startDate: '2032-01-01', endDate: '2032-12-31' });
+    const created = await settingsService.createFiscalYear('T-002', { startDate: '2032-01-01', endDate: '2032-12-31' });
     expect(auditEvents.length).toBe(before + 1);
     const event = auditEvents[auditEvents.length - 1];
     expect(event.action).toBe('fiscalYears.create');
@@ -142,14 +153,14 @@ describe('settingsService — IMPLEMENTATION GO: createFiscalYear (D-FY-01, CREA
 
   it('TRANSFER SELECTION CORRECTION: createFiscalYear records only the categories actually selected, never all of them implicitly', async () => {
     const before = auditEvents.length;
-    await settingsService.createFiscalYear('T-002', { label: 'Exercice 2034', startDate: '2034-01-01', endDate: '2034-12-31', transferSelections: ['tontineConfig', 'activeMembers'] });
+    await settingsService.createFiscalYear('T-002', { startDate: '2034-01-01', endDate: '2034-12-31', transferSelections: ['tontineConfig', 'activeMembers'] });
     const event = auditEvents[auditEvents.length - 1];
     expect(auditEvents.length).toBe(before + 1);
     expect(event.context?.transferSelections).toBe('tontineConfig,activeMembers');
   });
 
   it('TRANSFER SELECTION CORRECTION: createFiscalYear accepts an empty selection (no category is mandatory)', async () => {
-    const created = await settingsService.createFiscalYear('T-002', { label: 'Exercice 2035', startDate: '2035-01-01', endDate: '2035-12-31', transferSelections: [] });
+    const created = await settingsService.createFiscalYear('T-002', { startDate: '2035-01-01', endDate: '2035-12-31', transferSelections: [] });
     expect(created).not.toBeNull();
     const event = auditEvents[auditEvents.length - 1];
     expect(event.context?.transferSelections).toBe('');
@@ -398,7 +409,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
 describe('settingsService — closeCurrentFiscalYear: clôture financière intégrée + opérations en attente signalées, jamais bloquantes', () => {
   it('ALLOW: closing creates the financial ClosingEntry FINAL for every account and reports (without blocking) a pending distribution dated within the period', async () => {
     const tenantId = 'T-001';
-    const year = await settingsService.createFiscalYear(tenantId, { label: `Exercice clôture financière ${Date.now()}`, startDate: '2090-01-01', endDate: '2090-12-31' });
+    const year = await settingsService.createFiscalYear(tenantId, { startDate: '2090-01-01', endDate: '2090-12-31' });
     expect(year).toBeTruthy();
     await settingsService.openFiscalYear(tenantId, year!.id);
     // Opération en attente dans la période — signalée, jamais bloquante (voir le commentaire de closeCurrentFiscalYear).
@@ -434,7 +445,7 @@ describe('settingsService — closeCurrentFiscalYear: clôture financière inté
  */
 describe('settingsService — extendFiscalYearEndDate (prorogation)', () => {
   it('ALLOW: extends the end date of an upcoming fiscal year, audited as fiscalYears.extend', async () => {
-    const created = await settingsService.createFiscalYear('T-003', { label: `Exercice prorogation ${Date.now()}`, startDate: '2030-01-01', endDate: '2030-12-31' });
+    const created = await settingsService.createFiscalYear('T-003', { startDate: '2030-01-01', endDate: '2030-12-31' });
     expect(created).toBeTruthy();
     const before = auditEvents.length;
     const result = await settingsService.extendFiscalYearEndDate('T-003', created!.id, '2031-01-31');
@@ -445,8 +456,9 @@ describe('settingsService — extendFiscalYearEndDate (prorogation)', () => {
   });
 
   it('DENY: refuses a new end date that is not strictly after the current one', async () => {
-    const created = await settingsService.createFiscalYear('T-003', { label: `Exercice prorogation invalide ${Date.now()}`, startDate: '2031-01-01', endDate: '2031-12-31' });
-    const result = await settingsService.extendFiscalYearEndDate('T-003', created!.id, '2031-06-01');
+    // 2032 (pas 2031) : le test précédent a prorogé son exercice T-003 jusqu'au 2031-01-31, donc 2031-2031 chevaucherait désormais (mandat §23 — chevauchement refusé).
+    const created = await settingsService.createFiscalYear('T-003', { startDate: '2032-01-01', endDate: '2032-12-31' });
+    const result = await settingsService.extendFiscalYearEndDate('T-003', created!.id, '2032-06-01');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('NOT_AN_EXTENSION');
   });
@@ -458,9 +470,8 @@ describe('settingsService — extendFiscalYearEndDate (prorogation)', () => {
   });
 
   it('DENY: refuses an extension that would overlap an already-existing next fiscal year', async () => {
-    const stamp = Date.now();
-    const first = await settingsService.createFiscalYear('T-004', { label: `Exercice A ${stamp}`, startDate: '2040-01-01', endDate: '2040-12-31' });
-    const second = await settingsService.createFiscalYear('T-004', { label: `Exercice B ${stamp}`, startDate: '2041-01-01', endDate: '2041-12-31' });
+    const first = await settingsService.createFiscalYear('T-004', { startDate: '2040-01-01', endDate: '2040-12-31' });
+    const second = await settingsService.createFiscalYear('T-004', { startDate: '2041-01-01', endDate: '2041-12-31' });
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
     const result = await settingsService.extendFiscalYearEndDate('T-004', first!.id, '2041-06-30');
@@ -477,9 +488,8 @@ describe('settingsService — extendFiscalYearEndDate (prorogation)', () => {
 describe('settingsService — requestFiscalYearReopen: avertissements non bloquants', () => {
   it('WARNING: flags NEXT_YEAR_ACTIVE when a later fiscal year already exists for the tenant, without blocking the request', async () => {
     const tenantId = 'T-004';
-    const stamp = Date.now();
-    const target = await settingsService.createFiscalYear(tenantId, { label: `Exercice cible ${stamp}`, startDate: '2050-01-01', endDate: '2050-12-31' });
-    const next = await settingsService.createFiscalYear(tenantId, { label: `Exercice suivant ${stamp}`, startDate: '2051-01-01', endDate: '2051-12-31' });
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2050-01-01', endDate: '2050-12-31' });
+    const next = await settingsService.createFiscalYear(tenantId, { startDate: '2051-01-01', endDate: '2051-12-31' });
     expect(target).toBeTruthy();
     expect(next).toBeTruthy();
     await settingsService.openFiscalYear(tenantId, target!.id);
@@ -493,7 +503,7 @@ describe('settingsService — requestFiscalYearReopen: avertissements non bloqua
 
   it('NO WARNING: an empty warnings array when no later fiscal year exists for the tenant', async () => {
     const tenantId = 'T-004';
-    const target = await settingsService.createFiscalYear(tenantId, { label: `Exercice sans suivant ${Date.now()}`, startDate: '2060-01-01', endDate: '2060-12-31' });
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2060-01-01', endDate: '2060-12-31' });
     expect(target).toBeTruthy();
     await settingsService.openFiscalYear(tenantId, target!.id);
     await settingsService.closeCurrentFiscalYear(tenantId);
@@ -510,7 +520,7 @@ describe('settingsService — requestFiscalYearReopen: avertissements non bloqua
 describe('settingsService — applyFiscalYearReopenDecision: cache closedAt/closedBy remis à null', () => {
   it('ALLOW: reopening resets closedAt/closedBy on the entity while the audit trail keeps the close/reopen history', async () => {
     const tenantId = 'T-004';
-    const target = await settingsService.createFiscalYear(tenantId, { label: `Exercice reset cache ${Date.now()}`, startDate: '2070-01-01', endDate: '2070-12-31' });
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2070-01-01', endDate: '2070-12-31' });
     expect(target).toBeTruthy();
     await settingsService.openFiscalYear(tenantId, target!.id);
     const closed = await settingsService.closeCurrentFiscalYear(tenantId);

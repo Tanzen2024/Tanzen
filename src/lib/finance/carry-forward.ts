@@ -18,7 +18,7 @@ function nextCalendarDay(date: string): string {
  *
  * Toutes les caisses du tenant sont incluses (actives, inactives, créées en
  * cours d'exercice, sans transaction) — aucun filtre par `status` ni par
- * activité. Ne touche JAMAIS `AccountMembership` (write-set strictement
+ * activité. Ne touche JAMAIS `CashboxMembership` (write-set strictement
  * limité à `OpeningEntry` — une adhésion historique n'est jamais modifiée par
  * un report, mandat §6).
  *
@@ -53,31 +53,31 @@ export function computeCarryForward(
     return { ok: false, reason: 'NOT_CONTIGUOUS' };
   }
 
-  const tenantAccounts = ctx.accounts.filter((account) => account.tenantId === fromFiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fromFiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
   const openingEntries = ctx.openingEntries ?? [];
 
-  const missingClosingAccountIds = tenantAccounts
+  const missingClosingAccountIds = tenantCashboxes
     .filter((account) => !finalClosingEntry(closingEntries, account.id, fromFiscalYear.id))
     .map((account) => account.id);
   if (missingClosingAccountIds.length > 0) {
-    return { ok: false, reason: 'MISSING_CLOSING_ENTRIES', accountIds: missingClosingAccountIds };
+    return { ok: false, reason: 'MISSING_CLOSING_ENTRIES', cashboxIds: missingClosingAccountIds };
   }
 
-  const alreadyCarriedAccountIds = tenantAccounts
+  const alreadyCarriedAccountIds = tenantCashboxes
     .filter((account) =>
       openingEntries.some(
-        (entry) => entry.accountId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
+        (entry) => entry.cashboxId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
       ),
     )
     .map((account) => account.id);
   if (alreadyCarriedAccountIds.length > 0) {
-    return { ok: false, reason: 'ALREADY_CARRIED', accountIds: alreadyCarriedAccountIds };
+    return { ok: false, reason: 'ALREADY_CARRIED', cashboxIds: alreadyCarriedAccountIds };
   }
 
-  const computations = tenantAccounts.map((account) => {
+  const computations = tenantCashboxes.map((account) => {
     const closing = finalClosingEntry(closingEntries, account.id, fromFiscalYear.id)!;
-    return { accountId: account.id, amount: closing.amount, date: toFiscalYear.startDate, sourceClosingEntryId: closing.id };
+    return { cashboxId: account.id, amount: closing.amount, date: toFiscalYear.startDate, sourceClosingEntryId: closing.id };
   });
   return { ok: true, computations };
 }
@@ -96,18 +96,18 @@ export function verifyCarryForwardIntegrity(
   fromFiscalYear: FiscalYear,
   toFiscalYear: FiscalYear,
 ): IntegrityMismatch[] {
-  const tenantAccounts = ctx.accounts.filter((account) => account.tenantId === fromFiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fromFiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
   const openingEntries = ctx.openingEntries ?? [];
 
   const mismatches: IntegrityMismatch[] = [];
-  for (const account of tenantAccounts) {
+  for (const account of tenantCashboxes) {
     const closing = finalClosingEntry(closingEntries, account.id, fromFiscalYear.id);
     const opening = openingEntries.find(
-      (entry) => entry.accountId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
+      (entry) => entry.cashboxId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
     );
     if (closing && opening && closing.amount !== opening.amount) {
-      mismatches.push({ accountId: account.id, closingAmount: closing.amount, openingAmount: opening.amount });
+      mismatches.push({ cashboxId: account.id, closingAmount: closing.amount, openingAmount: opening.amount });
     }
   }
   return mismatches;

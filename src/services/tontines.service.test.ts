@@ -58,13 +58,13 @@ describe('tontinesService — Tontine CRUD', () => {
   it('ALLOW: « Avec achat » ON resolves and stores the tenant’s « Achat tontine » purchase account automatically', async () => {
     const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Avec Achat ${Date.now()}`, valueType: 'MONEY', contributionAmount: 15_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 10, withPurchase: true } as never);
     expect(tontine?.withPurchase).toBe(true);
-    expect(tontine?.purchaseAccountId).toBe('AC-015');
+    expect(tontine?.purchaseCashboxId).toBe('AC-015');
   });
 
   it('ALLOW: « Avec achat » OFF never associates a purchase account', async () => {
     const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Sans Achat ${Date.now()}`, valueType: 'MONEY', contributionAmount: 15_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 10, withPurchase: false } as never);
     expect(tontine?.withPurchase).toBe(false);
-    expect(tontine?.purchaseAccountId).toBeUndefined();
+    expect(tontine?.purchaseCashboxId).toBeUndefined();
   });
 
   it('ALLOW: creates a GOODS tontine without any currency/withPurchase field', async () => {
@@ -82,9 +82,9 @@ describe('tontinesService — Tontine CRUD', () => {
 
   it('ALLOW: toggling withPurchase ON via update resolves the purchase account', async () => {
     const created = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Toggle ${Date.now()}`, valueType: 'MONEY', contributionAmount: 10_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: false } as never);
-    expect(created?.purchaseAccountId).toBeUndefined();
+    expect(created?.purchaseCashboxId).toBeUndefined();
     const updated = await tontinesService.updateTontine('T-001', created!.id, { withPurchase: true });
-    expect(updated?.purchaseAccountId).toBe('AC-015');
+    expect(updated?.purchaseCashboxId).toBe('AC-015');
   });
 });
 
