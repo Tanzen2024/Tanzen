@@ -44,17 +44,17 @@ export type CashboxMembership = {
  *   dans MEMBER_ALL_ACCOUNTS. NON adhérente des autres caisses du tenant.
  *
  *   Cheikh (M-006) — cas « voyage dans le temps » : adhésion Épargne clôturée au
- *   30/06/2026. Au 15/05 il est membre de {Trésorerie, Épargne} ; au 15/08,
- *   membre de {Trésorerie} uniquement.
+ *   31/08/2026. Au 15/08 il est membre de {Transport, Épargne} ; au 15/09,
+ *   membre de {Transport} uniquement.
  *
  * T-002 : une adhésion pour prouver l'isolation multi-tenant.
  */
 export const cashboxMemberships: CashboxMembership[] = [
-  { id: 'AM-001', tenantId: 'T-001', cashboxId: 'AC-001', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
-  { id: 'AM-002', tenantId: 'T-001', cashboxId: 'AC-002', memberId: 'M-001', startDate: '2026-01-01', endDate: null, status: 'active' },
+  { id: 'AM-001', tenantId: 'T-001', cashboxId: 'AC-009', memberId: 'M-001', startDate: '2026-08-01', endDate: null, status: 'active' },
+  { id: 'AM-002', tenantId: 'T-001', cashboxId: 'AC-012', memberId: 'M-001', startDate: '2026-08-01', endDate: null, status: 'active' },
   { id: 'AM-003', tenantId: 'T-001', cashboxId: 'AC-011', memberId: 'M-001', startDate: '2026-08-01', endDate: null, status: 'active' },
-  { id: 'AM-004', tenantId: 'T-001', cashboxId: 'AC-001', memberId: 'M-006', startDate: '2026-01-01', endDate: null, status: 'active' },
-  { id: 'AM-005', tenantId: 'T-001', cashboxId: 'AC-002', memberId: 'M-006', startDate: '2026-01-01', endDate: '2026-06-30', status: 'ended' },
+  { id: 'AM-004', tenantId: 'T-001', cashboxId: 'AC-012', memberId: 'M-006', startDate: '2026-08-01', endDate: null, status: 'active' },
+  { id: 'AM-005', tenantId: 'T-001', cashboxId: 'AC-009', memberId: 'M-006', startDate: '2026-08-01', endDate: '2026-08-31', status: 'ended' },
   { id: 'AM-006', tenantId: 'T-002', cashboxId: 'AC-004', memberId: 'M-002', startDate: '2026-01-01', endDate: null, status: 'active' },
 ];
 

@@ -1,14 +1,10 @@
 /**
- * Configuration de récurrence des SÉANCES d'un Exercice fiscal (reconstruction
- * complète du sous-module « Exercices fiscaux / Séances », remplace
- * intégralement l'ancien mécanisme « Meeting » — `meeting-schedule.ts` et
- * `meeting.service.ts` sont supprimés, aucune référence ne doit y survivre).
+ * Configuration de récurrence des SÉANCES d'un Exercice fiscal.
  *
  * Portée par `FiscalYear.sessionSchedule` (`src/mocks/settings/fiscal-years.ts`),
  * elle sert UNIQUEMENT à PRÉ-REMPLIR (suggestion) la date de la prochaine
  * séance — exactement comme `tontine-frequency.ts` pour les Tours de Tontine.
- * Contrairement à l'ancien `meeting-schedule.ts`, ce module ne génère JAMAIS
- * un calendrier complet : `createSession` (`fiscal-session.service.ts`) reste
+ * Ce module ne génère JAMAIS un calendrier complet : `createSession` (`fiscal-session.service.ts`) reste
  * toujours un acte manuel, unitaire, progressif — aucune génération en masse
  * de dates futures.
  *

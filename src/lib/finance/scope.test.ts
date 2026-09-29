@@ -5,9 +5,9 @@ import { makeCashbox, makeCtx, makeMembership } from './__fixtures__/factories';
 describe('scopeKey', () => {
   it('produit une clé stable et distincte par scope', () => {
     expect(scopeKey({ kind: 'TENANT_ALL_CASHBOXES' })).toBe('tenant');
-    expect(scopeKey({ kind: 'CASHBOX', cashboxId: 'AC-1' })).toBe('account:AC-1');
+    expect(scopeKey({ kind: 'CASHBOX', cashboxId: 'AC-1' })).toBe('cashbox:AC-1');
     expect(scopeKey({ kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-1' })).toBe('member:M-1');
-    expect(scopeKey({ kind: 'MEMBER_CASHBOX', memberId: 'M-1', cashboxId: 'AC-1' })).toBe('member:M-1:account:AC-1');
+    expect(scopeKey({ kind: 'MEMBER_CASHBOX', memberId: 'M-1', cashboxId: 'AC-1' })).toBe('member:M-1:cashbox:AC-1');
   });
 });
 

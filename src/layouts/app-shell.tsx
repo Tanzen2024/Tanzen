@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useRegionalFormatSync } from '@/hooks/use-regional-format-sync';
 import { Outlet, useLocation } from 'react-router-dom';
 import { ShellHeader } from '@/layouts/shell-header';
 import { ShellSidebar } from '@/layouts/shell-sidebar';
@@ -18,6 +19,8 @@ import { useLocale } from '@/contexts/locale-context';
  * plus du tout).
  */
 export function AppShell({ children }: { children?: ReactNode }) {
+  // Format régional de l'association courante (séparateurs) — posé avant le rendu des pages ; la clé redessine les montants quand il change.
+  const regionalFormatKey = useRegionalFormatSync();
   const location = useLocation();
   const { sidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen } = useUiStore();
   const { t } = useLocale();
@@ -29,5 +32,5 @@ export function AppShell({ children }: { children?: ReactNode }) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [setMobileSidebarOpen]);
 
-  return <div className="flex min-h-screen bg-background text-foreground"><a href="#main-content" className="skip-link">{t('shell', 'skipToContent')}</a><ShellSidebar expanded={expanded} setExpanded={setExpanded} activePaths={[location.pathname]} collapsed={sidebarCollapsed} mobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} /><div className="min-w-0 flex-1"><ShellHeader /><main id="main-content" tabIndex={-1} className="min-h-[calc(100vh-4rem)] outline-none">{children ?? <Outlet />}</main></div></div>;
+  return <div className="flex min-h-screen bg-background text-foreground"><a href="#main-content" className="skip-link">{t('shell', 'skipToContent')}</a><ShellSidebar expanded={expanded} setExpanded={setExpanded} activePaths={[location.pathname]} collapsed={sidebarCollapsed} mobileOpen={mobileSidebarOpen} onMobileClose={() => setMobileSidebarOpen(false)} /><div className="min-w-0 flex-1"><ShellHeader /><main key={regionalFormatKey} id="main-content" tabIndex={-1} className="min-h-[calc(100vh-4rem)] outline-none">{children ?? <Outlet />}</main></div></div>;
 }

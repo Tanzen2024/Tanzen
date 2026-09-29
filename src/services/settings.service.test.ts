@@ -5,6 +5,7 @@ import { financePositionService } from './finance-position.service';
 import { auditEvents } from '@/mocks/audit/audit-events';
 import { distributions } from '@/mocks/finance/distributions';
 import { fiscalYearTransferCategories } from '@/mocks/settings/fiscal-year-transfer-categories';
+import { fiscalYears, fiscalYearStatus } from '@/mocks/settings/fiscal-years';
 
 describe('fiscalYearTransferCategories — TRANSFER SELECTION CORRECTION (D-FY-07/08 gate §11)', () => {
   it('`transferable` is consistently derived from `transferability` (TRANSFERABLE/PARTIAL -> true, else false)', () => {
@@ -39,72 +40,81 @@ describe('settingsService — Organization/Localization', () => {
     expect(t002After?.timezone).toBe(beforeTimezone);
   });
 
-  it('DENY: updateLocalizationSettings returns null for a tenant with no seeded settings', async () => {
-    const result = await settingsService.updateLocalizationSettings('T-999', { timezone: 'Africa/Test' });
-    expect(result).toBeNull();
+  it('ALLOW: an association without settings yet is initialised with the defaults (XAF), then updated', async () => {
+    // Mandat du 2026-09-27 : paramètres absents → initialisés (devise XAF), plus refusés — détail dans organization-defaults.test.ts.
+    expect(await settingsService.updateOrganizationSettings('T-999', { timezone: 'Africa/Test' })).toMatchObject({ tenantId: 'T-999', timezone: 'Africa/Test', currency: 'XAF' });
+  });
+
+  it('CAMEROUN : une association sans paramètres reçoit le fuseau Africa/Douala ; un fuseau déjà enregistré est conservé', async () => {
+    expect(await settingsService.getOrganizationSettings('T-998')).toMatchObject({ tenantId: 'T-998', timezone: 'Africa/Douala', currency: 'XAF' });
+    await settingsService.updateOrganizationSettings('T-998', { timezone: 'Europe/Paris' });
+    expect((await settingsService.getOrganizationSettings('T-998'))?.timezone).toBe('Europe/Paris');
+  });
+
+  it('FORMAT RÉGIONAL : séparateurs enregistrés par association ; devise inconnue ou séparateurs identiques refusés', async () => {
+    const saved = await settingsService.updateOrganizationSettings('T-003', { thousandsSeparator: 'comma', decimalSeparator: 'period', currency: 'XAF' });
+    expect(saved).toMatchObject({ thousandsSeparator: 'comma', decimalSeparator: 'period', currency: 'XAF' });
+    expect((await settingsService.getOrganizationSettings('T-004'))).toMatchObject({ thousandsSeparator: 'space', decimalSeparator: 'comma' }); // jamais partagé entre associations
+    expect(await settingsService.updateOrganizationSettings('T-003', { thousandsSeparator: 'comma', decimalSeparator: 'comma' })).toBeNull();
+    expect(await settingsService.updateOrganizationSettings('T-003', { currency: 'FCFA' })).toBeNull(); // FCFA est un libellé, jamais un code ISO
+    expect((await settingsService.getOrganizationSettings('T-003'))).toMatchObject({ thousandsSeparator: 'comma', decimalSeparator: 'period', currency: 'XAF' }); // rien d'appliqué après un refus
   });
 });
 
-describe('settingsService — REGRESSION: fiscal year isCurrent invariant (Phase 11)', () => {
-  it('ALLOW: closeCurrentFiscalYear closes the current year and clears isCurrent', async () => {
+/**
+ * Mandat « Caisse + exercice fiscal contexte global » (2026-09-25) : statut
+ * métier calculé (À venir / En cours / Clôturé), clôture explicite d'un
+ * exercice désigné, plus d'action « Ouvrir l'exercice » ni de drapeau isCurrent.
+ */
+describe('settingsService — closeFiscalYear: clôture explicite d’un exercice « En cours »', () => {
+  it('ALLOW: closes an in-progress year — status becomes Clôturé and the closedAt/closedBy cache is set', async () => {
     const before = await settingsService.getCurrentFiscalYear('T-003');
-    expect(before?.status).toBe('open');
-    const closed = await settingsService.closeCurrentFiscalYear('T-003');
+    expect(before?.id).toBe('FY-T003-2026');
+    expect(fiscalYearStatus(before!)).toBe('in_progress');
+    const closed = await settingsService.closeFiscalYear('T-003', 'FY-T003-2026');
     expect(closed.ok).toBe(true);
     if (closed.ok) {
-      expect(closed.year.status).toBe('closed');
-      expect(closed.year.isCurrent).toBe(false);
+      expect(fiscalYearStatus(closed.year)).toBe('closed');
       expect(closed.year.closedAt).not.toBeNull();
       expect(closed.year.closedBy).toBeTruthy();
     }
+    // Plus aucun exercice « En cours » pour T-003 : la clôture n'ouvre jamais le suivant.
     const current = await settingsService.getCurrentFiscalYear('T-003');
-    expect(current).toBeNull();
+    expect(current ?? null).toBeNull();
   });
 
-  it('DENY: closeCurrentFiscalYear is a no-op when there is no open current year', async () => {
-    // T-003 was just closed above by the previous test in this same module instance.
-    const result = await settingsService.closeCurrentFiscalYear('T-003');
+  it('DENY: an already-closed year cannot be closed again (ALREADY_CLOSED)', async () => {
+    // FY-T003-2026 vient d'être clôturé par le test précédent (même instance de module).
+    const result = await settingsService.closeFiscalYear('T-003', 'FY-T003-2026');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe('NO_CURRENT_YEAR');
+    if (!result.ok) expect(result.reason).toBe('ALREADY_CLOSED');
   });
 
-  it('BUG FIXED: opening a new fiscal year clears isCurrent on the previously-current year (never two current years for one tenant)', async () => {
-    const years = await settingsService.listFiscalYears('T-001');
-    const upcoming = years.find((year) => year.status === 'upcoming');
-    expect(upcoming).toBeTruthy();
-    const previousCurrent = await settingsService.getCurrentFiscalYear('T-001');
-    expect(previousCurrent).not.toBeNull();
-    const previousCurrentId = previousCurrent?.id;
-
-    const opened = await settingsService.openFiscalYear('T-001', upcoming!.id);
-    expect(opened?.status).toBe('open');
-    expect(opened?.isCurrent).toBe(true);
-
-    const allYears = await settingsService.listFiscalYears('T-001');
-    const currentOnes = allYears.filter((year) => year.isCurrent);
-    expect(currentOnes.length).toBe(1);
-    expect(currentOnes[0].id).toBe(upcoming!.id);
-    // The previously-current year must have lost isCurrent, but its status is untouched (no invented cascade).
-    const previousYear = allYears.find((year) => year.id === previousCurrentId);
-    expect(previousYear?.isCurrent).toBe(false);
-    expect(previousYear?.status).toBe('open');
+  it('DENY: an upcoming year (start date not reached) cannot be closed (NOT_STARTED)', async () => {
+    const result = await settingsService.closeFiscalYear('T-001', 'FY-T001-2027');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('NOT_STARTED');
+    expect(fiscalYearStatus((await settingsService.listFiscalYears('T-001')).find((year) => year.id === 'FY-T001-2027')!)).toBe('upcoming');
   });
 
-  it('DENY: openFiscalYear only opens a fiscal year belonging to the requesting tenant', async () => {
-    const [t002Upcoming] = (await settingsService.listFiscalYears('T-002')).filter((year) => year.status === 'upcoming');
-    if (t002Upcoming) {
-      const result = await settingsService.openFiscalYear('T-001', t002Upcoming.id);
-      expect(result).toBeNull();
-    }
+  it('DENY: tenant isolation — a tenant cannot close another tenant’s fiscal year (NOT_FOUND)', async () => {
+    const result = await settingsService.closeFiscalYear('T-001', 'FY-T002-2026');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('NOT_FOUND');
+    expect((await settingsService.listFiscalYears('T-002')).find((year) => year.id === 'FY-T002-2026')?.isClosed).toBe(false);
+  });
+
+  it('the "Ouvrir l’exercice" action no longer exists — upcoming/in-progress are derived from dates only', () => {
+    expect('openFiscalYear' in settingsService).toBe(false);
   });
 });
 
 describe('settingsService — IMPLEMENTATION GO: createFiscalYear (D-FY-01, CREATE ≠ CLOSE)', () => {
-  it('ALLOW: createFiscalYear creates a new upcoming fiscal year for the requesting tenant, without touching the current one', async () => {
+  it('ALLOW: createFiscalYear creates a new, never-closed fiscal year for the requesting tenant, without touching the current one', async () => {
     const before = await settingsService.listFiscalYears('T-002');
     const created = await settingsService.createFiscalYear('T-002', { startDate: '2028-01-01', endDate: '2028-12-31' });
-    expect(created?.status).toBe('upcoming');
-    expect(created?.isCurrent).toBe(false);
+    expect(created?.isClosed).toBe(false);
+    expect(created && fiscalYearStatus(created, '2026-09-25')).toBe('upcoming');
     expect(created?.tenantId).toBe('T-002');
     const after = await settingsService.listFiscalYears('T-002');
     expect(after.length).toBe(before.length + 1);
@@ -168,7 +178,7 @@ describe('settingsService — IMPLEMENTATION GO: createFiscalYear (D-FY-01, CREA
 });
 
 describe('settingsService — §24-BIS: requestFiscalYearReopen (D-FY-05, workflow demande → approbation, jamais direct)', () => {
-  it('ALLOW: requestFiscalYearReopen creates a pending WorkflowRequest, WITHOUT touching the fiscal year status or isCurrent', async () => {
+  it('ALLOW: requestFiscalYearReopen creates a pending WorkflowRequest, WITHOUT touching the fiscal year closure', async () => {
     const before = await settingsService.getCurrentFiscalYear('T-005');
     const request = await settingsService.requestFiscalYearReopen('T-005', 'FY-T005-2025', 'Correction comptable exceptionnelle');
     expect(request?.status).toBe('pending');
@@ -176,7 +186,7 @@ describe('settingsService — §24-BIS: requestFiscalYearReopen (D-FY-05, workfl
     expect(request?.entityType).toBe('fiscalYear');
     expect(request?.justification).toBe('Correction comptable exceptionnelle');
     const years = await settingsService.listFiscalYears('T-005');
-    expect(years.find((item) => item.id === 'FY-T005-2025')?.status).toBe('closed'); // never touched by the request itself
+    expect(years.find((item) => item.id === 'FY-T005-2025')?.isClosed).toBe(true); // never touched by the request itself
     const currentAfter = await settingsService.getCurrentFiscalYear('T-005');
     expect(currentAfter?.id).toBe(before?.id);
   });
@@ -216,7 +226,7 @@ describe('settingsService — §24-BIS: requestFiscalYearReopen (D-FY-05, workfl
 });
 
 describe('settingsService — §24-BIS: applyFiscalYearReopenDecision (le statut ne change qu\'après décision du moteur workflow générique)', () => {
-  it('ALLOW: approving via the generic workflowService.submitAction, then applying the decision, opens the fiscal year — isCurrent still untouched', async () => {
+  it('ALLOW: approving via the generic workflowService.submitAction, then applying the decision, lifts the closure of the fiscal year', async () => {
     const request = await settingsService.requestFiscalYearReopen('T-002', 'FY-T002-2025', 'Justification pour approbation');
     expect(request).not.toBeNull();
     const approved = await workflowService.submitAction('T-002', request!.id, 'approve', 'Amadou Mbaye');
@@ -225,8 +235,7 @@ describe('settingsService — §24-BIS: applyFiscalYearReopenDecision (le statut
     await settingsService.applyFiscalYearReopenDecision('T-002', approved!);
     const years = await settingsService.listFiscalYears('T-002');
     const year = years.find((item) => item.id === 'FY-T002-2025');
-    expect(year?.status).toBe('open');
-    expect(year?.isCurrent).toBe(false);
+    expect(year?.isClosed).toBe(false);
     const current = await settingsService.getCurrentFiscalYear('T-002');
     expect(current?.id).toBe('FY-T002-2026'); // unchanged
     const event = auditEvents[auditEvents.length - 1];
@@ -236,7 +245,7 @@ describe('settingsService — §24-BIS: applyFiscalYearReopenDecision (le statut
   });
 
   it('DENY: rejecting via the generic engine leaves the fiscal year closed, no fiscalYears.reopened event', async () => {
-    await settingsService.closeCurrentFiscalYear('T-004'); // FY-T004-2026 (open/current) -> closed, so T-004 has a closed year to test against
+    await settingsService.closeFiscalYear('T-004', 'FY-T004-2026'); // FY-T004-2026 (en cours) -> clôturé, so T-004 has a closed year to test against
     const request = await settingsService.requestFiscalYearReopen('T-004', 'FY-T004-2026', 'Justification pour rejet');
     expect(request).not.toBeNull();
     const rejected = await workflowService.submitAction('T-004', request!.id, 'reject', 'Amadou Mbaye', 'Motif insuffisant');
@@ -244,7 +253,7 @@ describe('settingsService — §24-BIS: applyFiscalYearReopenDecision (le statut
     const before = auditEvents.length;
     await settingsService.applyFiscalYearReopenDecision('T-004', rejected!);
     const years = await settingsService.listFiscalYears('T-004');
-    expect(years.find((item) => item.id === 'FY-T004-2026')?.status).toBe('closed');
+    expect(years.find((item) => item.id === 'FY-T004-2026')?.isClosed).toBe(true);
     expect(auditEvents.slice(before).some((event) => event.action === 'fiscalYears.reopened')).toBe(false);
   });
 
@@ -332,7 +341,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
     const blocked = await settingsService.decideFiscalYearReopen('T-001', request!.id, 'approve', 'U-001', 'Amadou Mbaye');
     expect(blocked).toBeNull();
     const years = await settingsService.listFiscalYears('T-001');
-    expect(years.find((item) => item.id === 'FY-T001-2024')?.status).toBe('closed'); // untouched
+    expect(years.find((item) => item.id === 'FY-T001-2024')?.isClosed).toBe(true); // untouched
     const stillPending = await workflowService.getRequest('T-001', request!.id);
     expect(stillPending?.status).toBe('pending'); // never mutated by the blocked attempt
   });
@@ -344,7 +353,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
     const approved = await settingsService.decideFiscalYearReopen('T-001', request!.id, 'approve', 'U-777', 'Autre Approbateur');
     expect(approved?.status).toBe('approved');
     const years = await settingsService.listFiscalYears('T-001');
-    expect(years.find((item) => item.id === 'FY-T001-2024')?.status).toBe('open');
+    expect(years.find((item) => item.id === 'FY-T001-2024')?.isClosed).toBe(false);
     const events = auditEvents.slice(before);
     expect(events.some((event) => event.action === 'fiscalYears.reopenApproved')).toBe(true);
     expect(events.some((event) => event.action === 'fiscalYears.reopened')).toBe(true);
@@ -357,7 +366,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
     const result = await settingsService.decideFiscalYearReopen('T-001', request!.id, 'approve', 'U-888', 'Encore un autre');
     expect(result?.status).toBe('approved'); // unchanged, submitAction's own pending-guard already handles this
     const years = await settingsService.listFiscalYears('T-001');
-    expect(years.find((item) => item.id === 'FY-T001-2024')?.status).toBe('open'); // still open, not re-toggled
+    expect(years.find((item) => item.id === 'FY-T001-2024')?.isClosed).toBe(false); // still reopened, not re-toggled
     expect(auditEvents.length).toBe(before); // no new fiscalYears.reopenApproved / fiscalYears.reopened
   });
 
@@ -368,7 +377,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
     const rejected = await settingsService.decideFiscalYearReopen('T-005', request!.id, 'reject', 'U-777', 'Autre Approbateur', 'Justification insuffisante');
     expect(rejected?.status).toBe('rejected');
     const years = await settingsService.listFiscalYears('T-005');
-    expect(years.find((item) => item.id === 'FY-T005-2025')?.status).toBe('closed');
+    expect(years.find((item) => item.id === 'FY-T005-2025')?.isClosed).toBe(true);
     const events = auditEvents.slice(before);
     expect(events.some((event) => event.action === 'fiscalYears.reopenRejected')).toBe(true);
     expect(events.some((event) => event.action === 'fiscalYears.reopened')).toBe(false);
@@ -380,7 +389,7 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
     const result = await settingsService.decideFiscalYearReopen('T-001', request!.id, 'approve', 'U-777', 'Intrus');
     expect(result).toBeNull();
     const years = await settingsService.listFiscalYears('T-003');
-    expect(years.find((item) => item.id === 'FY-T003-2025')?.status).toBe('closed');
+    expect(years.find((item) => item.id === 'FY-T003-2025')?.isClosed).toBe(true);
   });
 
   it('DEFENSIVE: decideFiscalYearReopen returns null for a request outside the settings/fiscalYear domain — never imposes the self-approval rule on other domains (Credit/Tontines/Governance/Finance), which have no PO decision on the subject', async () => {
@@ -400,30 +409,27 @@ describe('settingsService — decideFiscalYearReopen (D-FY-07/D-FY-08 IMPLEMENTA
  * Mandat « Évolution du cycle de vie des exercices fiscaux » §8/§9 — clôture
  * validée : intégration avec le moteur de clôture financière, opérations en
  * attente signalées (jamais bloquantes). Chaque test crée son propre exercice
- * (create → open) plutôt que de supposer quel exercice de seed est encore
- * `isCurrent` pour un tenant donné — un test antérieur du fichier
- * (« BUG FIXED: opening a new fiscal year… ») change déjà l'exercice courant
- * de T-001 vers FY-T001-2027, donc s'appuyer sur FY-T001-2026 ici serait
- * dépendant de l'ordre d'exécution.
+ * dans le PASSÉ (une clôture exige un exercice commencé, statut « En cours »)
+ * sur une plage libre du tenant, plutôt que de dépendre d'un exercice de seed
+ * éventuellement déjà clôturé par un test antérieur.
  */
-describe('settingsService — closeCurrentFiscalYear: clôture financière intégrée + opérations en attente signalées, jamais bloquantes', () => {
-  it('ALLOW: closing creates the financial ClosingEntry FINAL for every account and reports (without blocking) a pending distribution dated within the period', async () => {
+describe('settingsService — closeFiscalYear: clôture financière intégrée + opérations en attente signalées, jamais bloquantes', () => {
+  it('ALLOW: closing creates the financial ClosingEntry FINAL for every cashbox and reports (without blocking) a pending distribution dated within the period', async () => {
     const tenantId = 'T-001';
-    const year = await settingsService.createFiscalYear(tenantId, { startDate: '2090-01-01', endDate: '2090-12-31' });
+    const year = await settingsService.createFiscalYear(tenantId, { startDate: '1990-01-01', endDate: '1990-12-31' });
     expect(year).toBeTruthy();
-    await settingsService.openFiscalYear(tenantId, year!.id);
-    // Opération en attente dans la période — signalée, jamais bloquante (voir le commentaire de closeCurrentFiscalYear).
-    distributions.push({ id: `DI-TEST-${Date.now()}`, tenantId, beneficiary: 'Test', source: 'Test', amount: 10_000, date: '2090-06-15', status: 'pending' });
+    // Opération en attente dans la période — signalée, jamais bloquante (voir le commentaire de closeFiscalYear).
+    distributions.push({ id: `DI-TEST-${Date.now()}`, tenantId, beneficiary: 'Test', source: 'Test', amount: 10_000, date: '1990-06-15', status: 'pending' });
 
-    const result = await settingsService.closeCurrentFiscalYear(tenantId);
+    const result = await settingsService.closeFiscalYear(tenantId, year!.id);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.year.status).toBe('closed');
+      expect(result.year.isClosed).toBe(true);
       expect(result.pendingOperations.distributions).toBeGreaterThanOrEqual(1);
     }
-    // L'exercice est désormais `closed` (flip de statut inclus dans closeCurrentFiscalYear) : un
+    // L'exercice est désormais clôturé (clôture incluse dans closeFiscalYear) : un
     // second appel direct au moteur financier est refusé par la garde de statut en amont
-    // (FISCAL_YEAR_NOT_OPEN), pas par ALREADY_CLOSED (qui suppose l'exercice encore `open` avec des
+    // (FISCAL_YEAR_NOT_OPEN), pas par ALREADY_CLOSED (qui suppose l'exercice non clôturé avec des
     // ClosingEntry déjà posées — le scénario exercé séparément par le test IDEMPOTENT ci-dessous).
     const financeAgain = await financePositionService.closeFiscalYear(tenantId, year!.id);
     expect(financeAgain?.ok).toBe(false);
@@ -433,9 +439,9 @@ describe('settingsService — closeCurrentFiscalYear: clôture financière inté
   it('IDEMPOTENT: closing gouvernance after the financial closing was already done separately does not block (ALREADY_CLOSED treated as a satisfied precondition, not a failure)', async () => {
     const financeFirst = await financePositionService.closeFiscalYear('T-002', 'FY-T002-2026');
     expect(financeFirst?.ok).toBe(true);
-    const result = await settingsService.closeCurrentFiscalYear('T-002');
+    const result = await settingsService.closeFiscalYear('T-002', 'FY-T002-2026');
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.year.status).toBe('closed');
+    if (result.ok) expect(result.year.isClosed).toBe(true);
   });
 });
 
@@ -482,18 +488,17 @@ describe('settingsService — extendFiscalYearEndDate (prorogation)', () => {
 
 /**
  * Mandat §14 — avertissements de réouverture (non bloquants). Chaque test
- * construit son propre couple d'exercices (create → open → close) pour rester
+ * construit son propre couple d'exercices passés (create → close) pour rester
  * indépendant des exercices de seed déjà consommés par les tests précédents.
  */
 describe('settingsService — requestFiscalYearReopen: avertissements non bloquants', () => {
   it('WARNING: flags NEXT_YEAR_ACTIVE when a later fiscal year already exists for the tenant, without blocking the request', async () => {
     const tenantId = 'T-004';
-    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2050-01-01', endDate: '2050-12-31' });
-    const next = await settingsService.createFiscalYear(tenantId, { startDate: '2051-01-01', endDate: '2051-12-31' });
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '1950-01-01', endDate: '1950-12-31' });
+    const next = await settingsService.createFiscalYear(tenantId, { startDate: '1951-01-01', endDate: '1951-12-31' });
     expect(target).toBeTruthy();
     expect(next).toBeTruthy();
-    await settingsService.openFiscalYear(tenantId, target!.id);
-    const closed = await settingsService.closeCurrentFiscalYear(tenantId);
+    const closed = await settingsService.closeFiscalYear(tenantId, target!.id);
     expect(closed.ok).toBe(true);
     const request = await settingsService.requestFiscalYearReopen(tenantId, target!.id, 'Vérification avec avertissement attendu');
     expect(request).toBeTruthy();
@@ -503,10 +508,12 @@ describe('settingsService — requestFiscalYearReopen: avertissements non bloqua
 
   it('NO WARNING: an empty warnings array when no later fiscal year exists for the tenant', async () => {
     const tenantId = 'T-004';
-    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2060-01-01', endDate: '2060-12-31' });
+    // Le DERNIER exercice du tenant est forcément dans le futur (À venir), donc non clôturable par
+    // `closeFiscalYear` (NOT_STARTED) : la clôture est posée directement sur la donnée de test — seul
+    // le calcul des avertissements de réouverture est exercé ici.
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2160-01-01', endDate: '2160-12-31' });
     expect(target).toBeTruthy();
-    await settingsService.openFiscalYear(tenantId, target!.id);
-    await settingsService.closeCurrentFiscalYear(tenantId);
+    fiscalYears.find((year) => year.id === target!.id)!.isClosed = true;
     const request = await settingsService.requestFiscalYearReopen(tenantId, target!.id, 'Aucun exercice suivant');
     expect(request?.warnings ?? []).toEqual([]);
   });
@@ -520,10 +527,9 @@ describe('settingsService — requestFiscalYearReopen: avertissements non bloqua
 describe('settingsService — applyFiscalYearReopenDecision: cache closedAt/closedBy remis à null', () => {
   it('ALLOW: reopening resets closedAt/closedBy on the entity while the audit trail keeps the close/reopen history', async () => {
     const tenantId = 'T-004';
-    const target = await settingsService.createFiscalYear(tenantId, { startDate: '2070-01-01', endDate: '2070-12-31' });
+    const target = await settingsService.createFiscalYear(tenantId, { startDate: '1970-01-01', endDate: '1970-12-31' });
     expect(target).toBeTruthy();
-    await settingsService.openFiscalYear(tenantId, target!.id);
-    const closed = await settingsService.closeCurrentFiscalYear(tenantId);
+    const closed = await settingsService.closeFiscalYear(tenantId, target!.id);
     expect(closed.ok).toBe(true);
     if (closed.ok) {
       expect(closed.year.closedAt).not.toBeNull();
@@ -534,7 +540,7 @@ describe('settingsService — applyFiscalYearReopenDecision: cache closedAt/clos
     await settingsService.applyFiscalYearReopenDecision(tenantId, { ...request!, status: 'approved' });
     const years = await settingsService.listFiscalYears(tenantId);
     const year = years.find((item) => item.id === target!.id);
-    expect(year?.status).toBe('open');
+    expect(year?.isClosed).toBe(false);
     expect(year?.closedAt).toBeNull();
     expect(year?.closedBy).toBeNull();
     expect(auditEvents.some((event) => event.tenantId === tenantId && event.action === 'fiscalYears.close' && event.resourceId === target!.id)).toBe(true);

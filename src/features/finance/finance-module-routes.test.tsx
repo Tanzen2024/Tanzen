@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
-import { FinanceModule } from './finance-module';
+import { FinanceModule, LoanRulesRoutes } from './finance-module';
 
 /**
  * Mandat « Refonte module Finances » §1 : les écrans Contributions /
@@ -40,15 +40,28 @@ describe('FinanceModule — routes toujours supprimées (mandat « Refonte modul
     expect(await screen.findByText('Page introuvable')).toBeInTheDocument();
   });
 
-  it('ALLOW: /finance redirige vers la liste des comptes (mandat « Le Compte comme point d\'entrée des Transactions »)', async () => {
+  it('ALLOW: /finance redirige vers Caisses (onglet Transactions par défaut) ; l’onglet Caisses n’a que « Créer une caisse »', async () => {
     renderFinance('/finance');
+    expect(await screen.findByRole('tab', { name: 'Transactions', selected: true })).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Caisses' }));
+    expect(await screen.findByTestId('cashbox-home-kpis')).toBeInTheDocument();
     expect(await screen.findByRole('table')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Nouveau/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Créer une caisse/ })).toBeInTheDocument();
+    // Mandat « Simplification du module Caisses » (2026-09-25).
+    for (const name of [/Position financière/, /^Crédit$/, /Règles de crédit/, /^Nouveau$/]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
   });
 
-  it('ALLOW: /finance/credit/loan-rules reste accessible (éditeur de politique de prêt)', async () => {
-    renderFinance('/finance/credit/loan-rules');
-    expect(await screen.findByText('Règles de crédit')).toBeInTheDocument();
+  it('ALLOW: l’ancienne URL /finance/credit/loan-rules redirige vers Paramètres → Règle de crédit (page unique)', async () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/finance/*" element={<FinanceModule />} />
+        <Route path="/settings/loan-rules/*" element={<LoanRulesRoutes />} />
+      </Routes>,
+      { route: '/finance/credit/loan-rules' },
+    );
+    expect(await screen.findByRole('heading', { name: 'Règle de crédit' })).toBeInTheDocument();
   });
 });
 

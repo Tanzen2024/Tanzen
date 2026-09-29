@@ -1,18 +1,31 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { loanRules, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleInterestType, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
-import { cashboxes } from '@/mocks/finance/cashboxes';
+import { loanRules, tenantCreditRule, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
+import { computeChangeSet } from '@/lib/workflow/change-set';
+import { permissionsOfUser, workflowService } from './workflow.service';
+import { auditService } from './audit.service';
+import { notificationService } from './notification.service';
 
-/** cashboxId reste immuable après création — jamais reproposé par UPDATE (§9 du mandat : "intégrité account_id"). */
+/**
+ * RÈGLE DE CRÉDIT UNIQUE PAR TENANT (décision définitive du 2026-09-26) : plus aucune caisse
+ * dans la règle, plus de liste, plus d'activation / désactivation / suppression — la règle du
+ * tenant se crée une fois puis se MODIFIE (suspendre les prêts = décocher `allowLoans`).
+ *
+ * MODIFICATION = DOUBLE APPROBATION (mandat « Finalisation du bilan », 2026-09-28) : une règle
+ * EXISTANTE ne se modifie plus jamais directement. `requestLoanRuleUpdate` crée une demande
+ * (workflow WD-009, ChangeSet avant/après, version de la règle) ; `decideLoanRuleUpdate` enregistre
+ * chaque approbation / rejet ; la règle n'est modifiée (et sa version incrémentée) qu'après la
+ * DEUXIÈME approbation. Les prêts déjà accordés n'en sont jamais affectés : leurs paramètres
+ * financiers sont historisés à l'octroi (`Loan.loanMode` / `interestRate` / `interestPeriod`).
+ */
 export type LoanRuleInput = {
-  cashboxId: string;
   name: string;
   allowLoans: boolean;
   loanMode: LoanRuleLoanMode;
   minAmount: number;
   maxAmount: number;
   interestRate: number;
-  interestType: LoanRuleInterestType;
   interestPeriod: LoanRuleInterestPeriod;
   durationMonths: number;
   maxActiveLoans: number;
@@ -26,93 +39,156 @@ export type LoanRuleInput = {
   requiresApproval: boolean;
   approvalLevel: LoanRuleApprovalLevel | null;
 };
-export type LoanRuleUpdateInput = Partial<Omit<LoanRuleInput, 'cashboxId'>>;
+export type LoanRuleUpdateInput = Partial<LoanRuleInput>;
 
-function isLive(rule: LoanRule): boolean {
-  return rule.deletedAt === null;
-}
+/** Définition du workflow de double approbation (voir `workflow-definitions.ts`). */
+export const CREDIT_RULE_UPDATE_WORKFLOW = 'WD-009';
 
-/** Contraintes CHECK nommées de la fiche canonique #14 — refuse (undefined) toute écriture qui les violerait. */
-function violatesCanonicalConstraints(input: Pick<LoanRuleInput, 'minAmount' | 'maxAmount' | 'interestRate' | 'durationMonths' | 'maxLoanExposure' | 'minGuarantors' | 'maxGuarantors' | 'guaranteeRatio'>): boolean {
+export type LoanRuleUpdateRequestResult =
+  | { ok: true; request: WorkflowRequest }
+  | { ok: false; reason: 'notFound' | 'forbidden' | 'invalid' | 'noChange' | 'workflowUnavailable' }
+  | { ok: false; reason: 'pending'; existingRequestId: string };
+
+export type LoanRuleDecisionResult =
+  | { ok: true; request: WorkflowRequest; activated: boolean }
+  | { ok: false; reason: 'notFound' | 'notPending' | 'forbidden' | 'selfApproval' | 'sameApprover' };
+
+/**
+ * Contraintes CHECK nommées de la fiche canonique #14 — refuse toute écriture qui les violerait.
+ * Garant requis = false → aucune contrainte de garantie : les paramètres de garantie conservés (masqués
+ * dans le formulaire) ne sont pas contrôlés, même incohérents.
+ */
+function violatesCanonicalConstraints(input: Pick<LoanRuleInput, 'minAmount' | 'maxAmount' | 'interestRate' | 'durationMonths' | 'maxLoanExposure' | 'requiresGuarantor' | 'minGuarantors' | 'maxGuarantors' | 'guaranteeRatio'>): boolean {
   if (input.maxAmount < input.minAmount) return true; // ck_amount_valid
   if (input.interestRate < 0) return true; // ck_interest_valid
   if (input.durationMonths <= 0) return true; // ck_duration_valid
   if (input.maxLoanExposure !== null && input.maxLoanExposure < 0) return true; // ck_exposure_valid
-  if (input.maxGuarantors < input.minGuarantors) return true; // ck_guarantor_count
-  if (input.guaranteeRatio < 0 || input.guaranteeRatio > 100) return true; // ck_guarantee_ratio
+  if (input.requiresGuarantor) {
+    if (input.maxGuarantors < input.minGuarantors) return true; // ck_guarantor_count
+    if (input.guaranteeRatio < 0 || input.guaranteeRatio > 100) return true; // ck_guarantee_ratio
+  }
   return false;
 }
 
-export const loanRuleService = {
-  /** Par défaut, n'affiche jamais les lignes deleted_at != NULL (§16 du mandat). */
-  listLoanRules: (tenantId: string) => mockRequest(() => loanRules.filter((rule) => rule.tenantId === tenantId && isLive(rule))),
+/** Seuls les champs de `LoanRuleInput` peuvent être modifiés (jamais id, tenant, statut, suppression ni version). */
+const EDITABLE_FIELDS: (keyof LoanRuleInput)[] = ['name', 'allowLoans', 'loanMode', 'minAmount', 'maxAmount', 'interestRate', 'interestPeriod', 'durationMonths', 'maxActiveLoans', 'maxLoanExposure', 'requiresGuarantor', 'minGuarantors', 'maxGuarantors', 'guaranteeTypeRequired', 'guaranteeRatio', 'allowSelfGuarantee', 'requiresApproval', 'approvalLevel'];
+function editablePatch(patch: LoanRuleUpdateInput): LoanRuleUpdateInput {
+  return Object.fromEntries(Object.entries(patch).filter(([field, value]) => EDITABLE_FIELDS.includes(field as keyof LoanRuleInput) && value !== undefined)) as LoanRuleUpdateInput;
+}
 
-  getLoanRule: (tenantId: string, ruleId: string) =>
-    mockRequest(() => {
-      const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
-      if (!rule || !isLive(rule)) return undefined;
-      return rule;
-    }),
+const livingRule = (tenantId: string, ruleId: string) => {
+  const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
+  return rule && rule.deletedAt === null ? rule : undefined;
+};
+const isCreditRuleRequest = (request: WorkflowRequest) => request.domain === 'credit' && request.entityType === 'creditRule';
+const valuesOf = (request: WorkflowRequest, side: 'before' | 'after') => Object.fromEntries((request.changeSet ?? []).map((item) => [item.field, item[side] === null || item[side] === undefined ? '' : String(item[side])]));
+
+/**
+ * ACTIVATION — seul point du projet qui MODIFIE une règle de crédit existante, appelé uniquement
+ * par `decideLoanRuleUpdate` après la 2e approbation. Verrou optimiste : si la règle a changé depuis
+ * la demande, rien n'est appliqué (`versionConflict`), jamais d'écrasement silencieux.
+ */
+function activate(tenantId: string, request: WorkflowRequest): boolean {
+  const rule = livingRule(tenantId, request.entityId);
+  if (!rule || !request.changeSet || request.changeSet.length === 0) return false;
+  if (request.entitySnapshotVersion !== undefined && rule.version !== request.entitySnapshotVersion) {
+    request.versionConflict = true;
+    auditService.record({ tenantId, actorId: '', actorName: 'system', module: 'credit', action: 'loanRules.updateConflict', resourceType: 'loanRule', resourceId: rule.id, resourceLabel: rule.name, sensitive: true, context: { requestId: request.id, snapshotVersion: request.entitySnapshotVersion, currentVersion: rule.version } });
+    return false;
+  }
+  const patch = Object.fromEntries(request.changeSet.map((item) => [item.field, item.after])) as LoanRuleUpdateInput;
+  if (violatesCanonicalConstraints({ ...rule, ...patch })) return false;
+  Object.assign(rule, patch);
+  rule.version += 1;
+  request.appliedAt = new Date().toISOString();
+  auditService.record({ tenantId, actorId: '', actorName: 'system', module: 'credit', action: 'loanRules.updateActivated', resourceType: 'loanRule', resourceId: rule.id, resourceLabel: rule.name, sensitive: true, before: valuesOf(request, 'before'), after: valuesOf(request, 'after'), context: { requestId: request.id, version: rule.version, activatedAt: request.appliedAt } });
+  return true;
+}
+
+export const loanRuleService = {
+  /** LA règle du tenant (jamais une règle supprimée logiquement), `null` si aucune n'est encore configurée. */
+  getCreditRule: (tenantId: string) => mockRequest((): LoanRule | null => tenantCreditRule(tenantId) ?? null),
 
   /**
-   * uq_loan_rules_account (UNIQUE(tenant_id, account_id)) et uq_loan_rules_name (UNIQUE(tenant_id, name))
-   * ne sont vérifiées que contre les règles vivantes (deleted_at IS NULL) : RESTORE étant hors périmètre,
-   * une contrainte incluant les lignes supprimées bloquerait définitivement tout nouveau LoanRule pour un
-   * compte dont l'ancienne règle a été supprimée — un résultat auto-contradictoire avec CREATE/DELETE tous
-   * deux prévus comme opérations disponibles (cf. docs/P1_CREDIT_LOAN_RULES_DECISION_ANALYSIS.md §12/§22).
+   * Création de LA règle du tenant — UNICITÉ garantie ici, quel que soit l'appelant :
+   * refus (undefined) si le tenant possède déjà une règle vivante. Une création n'est pas une
+   * modification : aucune règle active n'est remplacée, pas de double approbation.
    */
   createLoanRule: (tenantId: string, input: LoanRuleInput) =>
     mockRequest(() => {
-      const account = getTenantScoped(cashboxes, (item) => item.id === input.cashboxId, tenantId);
-      if (!account) return undefined;
-      if (violatesCanonicalConstraints(input)) return undefined;
-      const duplicateAccount = loanRules.some((rule) => rule.tenantId === tenantId && rule.cashboxId === input.cashboxId && isLive(rule));
-      if (duplicateAccount) return undefined;
-      const duplicateName = loanRules.some((rule) => rule.tenantId === tenantId && rule.name === input.name && isLive(rule));
-      if (duplicateName) return undefined;
-      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, cashboxNumber: account.cashboxNumber, status: 'ACTIVE', deletedAt: null, ...input };
+      if (tenantCreditRule(tenantId)) return undefined;
+      if (!input.name.trim() || violatesCanonicalConstraints(input)) return undefined;
+      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, status: 'ACTIVE', deletedAt: null, version: 1, ...input };
       loanRules.push(rule);
       return rule;
     }),
 
-  updateLoanRule: (tenantId: string, ruleId: string, patch: LoanRuleUpdateInput) =>
-    mockRequest(() => {
-      const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
-      if (!rule || !isLive(rule)) return undefined;
-      const merged = { ...rule, ...patch };
-      if (violatesCanonicalConstraints(merged)) return undefined;
-      if (patch.name && patch.name !== rule.name) {
-        const duplicateName = loanRules.some((item) => item.tenantId === tenantId && item.name === patch.name && isLive(item) && item.id !== rule.id);
-        if (duplicateName) return undefined;
-      }
-      Object.assign(rule, patch);
-      return rule;
-    }),
+  /**
+   * DEMANDE DE MODIFICATION (étape 1 du workflow) — la règle active reste INCHANGÉE. Refus :
+   * permission `loanRules.manage` absente, règle inconnue / d'un autre tenant, valeurs violant les
+   * contraintes, aucun changement, ou demande précédente encore en cours sur la même règle (jamais
+   * écrasée : elle doit d'abord être approuvée, rejetée ou annulée).
+   */
+  requestLoanRuleUpdate: async (tenantId: string, ruleId: string, patch: LoanRuleUpdateInput, requesterId: string, requesterName: string, justification?: string): Promise<LoanRuleUpdateRequestResult> => {
+    if (!permissionsOfUser(tenantId, requesterId).includes('loanRules.manage')) return { ok: false, reason: 'forbidden' };
+    const rule = livingRule(tenantId, ruleId);
+    if (!rule) return { ok: false, reason: 'notFound' };
+    const cleaned = editablePatch(patch);
+    const merged = { ...rule, ...cleaned };
+    if (!merged.name.trim() || violatesCanonicalConstraints(merged)) return { ok: false, reason: 'invalid' };
+    const pending = await workflowService.hasPendingApproval(tenantId, 'creditRule', rule.id);
+    if (pending) return { ok: false, reason: 'pending', existingRequestId: pending.id };
+    const changeSet = computeChangeSet(rule as unknown as Record<string, unknown>, cleaned as Record<string, unknown>);
+    if (changeSet.length === 0) return { ok: false, reason: 'noChange' };
+    const request = await workflowService.createRequest(tenantId, CREDIT_RULE_UPDATE_WORKFLOW, {
+      entityId: rule.id, entityLabel: rule.name, requestedBy: requesterName, requestedByUserId: requesterId, justification, changeSet, entitySnapshotVersion: rule.version,
+    });
+    if (!request) return { ok: false, reason: 'workflowUnavailable' };
+    auditService.record({ tenantId, actorId: requesterId, actorName: requesterName, module: 'credit', action: 'loanRules.updateRequested', resourceType: 'loanRule', resourceId: rule.id, resourceLabel: rule.name, sensitive: true, before: valuesOf(request, 'before'), after: valuesOf(request, 'after'), context: { requestId: request.id } });
+    return { ok: true, request };
+  },
 
-  /** ACTIVATE : status = ACTIVE uniquement. deleted_at n'est jamais touché par une simple (dés)activation (§10 du mandat). */
-  activateLoanRule: (tenantId: string, ruleId: string) =>
-    mockRequest(() => {
-      const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
-      if (!rule || !isLive(rule)) return undefined;
-      rule.status = 'ACTIVE';
-      return rule;
-    }),
+  /**
+   * DÉCISION (1re ou 2e approbation, ou rejet) — seul point d'entrée pour ce domaine (jamais
+   * `workflowService.submitAction` directement). Contrôles AVANT toute écriture : demande en cours,
+   * permission de l'étape (`loanRules.approve`, résolue côté service), demandeur ≠ approbateur, et
+   * 2e approbateur ≠ 1er. La règle n'est modifiée qu'après la 2e approbation ; un rejet, à n'importe
+   * quelle étape, clôt la demande sans aucun effet. Chaque décision est auditée (acteur, date, étape,
+   * valeurs avant / proposées).
+   */
+  decideLoanRuleUpdate: async (tenantId: string, requestId: string, action: 'approve' | 'reject', actorId: string, actorName: string, comment?: string): Promise<LoanRuleDecisionResult> => {
+    const request = getTenantScoped(workflowRequests, (item) => item.id === requestId, tenantId);
+    if (!request || !isCreditRuleRequest(request)) return { ok: false, reason: 'notFound' };
+    if (request.status !== 'pending' && request.status !== 'inProgress') return { ok: false, reason: 'notPending' };
+    const step = request.steps.find((item) => item.order === request.currentStepOrder);
+    if (!step || step.status !== 'pending') return { ok: false, reason: 'notPending' };
+    if (!permissionsOfUser(tenantId, actorId).includes(step.approverPermission)) return { ok: false, reason: 'forbidden' };
+    if (workflowService.isSelfApprovalBlocked(request, actorId)) return { ok: false, reason: 'selfApproval' };
+    if (request.steps.some((item) => item.order < step.order && item.actedBy === actorId)) return { ok: false, reason: 'sameApprover' };
+    const stepOrder = step.order;
+    const result = await workflowService.submitAction(tenantId, requestId, action, actorName, comment, actorId);
+    if (!result) return { ok: false, reason: 'notPending' };
+    const rule = livingRule(tenantId, result.entityId);
+    auditService.record({
+      tenantId, actorId, actorName, module: 'credit', action: action === 'approve' ? 'loanRules.updateApproved' : 'loanRules.updateRejected',
+      resourceType: 'loanRule', resourceId: result.entityId, resourceLabel: rule?.name ?? result.entityLabel, sensitive: true,
+      before: valuesOf(result, 'before'), after: valuesOf(result, 'after'), context: { requestId: result.id, step: stepOrder, comment: comment ?? '' },
+    });
+    const activated = result.status === 'approved' ? activate(tenantId, result) : false;
+    if (result.requestedByUserId && (result.status === 'approved' || result.status === 'rejected')) {
+      notificationService.notify({
+        tenantId, userId: result.requestedByUserId, type: 'workflow', source: 'credit', link: `/operations/workflows/${result.id}`,
+        title: activated ? 'Règle de crédit modifiée' : 'Modification de la règle de crédit refusée',
+        message: activated ? `Votre modification de la règle « ${result.entityLabel} » a reçu ses deux approbations et est active.` : `Votre demande de modification de la règle « ${result.entityLabel} » n’a pas été appliquée.${comment ? ` Motif : ${comment}` : ''}`,
+      });
+    }
+    return { ok: true, request: result, activated };
+  },
 
-  deactivateLoanRule: (tenantId: string, ruleId: string) =>
-    mockRequest(() => {
-      const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
-      if (!rule || !isLive(rule)) return undefined;
-      rule.status = 'INACTIVE';
-      return rule;
-    }),
+  /** Historique complet des modifications de la règle (jamais écrasé), la plus récente d'abord. */
+  listLoanRuleChanges: (tenantId: string, ruleId: string) =>
+    mockRequest(() => workflowRequests.filter((request) => request.tenantId === tenantId && isCreditRuleRequest(request) && request.entityId === ruleId).reverse()),
 
-  /** DELETE = suppression logique uniquement (§11 du mandat) : deleted_at horodaté ET status forcé à INACTIVE. Jamais de suppression physique. RESTORE non implémenté. */
-  deleteLoanRule: (tenantId: string, ruleId: string) =>
-    mockRequest(() => {
-      const rule = getTenantScoped(loanRules, (item) => item.id === ruleId, tenantId);
-      if (!rule || !isLive(rule)) return undefined;
-      rule.deletedAt = new Date().toISOString();
-      rule.status = 'INACTIVE';
-      return rule;
-    }),
+  /** Demande en cours (1re ou 2e approbation attendue) sur la règle, s'il y en a une. */
+  pendingLoanRuleChange: (tenantId: string, ruleId: string) => workflowService.hasPendingApproval(tenantId, 'creditRule', ruleId),
 };

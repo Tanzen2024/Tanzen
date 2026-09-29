@@ -1,25 +1,28 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Banknote, CalendarDays, ChevronRight, CircleCheck, ClipboardList, Hash, Landmark, List, Package, Pencil, Plus, UserMinus, UsersRound } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Banknote, CalendarDays, ChevronRight, CircleCheck, ClipboardList, Hash, Landmark, List, MoreHorizontal, Package, Pencil, Plus, RotateCcw, Trash2, UserMinus, UsersRound } from 'lucide-react';
 import { Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, MoneyDisplay, TourDateDisplay } from '@/components';
+import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, PermissionGate, TableSkeleton, DetailSkeleton, ErrorState, FieldError, MoneyDisplay, TourDateDisplay, ConfirmDialog, AmountInput } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
+import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage, PermissionRoute } from '@/routes';
-import { tontinesService, type TontineInput } from '@/services/tontines.service';
+import { tontinesService, type TontineInput, type TontineLifecycleOutcome } from '@/services/tontines.service';
 import { tontineOperationsService } from '@/services/tontine-operations.service';
 import { settingsService } from '@/services/settings.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import type { Tontine, TontineAdhesion, ValueType } from '@/mocks/tontines/tontines';
+import { matchesStatusFilter, type StatusFilter } from '@/lib/status-filter';
+import type { Tontine, TontineAdhesion, TontineStatus, ValueType } from '@/mocks/tontines/tontines';
 import { getCurrencyLabel, getCurrencyShortLabel, formatCurrency } from '@/constants/currencies';
 import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 import { units, formatUnit } from '@/constants/units';
@@ -37,8 +40,8 @@ import { formatDate, formatNumber } from '@/lib/utils';
 
 export type T = (section: 'tontines' | 'nav', key: string, values?: Record<string, string>) => string;
 
-export const STATUS_TONE: Record<'statusActive' | 'statusInactive', 'default' | 'success' | 'warning' | 'error' | 'info'> = {
-  statusActive: 'success', statusInactive: 'default',
+export const STATUS_TONE: Record<TontineStatus, 'default' | 'success' | 'warning' | 'error' | 'info'> = {
+  statusActive: 'success', statusInactive: 'warning', statusArchived: 'default',
 };
 const FREQUENCY_LABEL_KEY: Record<TontineFrequency, string> = { DAILY: 'frequencyDaily', WEEKLY: 'frequencyWeekly', MONTHLY: 'frequencyMonthly', QUARTERLY: 'frequencyQuarterly' };
 
@@ -107,7 +110,7 @@ export function TontinesTableSection({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant();
   const { locale } = useLocale();
   const organizationCurrency = useOrganizationCurrency();
-  const [search, setSearch] = useState(''); const [status, setStatus] = useState('all'); const [frequency, setFrequency] = useState('all'); const [page, setPage] = useState(1);
+  const [search, setSearch] = useState(''); const [status, setStatus] = useState<StatusFilter>('active'); const [frequency, setFrequency] = useState('all'); const [page, setPage] = useState(1);
   const { data: tontines = [], isLoading, isError, refetch } = useQuery({ queryKey: queryKeys.tontines.list(currentTenant.id), queryFn: () => tontinesService.listTontines(currentTenant.id) });
   /**
    * Requêtes transverses (mandat « dashboard Tontines » §26 « pas de requête
@@ -118,6 +121,7 @@ export function TontinesTableSection({ t }: { t: T }) {
   const { data: occurrences = [] } = useQuery({ queryKey: queryKeys.tontines.allOccurrences(currentTenant.id), queryFn: () => tontineOperationsService.listAllOccurrences(currentTenant.id) });
   const { data: adhesions = [] } = useQuery({ queryKey: queryKeys.tontines.allAdhesions(currentTenant.id), queryFn: () => tontineOperationsService.listAllAdhesions(currentTenant.id) });
   const { data: remainders = [] } = useQuery({ queryKey: queryKeys.tontines.allRemainders(currentTenant.id), queryFn: () => tontineOperationsService.listAllRemainders(currentTenant.id) });
+  const rowActions = useTontineRowActions(t);
   if (isLoading) return <TableSkeleton />;
   if (isError) return <ErrorState onRetry={refetch} />;
 
@@ -191,7 +195,7 @@ export function TontinesTableSection({ t }: { t: T }) {
   const totalOpenRemaindersCurrency = tontines.find((item) => item.currency)?.currency ?? organizationCurrency;
 
   const resetPage = () => setPage(1);
-  const rows = tontines.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase()) && (status === 'all' || item.status === status) && (frequency === 'all' || item.frequency === frequency));
+  const rows = tontines.filter((item) => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase()) && matchesStatusFilter(item.status === 'statusActive', status) && (frequency === 'all' || item.frequency === frequency));
   /** Le Total de la liste dépend des filtres (mandat §27/§28) — jamais du KPI global, qui lui reste indépendant de la recherche/des filtres. */
   const filteredRemaindersTotal = rows.reduce((sum, item) => sum + (openRemaindersByTontine.get(item.id) ?? 0), 0);
   const filteredAdherentsTotal = rows.reduce((sum, item) => sum + (activeAdhesionsByTontine.get(item.id) ?? 0), 0);
@@ -224,10 +228,21 @@ export function TontinesTableSection({ t }: { t: T }) {
       if (!info) return '—';
       return <span className="flex items-center gap-1.5"><TourDateDisplay value={info.date} />{info.provisional && <span className="text-xs text-muted-foreground">({t('tontines', 'nextOccurrenceProvisionalLabel')})</span>}</span>;
     } },
-    { key: 'actions', header: '', className: 'w-12', render: (row) => <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button> },
+    /** Actions de la ligne — même modèle que la liste des Caisses : menu « ⋯ » (actions de gestion selon statut et permissions) + flèche vers la fiche. */
+    { key: 'actions', header: '', className: 'w-px whitespace-nowrap', render: (row) => {
+      const items = rowActions.menuItems(row);
+      return <span className="flex items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
+        {items.length > 0 && <DropdownMenu>
+          <DropdownMenuTrigger asChild><button type="button" aria-label={t('tontines', 'tontineRowActions', { name: row.name })} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><MoreHorizontal size={16} /></button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">{items}</DropdownMenuContent>
+        </DropdownMenu>}
+        <button type="button" onClick={() => navigate(`/tontines/${row.id}`)} aria-label={t('tontines', 'viewDetail')} className="rounded-md p-2 text-muted-foreground hover:bg-muted"><ChevronRight size={16} /></button>
+      </span>;
+    } },
   ];
 
   return <div className="space-y-6">
+    {rowActions.dialog}
     <div className="flex flex-wrap justify-end gap-2"><PermissionGate permission="tontines.create"><Button onClick={() => navigate('/tontines/create')}><Plus size={16} />{t('tontines', 'createTontine')}</Button></PermissionGate></div>
 
     <div className={`grid gap-4 sm:grid-cols-2 ${totalOpenRemainders > 0 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
@@ -248,22 +263,24 @@ export function TontinesTableSection({ t }: { t: T }) {
 
       <Card><CardHeader><CardTitle className="text-sm">{t('tontines', 'tontineStatusOverviewTitle')}</CardTitle></CardHeader><CardContent className="space-y-2 p-5 pt-0">
         <div className="flex items-center justify-between text-sm"><StatusBadge label={t('tontines', 'statusActive')} tone={STATUS_TONE.statusActive} /><span className="font-semibold">{formatNumber(activeTontinesCount)}</span></div>
-        <div className="flex items-center justify-between text-sm"><StatusBadge label={t('tontines', 'statusInactive')} tone={STATUS_TONE.statusInactive} /><span className="font-semibold">{formatNumber(tontines.length - activeTontinesCount)}</span></div>
+        <div className="flex items-center justify-between text-sm"><StatusBadge label={t('tontines', 'statusInactive')} tone={STATUS_TONE.statusInactive} /><span className="font-semibold">{formatNumber(tontines.filter((item) => item.status === 'statusInactive').length)}</span></div>
+        <div className="flex items-center justify-between text-sm"><StatusBadge label={t('tontines', 'statusArchived')} tone={STATUS_TONE.statusArchived} /><span className="font-semibold">{formatNumber(tontines.filter((item) => item.status === 'statusArchived').length)}</span></div>
         <div className="flex items-center justify-between border-t border-border pt-2 text-sm font-semibold"><span>{t('tontines', 'totalLabel')}</span><span>{formatNumber(tontines.length)}</span></div>
       </CardContent></Card>
     </div>
 
     <div id="tontines-list" className="space-y-4 scroll-mt-6">
       <div className="flex items-center gap-2 text-sm font-semibold"><List size={15} />{t('tontines', 'tontineListTitle')}</div>
-      <FilterBar search={search} onSearchChange={(value) => { setSearch(value); resetPage(); }} placeholder={t('tontines', 'tontineName')} onClear={() => { setSearch(''); setStatus('all'); setFrequency('all'); resetPage(); }} filters={<>
+      <FilterBar search={search} onSearchChange={(value) => { setSearch(value); resetPage(); }} placeholder={t('tontines', 'tontineName')} onClear={() => { setSearch(''); setStatus('active'); setFrequency('all'); resetPage(); }} filters={<>
         <select value={frequency} onChange={(event) => { setFrequency(event.target.value); resetPage(); }} aria-label={t('tontines', 'frequency')} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
           <option value="all">{t('tontines', 'allFrequencies')}</option>
           {frequencyOptions.map((freq) => <option key={freq} value={freq}>{t('tontines', FREQUENCY_LABEL_KEY[freq])}</option>)}
         </select>
-        <select value={status} onChange={(event) => { setStatus(event.target.value); resetPage(); }} aria-label={t('tontines', 'tontineStatus')} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
-          <option value="all">{t('tontines', 'tontineStatus')}</option>
-          <option value="statusActive">{t('tontines', 'statusActive')}</option>
-          <option value="statusInactive">{t('tontines', 'statusInactive')}</option>
+        {/* Filtre Statut (défaut : actives) — « Inactives » = toute tontine non active (supprimée logiquement ou archivée, distinguées par leur badge). */}
+        <select value={status} onChange={(event) => { setStatus(event.target.value as StatusFilter); resetPage(); }} aria-label={t('tontines', 'tontineStatus')} className="h-9 rounded-md border border-input bg-background px-3 text-xs">
+          <option value="active">{t('tontines', 'tontineFilterActive')}</option>
+          <option value="inactive">{t('tontines', 'tontineFilterInactive')}</option>
+          <option value="all">{t('tontines', 'tontineFilterAll')}</option>
         </select>
       </>} />
       <DataTable columns={columns} rows={pagedRows} empty={<EmptyState icon={UsersRound} title={t('tontines', 'noTontines')} />} />
@@ -333,7 +350,7 @@ function TontineCreate({ t }: { t: T }) {
   };
   const isPending = mutation.isPending;
   return <Page title={t('tontines', 'createTontine')} description={t('tontines', 'tontinesDescription')} actions={<Back label={t('tontines', 'backToTontines')} to="/tontines" />}><div className="grid gap-5 lg:grid-cols-2">
-    <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2">{!isGoods && !organizationCurrency && <div className="sm:col-span-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"><p>{t('tontines', 'organizationCurrencyMissing')}</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => navigate('/settings/organization')}>{t('tontines', 'goToOrganizationSettings')}</Button></div>}<div className="space-y-2"><Label htmlFor="tontine-name">{t('tontines', 'tontineName')} *</Label><Input id="tontine-name" value={name} onChange={(event) => setName(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="tontine-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-value-type" value={valueType} onChange={(event) => setValueType(event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><div className="relative"><Input id="tontine-contribution-amount" type="number" inputMode="decimal" min={0} value={contributionAmount} onChange={(event) => setContributionAmount(event.target.value)} aria-invalid={Boolean(contributionAmountError)} aria-describedby={organizationCurrency ? 'tontine-contribution-amount-currency' : undefined} className={organizationCurrency ? 'pr-14' : undefined} />{organizationCurrency && <span id="tontine-contribution-amount-currency" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">{getCurrencyShortLabel(organizationCurrency)}</span>}</div><FieldError message={contributionAmountError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-item">{t('tontines', 'goodsItem')} *</Label><Input id="tontine-goods-item" value={item} onChange={(event) => setItem(event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-quantity">{t('tontines', 'referenceQuantity')} *</Label><Input id="tontine-goods-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div>}{!isGoods && <div className="flex items-center justify-between gap-3 space-y-0 rounded-lg border border-input px-3 py-2 sm:col-span-2"><div><Label htmlFor="tontine-with-purchase">{t('tontines', 'withPurchase')}</Label><p className="mt-0.5 text-[11px] text-muted-foreground">{t('tontines', 'withPurchaseHint')}</p></div><Switch id="tontine-with-purchase" checked={withPurchase} onCheckedChange={setWithPurchase} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-unit">{t('tontines', 'unit')} *</Label><select id="tontine-goods-unit" value={unit} onChange={(event) => setUnit(event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div>}{!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}</div></FormSection>
+    <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2">{!isGoods && !organizationCurrency && <div className="sm:col-span-2 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"><p>{t('tontines', 'organizationCurrencyMissing')}</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => navigate('/settings/organization')}>{t('tontines', 'goToOrganizationSettings')}</Button></div>}<div className="space-y-2"><Label htmlFor="tontine-name">{t('tontines', 'tontineName')} *</Label><Input id="tontine-name" value={name} onChange={(event) => setName(event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div><div className="space-y-2"><Label htmlFor="tontine-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-value-type" value={valueType} onChange={(event) => setValueType(event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>{!isGoods && <div className="space-y-2"><Label htmlFor="tontine-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><div className="relative"><AmountInput id="tontine-contribution-amount" value={contributionAmount} onValueChange={setContributionAmount} aria-invalid={Boolean(contributionAmountError)} aria-describedby={organizationCurrency ? 'tontine-contribution-amount-currency' : undefined} className={organizationCurrency ? 'pr-14' : undefined} />{organizationCurrency && <span id="tontine-contribution-amount-currency" className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">{getCurrencyShortLabel(organizationCurrency)}</span>}</div><FieldError message={contributionAmountError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-item">{t('tontines', 'goodsItem')} *</Label><Input id="tontine-goods-item" value={item} onChange={(event) => setItem(event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-quantity">{t('tontines', 'referenceQuantity')} *</Label><Input id="tontine-goods-quantity" type="number" min={1} value={quantity} onChange={(event) => setQuantity(event.target.value)} aria-invalid={Boolean(quantityError)} /><FieldError message={quantityError} /></div>}{!isGoods && <div className="flex items-center justify-between gap-3 space-y-0 rounded-lg border border-input px-3 py-2 sm:col-span-2"><div><Label htmlFor="tontine-with-purchase">{t('tontines', 'withPurchase')}</Label><p className="mt-0.5 text-[11px] text-muted-foreground">{t('tontines', 'withPurchaseHint')}</p></div><Switch id="tontine-with-purchase" checked={withPurchase} onCheckedChange={setWithPurchase} /></div>}{isGoods && <div className="space-y-2"><Label htmlFor="tontine-goods-unit">{t('tontines', 'unit')} *</Label><select id="tontine-goods-unit" value={unit} onChange={(event) => setUnit(event.target.value)} aria-invalid={Boolean(unitError)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="">{t('tontines', 'selectUnit')}</option>{units.map((option) => <option key={option.code} value={option.code}>{option.singularFr}</option>)}</select><FieldError message={unitError} /></div>}{!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}</div></FormSection>
     <FormSection title={t('tontines', 'frequencySection')} description={t('tontines', 'frequencySectionDescription')}><FrequencyFields t={t} value={freq} onChange={setFreq} error={frequencyError} /></FormSection>
     <FormSection title={t('tontines', 'summarySection')}><div className="grid gap-2 text-sm sm:grid-cols-2"><Info label={t('tontines', 'summaryName')} value={name || '—'} icon={Landmark} /><Info label={t('tontines', 'valueType')} value={valueType === 'MONEY' ? t('tontines', 'tontineFinancial') : t('tontines', 'tontineInKind')} icon={ClipboardList} />{!isGoods && <><Info label={t('tontines', 'currency')} value={organizationCurrency ? `${organizationCurrency} — ${getCurrencyLabel(organizationCurrency)}` : '—'} icon={Banknote} /><Info label={t('tontines', 'tontineContributionAmount')} value={contributionAmount ? formatCurrency(Number(contributionAmount), organizationCurrency, 'fr') : '—'} icon={Banknote} /><Info label={t('tontines', 'withPurchase')} value={t('tontines', withPurchase ? 'yes' : 'no')} icon={ClipboardList} /></>}{isGoods && <><Info label={t('tontines', 'goodsItem')} value={item.trim() || '—'} icon={Package} /><Info label={t('tontines', 'referenceQuantity')} value={quantity ? `${quantity} ${formatUnit(Number(quantity), unit)}`.trim() : '—'} icon={Hash} /></>}{freq.frequency && <><Info label={t('tontines', 'frequency')} value={t('tontines', FREQUENCY_LABEL_KEY[freq.frequency])} icon={CalendarDays} /><Info label={t('tontines', 'frequencyPreviewLabel')} value={formatFrequencyDescription(freq as FrequencyConfig, 'fr')} icon={CalendarDays} /></>}<Info label={t('tontines', 'summaryTenant')} value={currentTenant.name} icon={UsersRound} /></div></FormSection>
     <div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={isPending} onClick={() => navigate('/tontines')}>{t('tontines', 'cancel')}</Button><Button disabled={isPending || (!isGoods && !organizationCurrency)} onClick={handleSave}>{isPending ? t('tontines', 'saving') : t('tontines', 'save')}</Button></div>
@@ -416,6 +433,74 @@ function AdhesionsPanel({ t, tontineId }: { t: T; tontineId: string }) {
 const TAB_SEGMENTS = ['adherents', 'tours'] as const;
 type TabSegment = (typeof TAB_SEGMENTS)[number];
 
+type TontineLifecycleAction = 'reactivate' | 'archive' | 'unarchive';
+const TONTINE_LIFECYCLE_KEYS: Record<TontineLifecycleAction, { menu: string; title: string; description: string; confirm: string; success: string }> = {
+  reactivate: { menu: 'reactivateTontine', title: 'reactivateTontineTitle', description: 'reactivateTontineConfirm', confirm: 'reactivateAction', success: 'tontineReactivated' },
+  archive: { menu: 'archiveTontine', title: 'archiveTontineTitle', description: 'archiveTontineConfirm', confirm: 'archiveAction', success: 'tontineArchived' },
+  unarchive: { menu: 'unarchiveTontine', title: 'unarchiveTontineTitle', description: 'unarchiveTontineConfirm', confirm: 'unarchiveAction', success: 'tontineUnarchived' },
+};
+const TONTINE_LIFECYCLE_ICON: Record<TontineLifecycleAction, typeof Archive> = { reactivate: RotateCcw, archive: Archive, unarchive: ArchiveRestore };
+/**
+ * Transitions permises depuis un statut — le service reste l'autorité (il revérifie et explique tout refus).
+ * « Supprimer » (désactivation logique active → inactive) est géré à part, voir `useTontineRowActions`.
+ */
+export function tontineLifecycleActionsFor(status: TontineStatus): TontineLifecycleAction[] {
+  if (status === 'statusActive') return ['archive'];
+  if (status === 'statusInactive') return ['reactivate', 'archive'];
+  return ['unarchive'];
+}
+
+/**
+ * Actions de gestion d'une tontine, portées par le menu « ⋯ » de sa LIGNE dans la liste (mandat
+ * « actions Tontines sur le modèle des Caisses », 2026-09-27 — même principe que `useCashboxLifecycle`) :
+ * Modifier, cycle de vie, Supprimer. Mêmes permissions et mêmes confirmations qu'auparavant sur la fiche ;
+ * le service reste l'autorité et explique tout refus.
+ */
+function useTontineRowActions(t: T) {
+  const navigate = useNavigate();
+  const { currentTenant } = useTenant();
+  const { can } = usePermissions();
+  const [pending, setPending] = useState<{ action: TontineLifecycleAction | 'delete'; id: string; name: string } | null>(null);
+  const invalidateKeys = [queryKeys.tontines.list(currentTenant.id), ['tontines', 'detail']];
+  /** Suppression = désactivation LOGIQUE (`deleteTontine` : active → inactive) — jamais une suppression physique, tout l'historique est conservé. */
+  const deleteMutation = useMockMutation<TontineLifecycleOutcome | undefined, string>({
+    mutationFn: (id) => tontinesService.deleteTontine(currentTenant.id, id),
+    invalidateKeys,
+    onSuccess: (outcome) => {
+      setPending(null);
+      if (!outcome) { notify.error(t('tontines', 'tontineDeleteFailed')); return; }
+      if (!outcome.ok) { notify.error(t('tontines', 'tontineLifecycleInvalidStatus')); return; }
+      notify.success(t('tontines', 'tontineDeleted'));
+    },
+  });
+  /** Cycle de vie (mandat « Évolution globale du module Finance » §33-§37) — refus expliqué par la raison métier renvoyée par le service. */
+  const lifecycleMutation = useMockMutation<TontineLifecycleOutcome | undefined, { action: TontineLifecycleAction; id: string }>({
+    mutationFn: ({ action, id }) => (action === 'reactivate' ? tontinesService.reactivateTontine : action === 'archive' ? tontinesService.archiveTontine : tontinesService.unarchiveTontine)(currentTenant.id, id),
+    invalidateKeys,
+    onSuccess: (outcome, { action }) => {
+      setPending(null);
+      if (!outcome) { notify.error(t('tontines', 'tontineDeleteFailed')); return; }
+      if (!outcome.ok) { notify.error(t('tontines', outcome.reason === 'occurrenceInProgress' ? 'tontineArchiveOccurrenceInProgress' : 'tontineLifecycleInvalidStatus')); return; }
+      notify.success(t('tontines', TONTINE_LIFECYCLE_KEYS[action].success));
+    },
+  });
+  const menuItems = (tontine: Tontine) => {
+    const items: ReactNode[] = [];
+    if (can('tontines.update') && tontine.status !== 'statusArchived') items.push(<DropdownMenuItem key="edit" onSelect={() => navigate(`/tontines/${tontine.id}/edit`)}><Pencil size={14} className="mr-2" />{t('tontines', 'editTontineAction')}</DropdownMenuItem>);
+    if (can('tontines.update')) for (const action of tontineLifecycleActionsFor(tontine.status)) {
+      const Icon = TONTINE_LIFECYCLE_ICON[action];
+      items.push(<DropdownMenuItem key={action} onSelect={() => setPending({ action, id: tontine.id, name: tontine.name })}><Icon size={14} className="mr-2" />{t('tontines', TONTINE_LIFECYCLE_KEYS[action].menu)}</DropdownMenuItem>);
+    }
+    // « Supprimer » n'est proposé qu'à une tontine active : une tontine inactive est déjà supprimée logiquement.
+    if (can('tontines.delete') && tontine.status === 'statusActive') items.push(<DropdownMenuItem key="delete" onSelect={() => setPending({ action: 'delete', id: tontine.id, name: tontine.name })} className="text-destructive focus:text-destructive"><Trash2 size={14} className="mr-2" />{t('tontines', 'deleteTontineAction')}</DropdownMenuItem>);
+    return items;
+  };
+  const dialog = !pending ? null : pending.action === 'delete'
+    ? <ConfirmDialog open destructive title={t('tontines', 'deleteTontineTitle')} description={t('tontines', 'deleteTontineConfirm')} confirmLabel={t('tontines', 'deleteTontineConfirmAction')} cancelLabel={t('tontines', 'cancel')} confirmDisabled={deleteMutation.isPending} onConfirm={() => deleteMutation.mutate(pending.id)} onCancel={() => setPending(null)} />
+    : <ConfirmDialog open title={t('tontines', TONTINE_LIFECYCLE_KEYS[pending.action].title)} description={t('tontines', TONTINE_LIFECYCLE_KEYS[pending.action].description)} confirmLabel={t('tontines', TONTINE_LIFECYCLE_KEYS[pending.action].confirm)} cancelLabel={t('tontines', 'cancel')} confirmDisabled={lifecycleMutation.isPending} onConfirm={() => lifecycleMutation.mutate({ action: pending.action as TontineLifecycleAction, id: pending.id })} onCancel={() => setPending(null)} />;
+  return { menuItems, dialog };
+}
+
 function TontineDetail({ t }: { t: T }) {
   const { tontineId = '', '*': subPath = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant();
   const { data: tontine, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.tontines.detail(tontineId), currentTenant.id], queryFn: () => tontinesService.getTontine(currentTenant.id, tontineId) });
@@ -430,7 +515,6 @@ function TontineDetail({ t }: { t: T }) {
    * requête `tontine` dès le montage, elles résolvent avec elle.
    */
   const { data: summary } = useQuery({ queryKey: queryKeys.tontines.summary(tontineId), queryFn: () => tontinesService.getTontineSummary(currentTenant.id, tontineId) });
-  const { data: occurrences = [] } = useQuery({ queryKey: queryKeys.tontines.occurrences(tontineId), queryFn: () => tontineOperationsService.listOccurrences(currentTenant.id, tontineId), enabled: Boolean(tontine) });
   /** Sans objet pour « Avec achat » (`isPlanningComplete` y retourne toujours `false`, jamais utilisé dans ce cas par `defaultTab` plus bas) — interrogée quand même pour rester en parallèle de `tontine`, jamais séquentielle derrière elle. */
   const { data: planningStatus } = useQuery({ queryKey: queryKeys.tontines.planningStatus(tontineId), queryFn: () => tontineOperationsService.getPlanningStatus(currentTenant.id, tontineId) });
   const tabAvailable: Record<TabSegment, boolean> = { adherents: true, tours: true };
@@ -498,15 +582,11 @@ function TontineDetail({ t }: { t: T }) {
    * toute réévaluation ultérieure de `defaultTab`.
    */
   const goToTab = (tab: TabSegment) => navigate(`/tontines/${tontine.id}/${tab}`);
-  return <Page title={tontine.name} actions={<><Back label={t('tontines', 'backToTontines')} to="/tontines" /><PermissionGate permission="tontines.update"><Button variant="outline" onClick={() => navigate(`/tontines/${tontine.id}/edit`)}><Pencil size={16} />{t('tontines', 'edit')}</Button></PermissionGate></>}>
-    <Card><CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
-      <div className="space-y-1 min-w-0">
-        <StatusBadge label={t('tontines', tontine.status)} tone={STATUS_TONE[tontine.status]} />
-        <p className="text-sm text-muted-foreground">{t('tontines', FREQUENCY_LABEL_KEY[tontine.frequency])}{tontine.valueType === 'MONEY' && tontine.withPurchase ? ` · ${t('tontines', 'withPurchase')}` : ''}</p>
-        <p className="text-xs text-muted-foreground">{formatNumber(summary?.memberCount ?? 0)} {t('tontines', 'adherentsTitle').toLowerCase()} · {formatNumber(occurrences.length)} {t('tontines', 'occurrenceCount').toLowerCase()}</p>
-      </div>
-    </CardContent></Card>
-
+  /** Plus aucun menu « ⋯ » sur la fiche (mandat 2026-09-27) : les actions de gestion sont sur la ligne de la tontine dans la liste, comme pour les Caisses. */
+  return <Page title={tontine.name} actions={<Back label={t('tontines', 'backToTontines')} to="/tontines" />}>
+    {/* Tontine non active : consultation seule (§34/§36) — tout l'historique reste affiché, les services refusent toute nouvelle opération. */}
+    {tontine.status !== 'statusActive' && <div role="status" className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200" data-testid="tontine-not-operational"><StatusBadge label={t('tontines', tontine.status)} tone={STATUS_TONE[tontine.status]} /><span>{t('tontines', tontine.status === 'statusArchived' ? 'tontineArchivedNotice' : 'tontineInactiveNotice')}</span></div>}
+    {/* Mandat « Suppression de la carte récapitulative » (2026-09-25) : plus de carte statut/fréquence/compteurs entre l'en-tête et les onglets — la fiche va directement En-tête → Onglets → Contenu. La fréquence (+ « Avec achat ») reste rappelée discrètement en tête de l'onglet Tours. */}
     <Tabs value={activeTab} onValueChange={(value) => goToTab(value as TabSegment)}>
       <TabsList className="flex h-auto flex-wrap justify-start gap-1 bg-muted/60 p-1">
         <TabsTrigger value="adherents">{t('tontines', 'tabAdherents')}</TabsTrigger>
@@ -516,7 +596,7 @@ function TontineDetail({ t }: { t: T }) {
       {/* Sans achat : ordre de passage prédéfini (AdherentsOrderPanel). Avec achat : pas d'ordre, simple adhésion (AdhesionsPanel) — la détermination du bénéficiaire se fait ultérieurement via les règles d'achat. */}
       <TabsContent value="adherents" className="mt-4"><Card><CardContent className="p-5">{tontine.withPurchase ? <AdhesionsPanel t={t} tontineId={tontine.id} /> : <AdherentsOrderPanel t={t} tontineId={tontine.id} />}</CardContent></Card></TabsContent>
 
-      <TabsContent value="tours" className="mt-4"><Card><CardContent className="p-5"><OccurrenceSection t={t} tontine={tontine} /></CardContent></Card></TabsContent>
+      <TabsContent value="tours" className="mt-4"><Card><CardContent className="space-y-3 p-5"><p className="text-xs text-muted-foreground" data-testid="tontine-tours-frequency">{t('tontines', FREQUENCY_LABEL_KEY[tontine.frequency])}{tontine.valueType === 'MONEY' && tontine.withPurchase ? ` · ${t('tontines', 'withPurchase')}` : ''}</p><OccurrenceSection t={t} tontine={tontine} /></CardContent></Card></TabsContent>
     </Tabs>
   </Page>;
 }
@@ -574,7 +654,7 @@ function TontineEdit({ t }: { t: T }) {
     <FormSection title={t('tontines', 'general')}><div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-2"><Label htmlFor="tontine-edit-name">{t('tontines', 'tontineName')} *</Label><Input id="tontine-edit-name" value={current.name} onChange={(event) => setField('name', event.target.value)} aria-invalid={Boolean(error)} /><FieldError message={error} /></div>
       <div className="space-y-2"><Label htmlFor="tontine-edit-value-type">{t('tontines', 'valueType')}</Label><select id="tontine-edit-value-type" value={current.valueType} onChange={(event) => setField('valueType', event.target.value as ValueType)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="MONEY">{t('tontines', 'tontineFinancial')}</option><option value="GOODS">{t('tontines', 'tontineInKind')}</option></select></div>
-      {!isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><Input id="tontine-edit-contribution-amount" type="number" inputMode="decimal" min={0} value={current.contributionAmount} onChange={(event) => setField('contributionAmount', event.target.value)} aria-invalid={Boolean(contributionAmountError)} /><FieldError message={contributionAmountError} /></div>}
+      {!isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-contribution-amount">{t('tontines', 'tontineContributionAmount')} *</Label><AmountInput id="tontine-edit-contribution-amount" value={current.contributionAmount} onValueChange={(amount) => setField('contributionAmount', amount)} aria-invalid={Boolean(contributionAmountError)} /><FieldError message={contributionAmountError} /></div>}
       {!isGoods && <div className="flex items-center justify-between gap-3 rounded-lg border border-input px-3 py-2 sm:col-span-2"><div><Label htmlFor="tontine-edit-with-purchase">{t('tontines', 'withPurchase')}</Label><p className="mt-0.5 text-[11px] text-muted-foreground">{t('tontines', 'withPurchaseHint')}</p></div><Switch id="tontine-edit-with-purchase" checked={current.withPurchase} onCheckedChange={(checked) => setField('withPurchase', checked)} /></div>}
       {!isGoods && <p className="text-xs text-muted-foreground sm:col-span-2">{t('tontines', 'contributionAmountHint')}</p>}
       {isGoods && <div className="space-y-2"><Label htmlFor="tontine-edit-goods-item">{t('tontines', 'goodsItem')} *</Label><Input id="tontine-edit-goods-item" value={current.item} onChange={(event) => setField('item', event.target.value)} aria-invalid={Boolean(itemError)} /><FieldError message={itemError} /></div>}

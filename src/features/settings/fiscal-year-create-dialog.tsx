@@ -9,7 +9,7 @@ import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import { settingsService, type CreateFiscalYearInput } from '@/services/settings.service';
 import { queryKeys } from '@/services/query-keys';
-import { suggestNextFiscalYear, fiscalYearLabel, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { suggestNextFiscalYear, fiscalYearLabel, findCurrentFiscalYear, type FiscalYear } from '@/mocks/settings/fiscal-years';
 import { isValidSessionScheduleConfig, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
 import { fiscalYearTransferCategories, type TransferabilityDecision } from '@/mocks/settings/fiscal-year-transfer-categories';
 import { SessionScheduleFields } from './session-schedule-fields';
@@ -34,7 +34,7 @@ const TRANSFERABILITY_KEY: Record<TransferabilityDecision, string> = { TRANSFERA
  */
 export function FiscalYearCreateDialog({ open, onOpenChange, tenantId, years }: { open: boolean; onOpenChange: (open: boolean) => void; tenantId: string; years: FiscalYear[] }) {
   const { t, locale } = useLocale();
-  const current = years.find((year) => year.isCurrent);
+  const current = findCurrentFiscalYear(years);
   const [step, setStep] = useState<1 | 2>(1);
   const [form, setForm] = useState(() => suggestNextFiscalYear(years));
   const [error, setError] = useState<string | undefined>();

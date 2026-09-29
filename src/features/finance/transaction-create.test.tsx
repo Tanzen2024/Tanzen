@@ -1,19 +1,25 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
 import { transactions } from '@/mocks/finance/transactions';
+import { loans } from '@/mocks/finance/loans';
+import { applications } from '@/mocks/finance/applications';
+import { guarantors } from '@/mocks/finance/guarantors';
+import { auditEvents } from '@/mocks/audit/audit-events';
+import { loanRules } from '@/mocks/finance/loan-rules';
+import { workflowRequests } from '@/mocks/operations/workflow-requests';
 
 /**
  * Mandat « CLASSIFICATION DES TRANSACTIONS » : le bouton « + Ajouter une
  * transaction » ouvre UN formulaire générique qui commence par « Catégorie »
- * (ÉPARGNE / PRÊT / REMBOURSEMENT / AUTRES). « Sous-catégorie » n'apparaît QUE
- * pour AUTRES. Pour un PRÊT, le formulaire lit la politique de la caisse
- * (`LoanRule` liée à `account_id`) et affiche garant / approbation seulement si
+ * (Épargner / Rembourser / Emprunter / Autres, mandat 2026-09-27) — aucune
+ * « Sous-catégorie » à la création. Pour un PRÊT, le formulaire lit la politique de la caisse
+ * (`LoanRule` liée à `cashbox_id`) et affiche garant / approbation seulement si
  * la politique l'impose. Tenant par défaut : T-001 « Coopérative Sutura »
- * (rôle admin). Politiques T-001 seedées : AC-001 (Trésorerie) garant +
+ * (rôle admin). Politiques T-001 seedées : AC-012 (Transport) garant +
  * approbation requis ; AC-009 (Épargne volontaire) prêt autorisé sans garant.
  *
  * ISOLATION : `createTransaction` fait un `transactions.push(...)` sur le mock
@@ -23,8 +29,17 @@ import { transactions } from '@/mocks/finance/transactions';
  * dépend plus de l'ordre : chacun repart du même état, seul ou en groupe.
  */
 const TRANSACTIONS_SEED = structuredClone(transactions);
+/**
+ * Un PRÊT écrit aussi `loans` / `applications` / `guarantors` / `auditEvents`
+ * (`creditService.createLoanTransaction`) : sans les restaurer, un prêt créé par
+ * une tentative précédente (retry vitest) compte dans `maxActiveLoans` de
+ * l'adhérent et fait refuser le suivant.
+ */
+const CREDIT_STORES = { loans, applications, guarantors, auditEvents };
+const CREDIT_SEED = Object.fromEntries(Object.entries(CREDIT_STORES).map(([name, list]) => [name, structuredClone(list)])) as Record<keyof typeof CREDIT_STORES, unknown[]>;
 function restoreTransactionsSeed() {
   transactions.splice(0, transactions.length, ...structuredClone(TRANSACTIONS_SEED));
+  for (const [name, list] of Object.entries(CREDIT_STORES)) (list as unknown[]).splice(0, list.length, ...structuredClone(CREDIT_SEED[name as keyof typeof CREDIT_STORES]));
 }
 beforeEach(restoreTransactionsSeed);
 afterEach(restoreTransactionsSeed);
@@ -42,71 +57,64 @@ const LOAN_MARKER = 'Prêt test — politique Trésorerie';
 /** Enregistre une transaction d'épargne conforme depuis le formulaire générique et attend la redirection vers sa fiche. Rend chaque cas autonome (aucune dépendance à un test précédent). */
 async function submitSavings(user: ReturnType<typeof userEvent.setup>, marker: string) {
   renderFinance('/finance/transactions/create');
-  await screen.findByRole('option', { name: /CS-001-ÉPG/ });
-  await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-ÉPG');
-  await user.selectOptions(screen.getByLabelText(/Catégorie/), 'EPARGNE');
+  await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-001"]')).not.toBeNull());
+  await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-001');
+  await user.selectOptions(screen.getByLabelText(/^Action \*/), 'EPARGNE');
   await screen.findByRole('option', { name: 'Fatou Ndiaye' });
   await user.selectOptions(screen.getByLabelText(/Adhérent/), 'Fatou Ndiaye');
   await user.type(screen.getByLabelText('Montant *'), '25000');
   await user.type(screen.getByLabelText(/Commentaire/), marker);
   await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
-  await screen.findByText(marker);
+  // Fiche détail uniquement : le textarea Commentaire du formulaire porte aussi `marker` (valeur contrôlée) et résolvait
+  // la recherche AVANT la redirection.
+  await screen.findByText(marker, { ignore: 'script, style, textarea' });
 }
 
 describe('Finance → Transactions — saisie (journal central)', () => {
-  it('le journal expose « Ajouter une transaction » et exactement les 7 colonnes du mandat (dont « Catégorie », jamais « Opération »)', async () => {
+  it('l’onglet Transactions expose « Nouvelle transaction » et les colonnes du journal (dont « Caisse » et « Actions », jamais « Opération »)', async () => {
     renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    expect(screen.getByRole('button', { name: /Ajouter une transaction/i })).toBeInTheDocument();
+    await screen.findByTestId('transactions-context-header');
+    const table = (await screen.findAllByRole('table')).find((item) => !item.getAttribute('aria-label')) as HTMLElement;
+    expect(screen.getByRole('button', { name: /Nouvelle transaction/i })).toBeInTheDocument();
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
-    expect(headers).toEqual(['Séance', 'Date transaction', 'Adhérent', 'Catégorie', 'Débit', 'Crédit', 'Commentaire']);
+    expect(headers).toEqual(['Séance', 'Date transaction', 'Caisse', 'Adhérent', 'Actions', 'Débit', 'Report dette', 'Crédit', 'Commentaire']);
   });
 
-  it('IMPORTANT : « Sous-catégorie » n’apparaît que pour Catégorie = AUTRES, est vidée quand on quitte AUTRES', async () => {
+  it('IMPORTANT : Action = exactement Épargner · Rembourser · Emprunter · Autres, AUCUN champ « Sous-catégorie » (mandat « Catégories de transactions », 2026-09-27)', async () => {
     const user = userEvent.setup();
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-ÉPG/ });
-    const categorySelect = screen.getByLabelText(/Catégorie/);
-
-    // ÉPARGNE / PRÊT / REMBOURSEMENT → pas de champ Sous-catégorie
-    for (const category of ['EPARGNE', 'PRET', 'REMBOURSEMENT']) {
-      await user.selectOptions(categorySelect, category);
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-001"]')).not.toBeNull());
+    const categorySelect = screen.getByLabelText(/^Action \*/);
+    expect(within(categorySelect).getAllByRole('option').map((option) => option.textContent)).toEqual(['Sélectionner une action', 'Épargner', 'Rembourser', 'Emprunter', 'Autres']);
+    for (const operation of ['EPARGNE', 'REMBOURSEMENT', 'PRET', 'AUTRES']) {
+      await user.selectOptions(categorySelect, operation);
       expect(screen.queryByLabelText(/Sous-catégorie/)).not.toBeInTheDocument();
     }
-
-    // AUTRES → champ Sous-catégorie obligatoire, options = les 9 de AUTRES + placeholder
-    await user.selectOptions(categorySelect, 'AUTRES');
-    const subSelect = await screen.findByLabelText(/Sous-catégorie/);
-    expect(within(subSelect).getAllByRole('option')).toHaveLength(10);
-    await user.selectOptions(subSelect, 'FRAIS');
-    expect((subSelect as HTMLSelectElement).value).toBe('FRAIS');
-
-    // Retour vers ÉPARGNE → champ masqué ; re-sélection de AUTRES → valeur vidée
-    await user.selectOptions(categorySelect, 'EPARGNE');
-    expect(screen.queryByLabelText(/Sous-catégorie/)).not.toBeInTheDocument();
-    await user.selectOptions(categorySelect, 'AUTRES');
-    expect(((await screen.findByLabelText(/Sous-catégorie/)) as HTMLSelectElement).value).toBe('');
   });
 
-  it('AUTRES sans sous-catégorie → l’enregistrement est bloqué (champ obligatoire)', async () => {
+  it('« Autres » : enregistrée en AUTRES / AUTRE, type au choix (Débit accepté)', async () => {
     const user = userEvent.setup();
+    const before = transactions.length;
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-COUR/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-COUR');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'AUTRES');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-003"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-003');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'AUTRES');
+    expect(screen.getByLabelText(/^Type/)).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText(/^Type/), 'debit');
     await user.type(screen.getByLabelText('Montant *'), '5000');
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
-    // toujours sur le formulaire, message d'erreur sur la sous-catégorie
-    expect(await screen.findByText('Ce champ est obligatoire.')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Sous-catégorie/)).toBeInTheDocument();
+    await waitFor(() => expect(transactions.length).toBe(before + 1));
+    expect(transactions[before]).toMatchObject({ category: 'AUTRES', subcategory: 'AUTRE', type: 'debit', amount: 5_000 });
   });
 
-  it('§ PRÊT : Catégorie = Prêt sur la caisse Trésorerie affiche les conditions, la garantie ET l’approbation imposées par la politique', async () => {
+  it('§ PRÊT : Catégorie = Prêt sur la caisse Transport affiche les conditions, la garantie ET l’approbation imposées par la politique', async () => {
     const user = userEvent.setup();
+    // LR-001 est OFF dans les données DEMO : ce test porte sur une règle qui EXIGE un garant.
+    { const rule = loanRules.find((item) => item.id === 'LR-001')!; const seeded = rule.requiresGuarantor; rule.requiresGuarantor = true; onTestFinished(() => { rule.requiresGuarantor = seeded; }); }
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-TRÉS/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-TRÉS');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'PRET');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-004"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-004');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'PRET');
 
     expect(await screen.findByText('Conditions du prêt')).toBeInTheDocument();
     expect(screen.getByText('Garantie')).toBeInTheDocument();
@@ -115,24 +123,30 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     expect((screen.getByLabelText(/Taux d’intérêt/) as HTMLInputElement).value).toBe('12');
   });
 
-  it('§ PRÊT : Catégorie = Prêt sur une caisse dont la politique n’exige pas de garant → pas de bloc Garantie ni Approbation', async () => {
+  it('§ PRÊT : la règle unique du tenant n’exige ni garant ni approbation → pas de bloc Garantie ni Approbation', async () => {
     const user = userEvent.setup();
+    // Règle de crédit UNIQUE du tenant (2026-09-26) : c'est elle, et non la caisse choisie, qui décide des garanties.
+    const rule = loanRules.find((item) => item.id === 'LR-001')!;
+    const saved = { ...rule };
+    Object.assign(rule, { requiresGuarantor: false, minGuarantors: 0, requiresApproval: false, approvalLevel: null });
+    try {
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-CX-001/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-CX-001');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'PRET');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-001"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-001');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'PRET');
 
     expect(await screen.findByText('Conditions du prêt')).toBeInTheDocument();
     expect(screen.queryByText('Garantie')).not.toBeInTheDocument();
     expect(screen.queryByText('Approbation')).not.toBeInTheDocument();
+    } finally { Object.assign(rule, saved); }
   });
 
   it('§ PRÊT : un montant hors des bornes de la politique est refusé', async () => {
     const user = userEvent.setup();
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-TRÉS/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-TRÉS');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'PRET');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-004"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-004');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'PRET');
     await screen.findByText('Conditions du prêt');
     const memberSelect = screen.getByLabelText(/Adhérent/);
     await waitFor(() => expect(within(memberSelect).getAllByRole('option').length).toBeGreaterThan(1));
@@ -143,12 +157,15 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     expect(await screen.findByText(/doit être compris entre/)).toBeInTheDocument();
   });
 
-  it('§ PRÊT : un prêt conforme (garant + approbation) est enregistré comme UNE transaction de catégorie Prêt', async () => {
+  it('§ PRÊT : approbation requise → le prêt conforme (garant) est SOUMIS au workflow — aucune transaction ni aucun prêt avant la décision', async () => {
     const user = userEvent.setup();
+    // LR-001 est OFF dans les données DEMO : ce test porte sur une règle qui EXIGE un garant.
+    { const rule = loanRules.find((item) => item.id === 'LR-001')!; const seeded = rule.requiresGuarantor; rule.requiresGuarantor = true; onTestFinished(() => { rule.requiresGuarantor = seeded; }); }
+    const counts = { transactions: transactions.length, loans: loans.length, applications: applications.length, requests: workflowRequests.length };
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-TRÉS/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-TRÉS');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'PRET');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-004"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-004');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'PRET');
     await screen.findByText('Conditions du prêt');
     const memberSelect = screen.getByLabelText(/Adhérent/);
     await waitFor(() => expect(within(memberSelect).getAllByRole('option').length).toBeGreaterThan(1));
@@ -158,22 +175,25 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     // garant imposé par la politique (minGuarantors 1)
     await user.selectOptions(screen.getByLabelText('Nom du garant'), 'Cheikh Diop');
     await user.type(screen.getByLabelText('Montant garanti'), '300000');
-    // approbation imposée par la politique
-    await user.click(screen.getByRole('checkbox'));
+    // Approbation : plus de case à cocher, un avis de workflow (niveau Administrateur de LR-001).
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tx-approval-workflow')).toHaveTextContent('Approbation requise (Approbation administrateur)');
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
-    // fiche détail de la transaction créée
-    expect(await screen.findByText(new RegExp(LOAN_MARKER), {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.getByText(/Garant: Cheikh Diop/)).toBeInTheDocument();
-    expect(screen.getAllByText('Prêt').length).toBeGreaterThan(0);
+    await waitFor(() => expect(workflowRequests).toHaveLength(counts.requests + 1), { timeout: 5000 });
+    const application = applications[counts.applications];
+    expect(application).toMatchObject({ memberId: 'M-001', requestedAmount: 300_000, stage: 'stageSubmitted', description: LOAN_MARKER, pendingGuarantors: [expect.objectContaining({ guarantorName: 'Cheikh Diop', guaranteedAmount: 300_000 })] });
+    expect(workflowRequests[counts.requests]).toMatchObject({ entityType: 'application', entityId: application.id, status: 'pending', requestedByUserId: 'U-001' });
+    expect(transactions).toHaveLength(counts.transactions);
+    expect(loans).toHaveLength(counts.loans);
   });
 
   it('§ ÉPARGNE : enregistre une transaction d’épargne et redirige vers sa fiche détail', async () => {
     const user = userEvent.setup();
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-ÉPG/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-ÉPG');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'EPARGNE');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-001"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-001');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'EPARGNE');
     await screen.findByRole('option', { name: 'Fatou Ndiaye' });
     await user.selectOptions(screen.getByLabelText(/Adhérent/), 'Fatou Ndiaye');
     await user.type(screen.getByLabelText('Montant *'), '25000');
@@ -192,7 +212,7 @@ describe('Finance → Transactions — saisie (journal central)', () => {
     // précédent ni de l'ordre d'exécution.
     await submitSavings(user, marker);
     renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    expect(await within(table).findByText(marker)).toBeInTheDocument();
+    // La transaction porte la séance courante du contexte (FS-001) : elle figure dans le journal de cette séance.
+    expect((await screen.findAllByText(marker)).length).toBeGreaterThan(0);
   });
 });

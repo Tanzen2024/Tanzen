@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
@@ -27,44 +27,43 @@ function renderFinance(route: string) {
 }
 
 /**
- * Reconstruction complète « Exercices fiscaux / Séances » — remplace l'ancien
- * mandat « RÈGLE CENTRALE — DATES DE RÉUNION » : le champ « Séance » du
- * journal financier liste les séances RÉELLEMENT créées de l'exercice
- * sélectionné (T-001 → FY-T001-2026), porte le `sessionId` en valeur, affiche
- * « Séance #N — date » (jamais l'id technique), et présélectionne la DERNIÈRE
- * séance créée — jamais une génération en masse de dates.
+ * Mandat « Évolution globale du module Finance » §17 : la séance d'une NOUVELLE
+ * transaction est HÉRITÉE du contexte Finance (par défaut la dernière séance
+ * créée de l'exercice) et affichée en LECTURE SEULE — jamais choisie dans le
+ * formulaire. La transaction enregistrée porte `sessionId = currentSessionId`.
  */
-describe('Finance → Transactions — « Séance » alimentée par les séances réellement créées de l\'exercice', () => {
-  it('les options = séances déjà créées (sessionId en valeur, « Séance #N — date » affichée), la dernière préselectionnée', async () => {
+describe('Finance → Transactions — « Séance » héritée du contexte Finance', () => {
+  it('le formulaire affiche la séance courante (dernière créée) en lecture seule, sans liste de choix', async () => {
     const second = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-08-11');
     renderFinance('/finance/transactions/create');
-    const select = await screen.findByLabelText('Séance') as HTMLSelectElement;
-    // une option par séance créée (le seed FS-001 + celle ajoutée ci-dessus) + le placeholder « Aucune séance ».
-    await waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3));
-    // la dernière séance créée est présélectionnée ; la valeur est un sessionId réel.
-    await waitFor(() => expect(select.value).toBe(second!.id));
-    const selectedOption = within(select).getByRole('option', { selected: true }) as HTMLOptionElement;
-    expect(selectedOption.textContent).toBe(`Séance #${second!.sessionNumber} — ${formatDate(second!.date)}`);
+    const field = await screen.findByLabelText('Date de séance') as HTMLInputElement;
+    await waitFor(() => expect(field.value).toBe(formatDate(second!.date)));
+    expect(field).toBeDisabled();
+    expect(field.tagName).toBe('INPUT');
+    expect(screen.queryByRole('combobox', { name: 'Séance' })).not.toBeInTheDocument();
   });
 
-  it('à l\'enregistrement : la transaction porte le sessionId choisi, la fiche affiche « Séance #N — date »', async () => {
+  it('à l\'enregistrement : la transaction porte le sessionId du contexte, la fiche affiche « Séance #N — date »', async () => {
     const user = userEvent.setup();
     const marker = `Épargne séance ${Date.now()}`;
     const session = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-08-11');
     renderFinance('/finance/transactions/create');
-    await screen.findByRole('option', { name: /CS-001-ÉPG/ });
-    await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-ÉPG');
-    await user.selectOptions(screen.getByLabelText(/Catégorie/), 'EPARGNE');
+    await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-001"]')).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-001');
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'EPARGNE');
     await screen.findByRole('option', { name: 'Fatou Ndiaye' });
     await user.selectOptions(screen.getByLabelText(/Adhérent/), 'Fatou Ndiaye');
-    await waitFor(() => expect((screen.getByLabelText('Séance') as HTMLSelectElement).value).toBe(session!.id));
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLInputElement).value).toBe(formatDate(session!.date)));
     await user.type(screen.getByLabelText('Montant *'), '25000');
     await user.type(screen.getByLabelText(/Commentaire/), marker);
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
-    // fiche détail de la transaction créée
-    expect(await screen.findByText(marker)).toBeInTheDocument();
-    expect(screen.getByText('Séance')).toBeInTheDocument();
-    expect(screen.getByText(`Séance #${session!.sessionNumber} — ${formatDate(session!.date)}`)).toBeInTheDocument();
+    // fiche détail de la transaction créée — `ignore: textarea` : sans lui, `findByText` trouvait le champ Commentaire du
+    // formulaire encore affiché (un textarea contrôlé porte sa valeur en texte), détaché dès la redirection → échec intermittent.
+    expect(await screen.findByText(marker, { ignore: 'script, style, textarea' })).toBeInTheDocument();
+    expect(await screen.findByText('Séance')).toBeInTheDocument();
+    // La séance est résolue par une requête séparée (`getSession`) : attendre son affichage plutôt que de lire l'instant T.
+    expect(await screen.findByText(`Séance #${session!.sessionNumber} — ${formatDate(session!.date)}`)).toBeInTheDocument();
+    expect(transactions.find((tx) => tx.description === marker)?.sessionId).toBe(session!.id);
   });
 });

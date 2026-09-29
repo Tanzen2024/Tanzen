@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { balanceAsOf } from './balance';
 import { makeCashbox, makeCtx, makeMembership, makeOpeningEntry, makeTransaction } from './__fixtures__/factories';
 import type { FinanceCtx } from './types';
-import { cashboxes as seedAccounts, resolveCashbox } from '@/mocks/finance/cashboxes';
+import { cashboxes as seedCashboxes, resolveCashbox } from '@/mocks/finance/cashboxes';
 import { transactions as seedTransactions } from '@/mocks/finance/transactions';
 import { cashboxMemberships as seedMemberships } from '@/mocks/finance/cashbox-memberships';
 
 /** Contexte tenant-scopé à partir du seed réel — LECTURE SEULE dans ces tests. */
 function seedCtx(tenantId: string): FinanceCtx {
   return {
-    cashboxes: seedAccounts.filter((a) => a.tenantId === tenantId),
+    cashboxes: seedCashboxes.filter((a) => a.tenantId === tenantId),
     transactions: seedTransactions.filter((t) => t.tenantId === tenantId),
     memberships: seedMemberships.filter((m) => m.tenantId === tenantId),
   };
@@ -23,7 +23,7 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const caisse = makeCashbox({ id: 'AC-1', cashboxNumber: 'CX-1', openingBalance: 100_000 });
     const ctx = makeCtx({
       cashboxes: [caisse],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-01-01').total).toBe(100_000);
   });
@@ -32,7 +32,7 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const caisse = makeCashbox({ id: 'AC-1', cashboxNumber: 'CX-1', openingBalance: 0 });
     const ctx = makeCtx({
       cashboxes: [caisse],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-06-10').total).toBe(50_000);
   });
@@ -41,7 +41,7 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const caisse = makeCashbox({ id: 'AC-1', cashboxNumber: 'CX-1', openingBalance: 0 });
     const ctx = makeCtx({
       cashboxes: [caisse],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-10' })],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-06-09').total).toBe(0);
   });
@@ -51,9 +51,9 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const ctx = makeCtx({
       cashboxes: [caisse],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 100_000, date: '2026-06-01' }),
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-05' }),
-        makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-1', toAccount: 'TIERS', type: 'debit', amount: 20_000, date: '2026-06-08' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 100_000, date: '2026-06-01' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-05' }),
+        makeTransaction({ tenantId: 'T-1', source: 'CX-1', destination: 'TIERS', type: 'debit', amount: 20_000, date: '2026-06-08' }),
       ],
     });
     const result = balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-06-30');
@@ -66,8 +66,8 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const ctx = makeCtx({
       cashboxes: [caisse],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 30_000, date: '2026-06-02', status: 'cancelled' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 30_000, date: '2026-06-02', status: 'cancelled' }),
       ],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-06-30').total).toBe(50_000);
@@ -78,8 +78,8 @@ describe('balanceAsOf — ACCOUNT (solde comptable de la caisse)', () => {
     const ctx = makeCtx({
       cashboxes: [caisse],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 20_000, date: '2026-06-02', status: 'pending' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 20_000, date: '2026-06-02', status: 'pending' }),
       ],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-06-30').total).toBe(50_000);
@@ -101,8 +101,8 @@ describe('balanceAsOf — TENANT_ALL_CASHBOXES', () => {
     const ctx = makeCtx({
       cashboxes: [a, b],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-A', type: 'credit', amount: 200_000, date: '2026-05-01' }),
-        makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-B', toAccount: 'TIERS', type: 'debit', amount: 100_000, date: '2026-05-02' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-A', type: 'credit', amount: 200_000, date: '2026-05-01' }),
+        makeTransaction({ tenantId: 'T-1', source: 'CX-B', destination: 'TIERS', type: 'debit', amount: 100_000, date: '2026-05-02' }),
       ],
     });
     expect(balanceAsOf(TENANT, ctx, '2026-12-31').total).toBe(1_600_000);
@@ -114,7 +114,7 @@ describe('balanceAsOf — TENANT_ALL_CASHBOXES', () => {
     const ctx = makeCtx({
       cashboxes: [src, dst],
       // écriture unique : DÉBIT dans le journal du tenant (perspective émettrice)
-      transactions: [makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-SRC', toAccount: 'CX-DST', type: 'debit', amount: 500_000, date: '2026-05-01' })],
+      transactions: [makeTransaction({ tenantId: 'T-1', source: 'CX-SRC', destination: 'CX-DST', type: 'debit', amount: 500_000, date: '2026-05-01' })],
     });
     const result = balanceAsOf(TENANT, ctx, '2026-12-31');
     expect(result.byCashbox.find((l) => l.cashboxId === 'AC-SRC')!.balance).toBe(500_000);
@@ -129,8 +129,8 @@ describe('balanceAsOf — TENANT_ALL_CASHBOXES', () => {
     const ctx = makeCtx({
       cashboxes: [caisse],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01' }),
-        makeTransaction({ tenantId: 'T-2', toAccount: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-02' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01' }),
+        makeTransaction({ tenantId: 'T-2', destination: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-02' }),
       ],
     });
     expect(balanceAsOf(ACCOUNT('AC-1'), ctx, '2026-12-31').total).toBe(50_000);
@@ -151,10 +151,10 @@ describe('balanceAsOf — scopes membre (flux net cumulé, PAS une position)', (
       makeMembership({ id: 'AM-P', cashboxId: 'AC-P', memberId: 'M-J', startDate: '2026-04-01', endDate: null }),
     ],
     transactions: [
-      makeTransaction({ id: 'TR-1', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'M-J', toAccount: 'CX-E', type: 'credit', amount: 50_000, date: '2026-05-10' }),
-      makeTransaction({ id: 'TR-2', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'CX-T', toAccount: 'M-J', type: 'debit', amount: 200_000, date: '2026-02-10' }),
+      makeTransaction({ id: 'TR-1', tenantId: 'T-1', memberId: 'M-J', source: 'M-J', destination: 'CX-E', type: 'credit', amount: 50_000, date: '2026-05-10' }),
+      makeTransaction({ id: 'TR-2', tenantId: 'T-1', memberId: 'M-J', source: 'CX-T', destination: 'M-J', type: 'debit', amount: 200_000, date: '2026-02-10' }),
       // transaction d'un AUTRE membre sur Épargne — ne doit jamais compter pour M-J
-      makeTransaction({ id: 'TR-3', tenantId: 'T-1', memberId: 'M-OTHER', fromAccount: 'M-OTHER', toAccount: 'CX-E', type: 'credit', amount: 999_000, date: '2026-05-11' }),
+      makeTransaction({ id: 'TR-3', tenantId: 'T-1', memberId: 'M-OTHER', source: 'M-OTHER', destination: 'CX-E', type: 'credit', amount: 999_000, date: '2026-05-11' }),
     ],
   });
 
@@ -223,9 +223,9 @@ describe('balanceAsOf — scopes membre (flux net cumulé, PAS une position)', (
 describe('balanceAsOf — seed réel T-001 (Fatou / Cheikh)', () => {
   const t001 = seedCtx('T-001');
 
-  it('12. Cheikh (M-006) — voyage temporel : {Trésorerie, Épargne} au 15/05, {Trésorerie} au 15/08', () => {
-    expect(balanceAsOf({ kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, t001, '2026-05-15').byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-001', 'AC-002']);
-    expect(balanceAsOf({ kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, t001, '2026-08-15').byCashbox.map((l) => l.cashboxId)).toEqual(['AC-001']);
+  it('12. Cheikh (M-006) — voyage temporel : {Transport, Épargne} au 15/08, {Transport} au 15/09', () => {
+    expect(balanceAsOf({ kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, t001, '2026-08-15').byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-009', 'AC-012']);
+    expect(balanceAsOf({ kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, t001, '2026-09-15').byCashbox.map((l) => l.cashboxId)).toEqual(['AC-012']);
   });
 
   it('13. Fatou (M-001) — Secours (AC-011) apparaît dès le 01/08, même sans transaction (à 0)', () => {
@@ -243,9 +243,10 @@ describe('balanceAsOf — seed réel T-001 (Fatou / Cheikh)', () => {
       const viaResolve = resolveCashbox(record, seedTransactions).balance;
       expect(viaEngine).toBe(viaResolve);
     }
-    // valeurs connues (audit / account-balance.test.ts) — inchangées
-    expect(balanceAsOf(ACCOUNT('AC-001'), t001, '2099-12-31').total).toBe(12_500_000);
-    expect(balanceAsOf(TENANT, t001, '2099-12-31').total).toBe(24_450_000);
+    // valeurs connues du jeu de démonstration (cf. cashbox-balance.test.ts)
+    expect(balanceAsOf(ACCOUNT('AC-012'), t001, '2099-12-31').total).toBe(3_000);
+    // Épargne 8 085 000 + Inscription 1 000 + Secours 16 000 + Transport 3 000 + Achat tontine 0
+    expect(balanceAsOf(TENANT, t001, '2099-12-31').total).toBe(8_105_000);
   });
 
   it('18. tenant T-002 — aucune caisse ni membre de T-001', () => {
@@ -296,9 +297,9 @@ describe('balanceAsOf — baseline OpeningEntry (étape 6, non-régression + nou
       cashboxes: [caisse],
       transactions: [
         // déjà absorbée dans le montant de l'OpeningEntry (exercice N, clôturé)
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 500_000, date: '2026-06-01' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 500_000, date: '2026-06-01' }),
         // exercice N+1, après l'OpeningEntry
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2027-02-01' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2027-02-01' }),
       ],
       openingEntries: [makeOpeningEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-2027', date: '2027-01-01', amount: 230_000 })],
     });

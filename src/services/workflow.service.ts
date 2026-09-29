@@ -3,7 +3,8 @@ import { getTenantScoped } from './tenant-scope';
 import { workflowDefinitions, type WorkflowDefinition, type WorkflowDomain, type WorkflowActionType, type WorkflowStepDefinition } from '@/mocks/operations/workflow-definitions';
 import { workflowRequests, type WorkflowRequest, type WorkflowStatus, type WorkflowStep } from '@/mocks/operations/workflow-requests';
 import { delegations } from '@/mocks/operations/delegations';
-import type { Permission } from '@/mocks/rbac.mocks';
+import { currentUser, systemRoles, type Permission } from '@/mocks/rbac.mocks';
+import { users } from '@/mocks/access/users';
 import type { ChangeSetItem } from '@/lib/workflow/change-set';
 
 /** Entrée d'un formulaire d'administration (Paramètres → Workflows de validation) — mêmes champs qu'une `WorkflowDefinition`, sans les champs techniques (`id`/`tenantId`/`version`/timestamps) gérés par le service. `steps` sans `order` : réindexé par le service selon la position dans le tableau (l'UI réordonne via ↑/↓, jamais en éditant un numéro). */
@@ -43,6 +44,30 @@ export type ApprovalAction = {
 
 function currentStepOf(request: WorkflowRequest) {
   return request.steps.find((step) => step.order === request.currentStepOrder);
+}
+
+/**
+ * Permissions EFFECTIVES d'un utilisateur, résolues côté service (jamais transmises par l'écran) :
+ * l'utilisateur connecté (`currentUser`), sinon un utilisateur ACTIF du tenant et l'union des
+ * permissions de ses rôles (même RBAC que la matrice des permissions).
+ */
+export function permissionsOfUser(tenantId: string, userId: string): Permission[] {
+  if (userId === currentUser.id && currentUser.tenantId === tenantId) return currentUser.permissions;
+  const user = users.find((item) => item.id === userId && item.tenantId === tenantId && item.isActive);
+  if (!user) return [];
+  return [...new Set(user.roleIds.flatMap((roleId) => systemRoles.find((role) => role.id === roleId)?.permissions ?? []))];
+}
+
+/**
+ * Séparation des tâches des demandes de crédit (prêt, modification de la règle) : le demandeur
+ * — l'utilisateur qui a SAISI la demande (décision du 2026-09-28 : saisisseur ≠ approbateur) — et
+ * l'approbateur d'une étape antérieure ne peuvent pas traiter l'étape en cours. Mêmes contrôles
+ * que `creditService.decideLoanApplication` / `loanRuleService.decideLoanRuleUpdate` (le vrai
+ * blocage) ; ici, la demande n'est simplement pas « à traiter » pour eux.
+ */
+function isSegregatedFrom(request: WorkflowRequest, userId: string): boolean {
+  if (request.domain !== 'credit' || (request.entityType !== 'application' && request.entityType !== 'creditRule')) return false;
+  return request.requestedByUserId === userId || request.steps.some((item) => item.order < request.currentStepOrder && item.actedBy === userId);
 }
 
 function deriveHistory(tenantId: string): ApprovalAction[] {
@@ -199,12 +224,15 @@ export const workflowService = {
   createRequest: (
     tenantId: string,
     definitionId: string,
-    input: { entityId: string; entityLabel: string; requestedBy: string; requestedByUserId?: string; amount?: number; justification?: string; warnings?: string[]; changeSet?: ChangeSetItem[]; entitySnapshotVersion?: number },
+    input: { entityId: string; entityLabel: string; requestedBy: string; requestedByUserId?: string; amount?: number; justification?: string; warnings?: string[]; changeSet?: ChangeSetItem[]; entitySnapshotVersion?: number;
+      /** Étapes propres à CETTE demande (ex. niveau d'approbation de la règle de crédit) — à défaut, celles de la définition. */
+      steps?: { name: string; approverPermission: string }[] },
   ) =>
     mockRequest(() => {
       const definition = workflowDefinitions.find((item) => item.id === definitionId && item.active);
       if (!definition) return undefined;
-      const steps: WorkflowStep[] = definition.steps.map((step) => ({ order: step.order, name: step.name, approverPermission: step.approverPermission, status: 'pending' }));
+      const stepSource = input.steps && input.steps.length > 0 ? reindexSteps(input.steps) : definition.steps;
+      const steps: WorkflowStep[] = stepSource.map((step) => ({ order: step.order, name: step.name, approverPermission: step.approverPermission, status: 'pending' }));
       const request: WorkflowRequest = {
         // `Date.now()` seul colliderait entre deux créations survenant dans la même milliseconde
         // (observé en test : deux demandes créées rapidement dans le même fichier de test généraient
@@ -272,15 +300,47 @@ export const workflowService = {
   getRequest: (tenantId: string, requestId: string) => mockRequest(() => getTenantScoped(workflowRequests, (request) => request.id === requestId, tenantId)),
 
   /** Étapes en cours dont la permission requise est détenue par l'utilisateur courant (RBAC réel, pas un filtre par rôle nommé). */
-  listMyApprovals: (tenantId: string, userPermissions: Permission[]) =>
+  listMyApprovals: (tenantId: string, userPermissions: Permission[], userId?: string) =>
     mockRequest(() =>
       workflowRequests.filter((request) => {
         if (request.tenantId !== tenantId) return false;
         if (request.status !== 'pending' && request.status !== 'inProgress') return false;
+        if (userId && isSegregatedFrom(request, userId)) return false;
         const step = currentStepOf(request);
         return Boolean(step && step.status === 'pending' && userPermissions.includes(step.approverPermission));
       }),
     ),
+
+  /**
+   * Qui peut traiter l'étape en cours : utilisateurs ACTIFS du tenant détenant la permission de
+   * l'étape (rôles réels), moins ceux écartés par la séparation des tâches — exactement le même
+   * critère que `listMyApprovals`, vu du côté de la demande. Liste vide = demande bloquée
+   * (personne d'autre n'est habilité) ; affichée dans le détail de la demande.
+   */
+  listEligibleApprovers: (tenantId: string, requestId: string) =>
+    mockRequest(() => {
+      const request = getTenantScoped(workflowRequests, (item) => item.id === requestId, tenantId);
+      const step = request && currentStepOf(request);
+      if (!request || !step || step.status !== 'pending' || (request.status !== 'pending' && request.status !== 'inProgress')) return [];
+      return users
+        .filter((user) => user.tenantId === tenantId && user.isActive && !isSegregatedFrom(request, user.id) && permissionsOfUser(tenantId, user.id).includes(step.approverPermission))
+        .map((user) => ({ id: user.id, name: user.name }));
+    }),
+
+  /**
+   * PRISE EN CHARGE (mandat « Workflow d'approbation des prêts », 2026-09-27) : quand un
+   * approbateur habilité ouvre une demande EN ATTENTE, elle passe EN COURS — statut issu d'une
+   * action, jamais choisi à la main. Sans effet si la demande n'est plus en attente ou si
+   * l'utilisateur ne détient pas la permission de l'étape courante.
+   */
+  openRequest: (tenantId: string, requestId: string, userPermissions: Permission[]) =>
+    mockRequest(() => {
+      const request = getTenantScoped(workflowRequests, (item) => item.id === requestId, tenantId);
+      if (!request || request.status !== 'pending') return request;
+      const step = currentStepOf(request);
+      if (step && step.status === 'pending' && userPermissions.includes(step.approverPermission)) request.status = 'inProgress';
+      return request;
+    }),
 
   listDelegations: (tenantId: string) => mockRequest(() => delegations.filter((delegation) => delegation.tenantId === tenantId)),
 
@@ -302,6 +362,10 @@ export const workflowService = {
       if (!request) return undefined;
       const step = currentStepOf(request);
       if (!step || step.status !== 'pending') return request;
+      // Demande déjà close (annulée, approuvée, rejetée, renvoyée) : aucune action, même si l'étape est restée ouverte.
+      if (request.status !== 'pending' && request.status !== 'inProgress') return request;
+      // Demande de prêt : jamais renvoyée (le prêt resterait sans issue) — seules Approuver / Refuser.
+      if (action === 'return' && request.domain === 'credit' && request.entityType === 'application') return undefined;
 
       step.actedBy = actorId;
       step.actedByName = actorName;
@@ -326,6 +390,22 @@ export const workflowService = {
       }
       return request;
     }),
+
+  /**
+   * Décision d'un APPROBATEUR identifié (écrans « Mes approbations » et fiche d'une demande, domaines
+   * sans service de décision dédié) : même moteur que `submitAction`, précédé du contrôle de la
+   * permission EFFECTIVE de l'acteur sur l'étape en cours (résolue côté service, jamais transmise par
+   * l'écran). `undefined` = refusé, rien n'est modifié. Les services dédiés (exercice, membre, prêt)
+   * appliquent leurs propres contrôles puis appellent `submitAction`.
+   */
+  decide: async (tenantId: string, requestId: string, action: 'approve' | 'reject' | 'return', actorId: string, actorName: string, comment?: string) => {
+    const request = getTenantScoped(workflowRequests, (item) => item.id === requestId, tenantId);
+    const step = request ? currentStepOf(request) : undefined;
+    if (!request || !step || !permissionsOfUser(tenantId, actorId).includes(step.approverPermission)) return undefined;
+    // Règle de crédit : jamais par le moteur générique — `loanRuleService.decideLoanRuleUpdate` seul (séparation des approbateurs, activation).
+    if (request.domain === 'credit' && request.entityType === 'creditRule') return undefined;
+    return workflowService.submitAction(tenantId, requestId, action, actorName, comment, actorId);
+  },
 
   /** UC100W-10 « Annuler une demande ». Gardée par la même permission d'étape que approve/reject/return (cf. docs/PHASE_09_DECISIONS_A_VALIDER.md — WorkflowRequest n'a pas de lien vers Users.id pour distinguer le demandeur lui-même). */
   cancelRequest: (tenantId: string, requestId: string, actorName: string, comment?: string) =>

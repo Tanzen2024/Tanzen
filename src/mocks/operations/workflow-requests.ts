@@ -20,7 +20,7 @@ export type WorkflowRequest = {
   tenantId: string;
   workflowDefinitionId: string;
   domain: WorkflowDomain;
-  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation' | 'member';
+  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation' | 'member' | 'creditRule';
   entityId: string;
   entityLabel: string;
   amount?: number;
@@ -82,6 +82,8 @@ export type WorkflowRequest = {
    */
   warnings?: string[];
   requestedAt: string;
+  /** Date/heure d'APPLICATION effective de la modification approuvée (ex. activation d'une règle de crédit) — absente tant que rien n'est appliqué. */
+  appliedAt?: string;
   status: WorkflowStatus;
   currentStepOrder: number;
   steps: WorkflowStep[];

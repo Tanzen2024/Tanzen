@@ -10,6 +10,8 @@ import { useLocale } from '@/contexts/locale-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useTenant } from '@/contexts/tenant-context';
 import { usePermissions } from '@/contexts/permission-context';
+import { demoIdentityCandidates } from '@/mocks/demo-identity';
+import { systemRoles } from '@/mocks/rbac.mocks';
 import { notificationService } from '@/services/notification.service';
 import { queryKeys } from '@/services/query-keys';
 import { authService } from '@/services/auth.service';
@@ -26,7 +28,9 @@ function NotificationCenter({ items, onClose }: { items: import('@/mocks/operati
 }
 
 function UserMenu({ name, initials, onClose }: { name: string; initials: string; onClose: () => void }) {
-  const navigate = useNavigate(); const { t } = useLocale(); const [loggingOut, setLoggingOut] = useState(false);
+  const navigate = useNavigate(); const { t } = useLocale(); const [loggingOut, setLoggingOut] = useState(false); const { user, actAs } = usePermissions();
+  // Rôles RÉELS de l'utilisateur courant (plus de libellé « Administrateur » figé : l'identité peut changer, cf. `actAs`).
+  const roleLabel = user.roleIds.map((roleId) => systemRoles.find((role) => role.id === roleId)?.name).filter(Boolean).join(', ') || t('shell', 'administrator');
   const handleLogout = async () => {
     if (loggingOut) return;
     setLoggingOut(true);
@@ -38,7 +42,7 @@ function UserMenu({ name, initials, onClose }: { name: string; initials: string;
       setLoggingOut(false);
     }
   };
-  return <div className="absolute right-0 top-12 z-50 w-64 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl"><div className="flex items-center gap-3 border-b border-border px-2 pb-3 pt-1"><span className="grid size-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials}</span><div><p className="text-sm font-semibold">{name}</p><p className="text-xs text-muted-foreground">{t('shell', 'administrator')}</p></div></div><div className="py-1"><button type="button" onClick={() => { navigate('/settings/organization'); onClose(); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"><User size={16} /> {t('shell', 'profile')}</button><button type="button" onClick={() => { navigate('/settings/organization'); onClose(); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"><Settings size={16} /> {t('shell', 'preferences')}</button></div><div className="border-t border-border pt-1"><button type="button" onClick={handleLogout} disabled={loggingOut} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed dark:hover:bg-rose-950"><LogOut size={16} /> {t('shell', 'signOut')}</button></div></div>;
+  return <div className="absolute right-0 top-12 z-50 w-64 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl"><div className="flex items-center gap-3 border-b border-border px-2 pb-3 pt-1"><span className="grid size-9 place-items-center rounded-full bg-primary/10 text-xs font-bold text-primary">{initials}</span><div><p className="text-sm font-semibold">{name}</p><p className="text-xs text-muted-foreground">{roleLabel}</p></div></div><div className="py-1"><button type="button" onClick={() => { navigate('/settings/organization'); onClose(); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"><User size={16} /> {t('shell', 'profile')}</button><button type="button" onClick={() => { navigate('/settings/organization'); onClose(); }} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"><Settings size={16} /> {t('shell', 'preferences')}</button></div><div className="border-t border-border py-1" role="group" aria-labelledby="act-as-title"><p id="act-as-title" className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t('shell', 'actAs')}</p><p className="px-2 pb-1 text-[11px] text-muted-foreground">{t('shell', 'actAsHint')}</p>{demoIdentityCandidates().map((candidate) => <button type="button" key={candidate.id} data-testid={`act-as-${candidate.id}`} aria-pressed={candidate.id === user.id} onClick={() => { actAs(candidate.id); onClose(); }} className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted"><span className="truncate">{candidate.name}</span>{candidate.id === user.id && <Check size={14} className="shrink-0 text-primary" />}</button>)}</div><div className="border-t border-border pt-1"><button type="button" onClick={handleLogout} disabled={loggingOut} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-60 disabled:cursor-not-allowed dark:hover:bg-rose-950"><LogOut size={16} /> {t('shell', 'signOut')}</button></div></div>;
 }
 
 export function ShellHeader() {

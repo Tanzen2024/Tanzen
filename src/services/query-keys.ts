@@ -45,16 +45,30 @@ export const queryKeys = {
     sessions: {
       list: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'sessions', 'list', tenantId, fiscalYearId] as const,
       next: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'sessions', 'next', tenantId, fiscalYearId] as const,
+      /** Préfixe de TOUTES les suggestions de prochaine séance du tenant — à invalider quand la fréquence d'un exercice change (`next(tenantId, undefined)` ne correspond à aucun exercice). */
+      nextAll: (tenantId: string) => ['finance', 'sessions', 'next', tenantId] as const,
+      /** Une séance, résolue DANS le tenant courant (`fiscalSessionService.getSession`). */
+      detail: (tenantId: string, sessionId: string) => ['finance', 'sessions', 'detail', tenantId, sessionId] as const,
       /** Toutes les séances du tenant, tous exercices confondus — journal consolidé. */
       all: (tenantId: string) => ['finance', 'sessions', 'all', tenantId] as const,
     },
     cashboxes: (tenantId: string) => ['finance', 'cashboxes', tenantId] as const,
+    /** Caisses vues dans le contexte d'UN exercice (solde/mouvements de l'exercice) — préfixée par `cashboxes(tenantId)`, donc couverte par ses invalidations. */
+    cashboxesByFiscalYear: (tenantId: string, fiscalYearId: string | undefined) => ['finance', 'cashboxes', tenantId, 'fiscal-year', fiscalYearId] as const,
+    /** Récapitulatif par caisse d'une séance (`'all'` = toutes les séances de l'exercice) — préfixée par `cashboxes(tenantId)`, donc invalidée avec elle après toute écriture. */
+    cashboxesBySession: (tenantId: string, fiscalYearId: string | undefined, sessionId: string) => ['finance', 'cashboxes', tenantId, 'fiscal-year', fiscalYearId, 'session', sessionId] as const,
     cashbox: (id: string) => ['finance', 'cashboxes', 'detail', id] as const,
+    /** Détail d'une caisse dans le contexte d'un exercice — préfixée par `cashbox(id)`. */
+    cashboxByFiscalYear: (id: string, tenantId: string, fiscalYearId: string | undefined) => ['finance', 'cashboxes', 'detail', id, tenantId, 'fiscal-year', fiscalYearId] as const,
     cashboxMemberships: (tenantId: string) => ['finance', 'cashbox-memberships', tenantId] as const,
     /** Moteur de position — `scopeKey` provient de `@/lib/finance`. */
     position: {
       balance: (tenantId: string, scopeKey: string, asOfDate: string) => ['finance', 'position', 'balance', tenantId, scopeKey, asOfDate] as const,
       flows: (tenantId: string, scopeKey: string, from: string, to: string) => ['finance', 'position', 'flows', tenantId, scopeKey, from, to] as const,
+      /** Bilan financier des adhérents sur une période — `selectionKey` = ids triés ou `ALL`. */
+      memberPeriodStatements: (tenantId: string, selectionKey: string, from: string, to: string, cashboxId: string, withOperations: boolean, variant = '') => ['finance', 'position', 'member-period-statements', tenantId, selectionKey, from, to, cashboxId, withOperations, variant] as const,
+      /** Bilan financier des adhérents — `selectionKey` = ids triés ou `ALL`. */
+      memberBalanceSheets: (tenantId: string, selectionKey: string, asOfDate: string, cashboxId: string, historyFrom: string, withOperations: boolean) => ['finance', 'position', 'member-balance-sheets', tenantId, selectionKey, asOfDate, cashboxId, historyFrom, withOperations] as const,
       /** Étape 6 — clôtures/reports d'un exercice, pour invalidation après `closeFiscalYear`/`carryForward`. */
       closingEntries: (tenantId: string, fiscalYearId: string) => ['finance', 'position', 'closing-entries', tenantId, fiscalYearId] as const,
       openingEntries: (tenantId: string, fiscalYearId: string) => ['finance', 'position', 'opening-entries', tenantId, fiscalYearId] as const,
@@ -117,7 +131,8 @@ export const queryKeys = {
     workflowDefinitions: (tenantId: string) => ['operations', 'workflow-definitions', tenantId] as const,
     workflowRequests: (tenantId: string) => ['operations', 'workflow-requests', tenantId] as const,
     workflowRequest: (id: string) => ['operations', 'workflow-requests', 'detail', id] as const,
-    myApprovals: (tenantId: string) => ['operations', 'my-approvals', tenantId] as const,
+    /** Dépend de l'utilisateur (permissions + séparation des tâches) : `userId` dans la clé, sinon la liste d'un autre utilisateur reste servie par le cache. */
+    myApprovals: (tenantId: string, userId: string) => ['operations', 'my-approvals', tenantId, userId] as const,
     delegations: (tenantId: string) => ['operations', 'delegations', tenantId] as const,
     history: (tenantId: string) => ['operations', 'history', tenantId] as const,
     notifications: (tenantId: string, userId: string) => ['operations', 'notifications', tenantId, userId] as const,
@@ -140,7 +155,6 @@ export const queryKeys = {
   },
   settings: {
     organization: (tenantId: string) => ['settings', 'organization', tenantId] as const,
-    localization: (tenantId: string) => ['settings', 'localization', tenantId] as const,
     fiscalYears: (tenantId: string) => ['settings', 'fiscal-years', tenantId] as const,
     currentFiscalYear: (tenantId: string) => ['settings', 'fiscal-years', 'current', tenantId] as const,
     reopenRequests: (tenantId: string) => ['settings', 'fiscal-years', 'reopen-requests', tenantId] as const,

@@ -266,7 +266,7 @@ describe('Espace de travail du Tour — Action « Régler » (Dû / Reçu / Rest
 
     const dialog = within(await screen.findByRole('dialog'));
     expect(dialog.getByText('Bénéficiaire : Fatou Ndiaye')).toBeInTheDocument();
-    expect((dialog.getByLabelText('Montant à régler') as HTMLInputElement).value).toBe('25000'); // proposé par défaut = le reste dû
+    expect((dialog.getByLabelText('Montant à régler') as HTMLInputElement).value).toBe('25 000'); // proposé par défaut = le reste dû
     await user.click(dialog.getByRole('button', { name: 'Confirmer' }));
 
     const updatedRow = within(beneficiariesCard).getByText('Fatou Ndiaye').closest('tr')!;

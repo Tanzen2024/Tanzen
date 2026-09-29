@@ -7,12 +7,12 @@ import {
   FileClock,
   FileText,
   Fingerprint,
-  Globe2,
   KeyRound,
   Landmark,
   LayoutDashboard,
   ListChecks,
   LockKeyhole,
+  Scale,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -30,6 +30,12 @@ export type NavigationNode = {
   icon: LucideIcon;
   badge?: string;
   children?: NavigationNode[];
+  /**
+   * Préfixes d'URL supplémentaires qui rendent ce nœud actif, pour les pages
+   * qui lui appartiennent métier sans vivre sous son URL (ex. le détail d'une
+   * transaction, `/finance/transactions/:id`, appartient à Caisses).
+   */
+  matchPaths?: string[];
 };
 
 export const navigationTree: NavigationNode[] = [
@@ -51,28 +57,35 @@ export const navigationTree: NavigationNode[] = [
     ],
   },
   /**
-   * Mandat « Le Compte comme point d'entrée des Transactions » (2026-09-23) :
-   * le groupe Finances ne contient plus que Comptes et Tontines dans le menu.
-   * Transactions n'est plus un nœud de premier niveau, mais la fonctionnalité
-   * (journal financier, point d'entrée unique de toute opération via le
-   * bouton « + Ajouter une transaction ») reste entièrement disponible :
-   * `/finance/transactions` (vue globale, filtrable par compte/type/date) et
-   * `/finance/transactions/create` existent toujours, atteignables depuis la
-   * page Comptes et depuis le détail d'un compte (`AccountDetail`), jamais
-   * depuis le menu. Contributions / Demandes de prêts / Prêts / Remboursements /
-   * Garants / Distributions restent des TYPES D'OPÉRATION, pas des modules
-   * autonomes. `/finance/credit/loan-rules` reste atteignable depuis la page
-   * Comptes.
-   *
-   * Mandat « Restructuration finale de la navigation » (2026-09-16) : Tontines
-   * rejoint ce groupe comme domaine financier — déplacement de nœud
-   * uniquement, l'URL `/tontines` et toute la logique métier Tontines restent
-   * inchangées.
+   * Mandat « Correction définitive — structure du menu Finances » (2026-09-25) :
+   * Finance contient EXACTEMENT Caisses et Tontines (ni Position financière,
+   * ni Crédit, ni Règles de crédit — ces dernières vivent en Paramètres).
+   * - Transactions n'est PLUS une entrée de menu : une transaction est un
+   *   mouvement d'une caisse, consulté depuis `/finance/cashboxes/:id`. Les
+   *   routes `/finance/transactions/*` restent (détail, création, édition,
+   *   journal global) pour compatibilité, jamais exposées dans le sidebar ;
+   *   elles activent « Caisses » via `matchPaths`.
+   * - Tontines est un sous-menu de Finance mais garde son URL `/tontines`
+   *   (hors du préfixe `/finance` — `isNavigationNodeActive` et
+   *   `findNavigationTrail` descendent donc dans les enfants même quand l'URL
+   *   du parent ne correspond pas).
+   * - « Exercices fiscaux » n'est administré qu'en Paramètres → Exercices
+   *   fiscaux ; le changement d'exercice passe par le sélecteur global du
+   *   header (`FiscalYearSelector`), qui redirige vers `/finance/treasury`.
+   * Contributions / Demandes / Prêts / Remboursements / Garants /
+   * Distributions restent des TYPES D'OPÉRATION, jamais des entrées de menu.
    */
   {
     label: 'Finance', path: '/finance', icon: Landmark, children: [
-      { label: 'Accounts', path: '/finance/accounts', icon: WalletCards },
-      { label: 'Fiscal Years', path: '/finance/fiscal-years', icon: CalendarDays },
+      /**
+       * Mandat « Trésorerie » (2026-09-27) : UNE entrée « Trésorerie » dont la page porte deux
+       * onglets frères, Caisses et Transactions (`/finance/treasury/cashboxes|transactions`).
+       * Les fiches (`/finance/cashboxes/:id`, `/finance/transactions/:id`…) et les anciennes
+       * URLs (redirigées) restent rattachées à Trésorerie via `matchPaths`.
+       */
+      { label: 'Treasury', path: '/finance/treasury', icon: WalletCards, matchPaths: ['/finance/cashboxes', '/finance/transactions'] },
+      /** Bilan financier des adhérents (mandat du 2026-09-27) : un, plusieurs ou tous les adhérents, à une date donnée. */
+      { label: 'Member Balances', path: '/finance/member-balances', icon: Scale },
       { label: 'Tontines', path: '/tontines', icon: Sparkles },
     ],
   },
@@ -103,9 +116,10 @@ export const navigationTree: NavigationNode[] = [
   {
     label: 'Settings', path: '/settings', icon: Settings2, children: [
       { label: 'Organization', path: '/settings/organization', icon: Building2 },
-      { label: 'Localization', path: '/settings/localization', icon: Globe2 },
       { label: 'Fiscal Years', path: '/settings/fiscal-years', icon: CalendarDays },
-      { label: 'Branding', path: '/settings/branding', icon: Sparkles },
+      // Mandat « Simplification du module Caisses » (2026-09-25) : seule entrée des Règles de crédit.
+      { label: 'Loan Rules', path: '/settings/loan-rules', icon: Scale },
+      // « Identité visuelle » fusionnée dans Organisation (2026-09-27) : plus d'entrée dédiée.
       { label: 'Notifications', path: '/settings/notifications', icon: Bell },
       { label: 'Security Policies', path: '/settings/security-policies', icon: ShieldCheck },
       { label: 'Modules', path: '/settings/modules', icon: ListChecks },
@@ -121,16 +135,28 @@ export function flattenNavigation(nodes: NavigationNode[]): NavigationNode[] {
   return nodes.flatMap((node) => [node, ...(node.children ? flattenNavigation(node.children) : [])]);
 }
 
+function matchesPath(path: string, pathname: string): boolean {
+  return pathname === path || (path !== '/dashboard' && pathname.startsWith(`${path}/`));
+}
+
+/** Le nœud lui-même (URL propre ou `matchPaths`) correspond à `pathname`, sans regarder ses enfants. */
+export function isNavigationNodeSelfActive(node: NavigationNode, pathname: string): boolean {
+  return matchesPath(node.path, pathname) || (node.matchPaths ?? []).some((path) => matchesPath(path, pathname));
+}
+
+/** Le nœud ou l'un de ses descendants correspond — un enfant peut vivre hors du préfixe du parent (Finance → Tontines). */
+export function isNavigationNodeActive(node: NavigationNode, pathname: string): boolean {
+  return isNavigationNodeSelfActive(node, pathname) || (node.children ?? []).some((child) => isNavigationNodeActive(child, pathname));
+}
+
 export function findNavigationTrail(pathname: string): NavigationNode[] {
   const walk = (nodes: NavigationNode[], trail: NavigationNode[]): NavigationNode[] => {
     for (const node of nodes) {
-      if (pathname === node.path || (node.path !== '/dashboard' && pathname.startsWith(`${node.path}/`))) {
-        if (node.children) {
-          const childTrail = walk(node.children, [...trail, node]);
-          if (childTrail.length) return childTrail;
-        }
-        return [...trail, node];
+      if (node.children) {
+        const childTrail = walk(node.children, [...trail, node]);
+        if (childTrail.length) return childTrail;
       }
+      if (isNavigationNodeSelfActive(node, pathname)) return [...trail, node];
     }
     return [];
   };

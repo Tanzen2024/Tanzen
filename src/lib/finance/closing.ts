@@ -19,11 +19,11 @@ import type { CloseFiscalYearOutcome, FinanceCtx, RecomputeClosingOutcome } from
  */
 function computeClosingAmount(
   ctx: FinanceCtx,
-  account: CashboxRecord,
+  cashbox: CashboxRecord,
   fiscalYear: FiscalYear,
 ): { amount: number; openingEntryId?: string } {
-  const result = balanceAsOf({ kind: 'CASHBOX', cashboxId: account.id }, ctx, fiscalYear.endDate);
-  const base = resolveBaseline(account, ctx, fiscalYear.endDate);
+  const result = balanceAsOf({ kind: 'CASHBOX', cashboxId: cashbox.id }, ctx, fiscalYear.endDate);
+  const base = resolveBaseline(cashbox, ctx, fiscalYear.endDate);
   return { amount: result.byCashbox[0]?.balance ?? 0, openingEntryId: base.openingEntryId };
 }
 
@@ -35,8 +35,9 @@ function computeClosingAmount(
  * module — même séparation que `balanceAsOf`/`flows`.
  *
  * Refuse (ne calcule rien) si :
- *   - l'exercice n'est pas `open` (`FISCAL_YEAR_NOT_OPEN`) — un exercice déjà
- *     `closed` ou encore `upcoming` ne peut pas être (re)clôturé par ce chemin ;
+ *   - l'exercice est déjà clôturé (`FISCAL_YEAR_NOT_OPEN`) — un exercice déjà
+ *     clôturé ne peut pas être reclôturé par ce chemin (« pas encore commencé » est
+ *     refusé en amont par `settingsService.closeFiscalYear`) ;
  *     un recalcul explicite passe par `recomputeClosingEntry`, jamais ici.
  *   - au moins une caisse du tenant a déjà un `ClosingEntry FINAL` pour cet
  *     exercice (`ALREADY_CLOSED`, avec la liste des caisses concernées) —
@@ -46,22 +47,22 @@ function computeClosingAmount(
  * filtre par `status` (une caisse inactive garde un solde réel à clôturer).
  */
 export function computeFiscalYearClosing(ctx: FinanceCtx, fiscalYear: FiscalYear): CloseFiscalYearOutcome {
-  if (fiscalYear.status !== 'open') {
+  if (fiscalYear.isClosed) {
     return { ok: false, reason: 'FISCAL_YEAR_NOT_OPEN' };
   }
 
-  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((cashbox) => cashbox.tenantId === fiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
-  const alreadyClosedAccountIds = tenantCashboxes
-    .filter((account) => finalClosingEntry(closingEntries, account.id, fiscalYear.id))
-    .map((account) => account.id);
-  if (alreadyClosedAccountIds.length > 0) {
-    return { ok: false, reason: 'ALREADY_CLOSED', cashboxIds: alreadyClosedAccountIds };
+  const alreadyClosedCashboxIds = tenantCashboxes
+    .filter((cashbox) => finalClosingEntry(closingEntries, cashbox.id, fiscalYear.id))
+    .map((cashbox) => cashbox.id);
+  if (alreadyClosedCashboxIds.length > 0) {
+    return { ok: false, reason: 'ALREADY_CLOSED', cashboxIds: alreadyClosedCashboxIds };
   }
 
-  const computations = tenantCashboxes.map((account) => {
-    const { amount, openingEntryId } = computeClosingAmount(ctx, account, fiscalYear);
-    return { cashboxId: account.id, amount, openingEntryId };
+  const computations = tenantCashboxes.map((cashbox) => {
+    const { amount, openingEntryId } = computeClosingAmount(ctx, cashbox, fiscalYear);
+    return { cashboxId: cashbox.id, amount, openingEntryId };
   });
   return { ok: true, computations };
 }
@@ -79,10 +80,10 @@ export function recomputeClosingEntry(
   fiscalYear: FiscalYear,
   cashboxId: string,
 ): RecomputeClosingOutcome {
-  const account = ctx.cashboxes.find((item) => item.id === cashboxId);
-  if (!account) return { ok: false, reason: 'CASHBOX_NOT_FOUND' };
-  if (account.tenantId !== fiscalYear.tenantId) return { ok: false, reason: 'FISCAL_YEAR_TENANT_MISMATCH' };
+  const cashbox = ctx.cashboxes.find((item) => item.id === cashboxId);
+  if (!cashbox) return { ok: false, reason: 'CASHBOX_NOT_FOUND' };
+  if (cashbox.tenantId !== fiscalYear.tenantId) return { ok: false, reason: 'FISCAL_YEAR_TENANT_MISMATCH' };
 
-  const { amount, openingEntryId } = computeClosingAmount(ctx, account, fiscalYear);
+  const { amount, openingEntryId } = computeClosingAmount(ctx, cashbox, fiscalYear);
   return { ok: true, amount, openingEntryId };
 }

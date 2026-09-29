@@ -97,18 +97,18 @@ describe('organizationService — createMember (P1 MEMBERS: alignement du modèl
   });
 
   it('DENY: phone uniqueness is scoped to the tenant (UNIQUE(tenant_id, phone)) — same phone allowed across different tenants', async () => {
-    const t001 = await organizationService.createMember({ firstName: 'Phone1', lastName: 'T001', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    const t001 = await organizationService.createMember({ firstName: 'Phone1', lastName: 'T001', matricule: '', gender: 'male', email: '', phone: '+237 600 00 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
     expect(t001).not.toBeNull();
-    const sameTenantCollision = await organizationService.createMember({ firstName: 'Phone2', lastName: 'T001bis', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+    const sameTenantCollision = await organizationService.createMember({ firstName: 'Phone2', lastName: 'T001bis', matricule: '', gender: 'male', email: '', phone: '+237 600 00 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
     expect(sameTenantCollision).toBeNull();
-    const otherTenantAllowed = await organizationService.createMember({ firstName: 'Phone3', lastName: 'T002', matricule: '', gender: 'male', email: '', phone: '+221 70 000 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
+    const otherTenantAllowed = await organizationService.createMember({ firstName: 'Phone3', lastName: 'T002', matricule: '', gender: 'male', email: '', phone: '+237 600 00 00 01', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-002', tenantName: 'Tontine Horizon' });
     expect(otherTenantAllowed).not.toBeNull();
   });
 
   it('DENY: email uniqueness is scoped to the tenant (UNIQUE(tenant_id, email))', async () => {
-    const first = await organizationService.createMember({ firstName: 'Mail1', lastName: 'Un', matricule: '', gender: 'female', email: 'doublon@example.sn', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    const first = await organizationService.createMember({ firstName: 'Mail1', lastName: 'Un', matricule: '', gender: 'female', email: 'doublon@example.cm', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
     expect(first).not.toBeNull();
-    const collision = await organizationService.createMember({ firstName: 'Mail2', lastName: 'Deux', matricule: '', gender: 'female', email: 'doublon@example.sn', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
+    const collision = await organizationService.createMember({ firstName: 'Mail2', lastName: 'Deux', matricule: '', gender: 'female', email: 'doublon@example.cm', phone: '', occupation: '', nationality: '', address: '', status: 'active', tenantId: 'T-003', tenantName: 'Mutuelle Teranga' });
     expect(collision).toBeNull();
   });
 
@@ -216,7 +216,7 @@ describe('USER vs MEMBER — no automatic relation, no cross-creation (mandat P1
 
   it('creating a SystemUser never creates a Member', async () => {
     const membersBefore = (await organizationService.listMembers('T-001')).length;
-    await userService.create({ name: 'Sans Membre', email: 'sans.membre@sutura.sn', tenantId: 'T-001', tenantName: 'Coopérative Sutura', roleIds: ['role-viewer'] });
+    await userService.create({ name: 'Sans Membre', email: 'sans.membre@sutura.cm', tenantId: 'T-001', tenantName: 'Coopérative Sutura', roleIds: ['role-viewer'] });
     const membersAfter = (await organizationService.listMembers('T-001')).length;
     expect(membersAfter).toBe(membersBefore);
   });
@@ -371,7 +371,7 @@ describe('organizationService — requestMemberUpdate/decideMemberUpdate/applyMe
     afterAll(() => { wd007.active = false; });
 
     it('ALLOW: une modification réelle crée une ApprovalRequest avec ChangeSet + snapshot de version, sans muter le membre', async () => {
-      const member = await organizationService.createMember({ firstName: 'Fatou', lastName: 'Test', matricule: '', gender: 'female', email: '', phone: '', occupation: 'Avant', nationality: 'Sénégalaise', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
+      const member = await organizationService.createMember({ firstName: 'Fatou', lastName: 'Test', matricule: '', gender: 'female', email: '', phone: '', occupation: 'Avant', nationality: 'Camerounaise', address: '', status: 'active', tenantId: 'T-001', tenantName: 'Coopérative Sutura' });
       const result = await organizationService.requestMemberUpdate('T-001', member!.id, { occupation: 'Après', lastName: 'Test' }, currentUser.id, currentUser.name, 'Mise à jour profession');
       expect(result && 'applied' in result && result.applied === false).toBe(true);
       const request = result && 'request' in result ? result.request : null;

@@ -4,7 +4,7 @@ import { screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FiscalYearCreateDialog } from './fiscal-year-create-dialog';
-import { fiscalYears, fiscalYearLabel, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { fiscalYears, fiscalYearLabel, fiscalYearStatus, type FiscalYear } from '@/mocks/settings/fiscal-years';
 
 /**
  * Le composant est contrôlé (`open`/`onOpenChange` viennent du parent) — un
@@ -18,13 +18,13 @@ function Harness({ tenantId, years }: { tenantId: string; years: FiscalYear[] })
 }
 
 function makeYear(overrides: Partial<FiscalYear> & { tenantId: string }): FiscalYear {
-  return { id: `FY-${Math.random()}`, startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, ...overrides };
+  return { id: `FY-${Math.random()}`, startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null, ...overrides };
 }
 
-describe('FiscalYearCreateDialog — assistant de création (partagé Paramètres + Finance → Exercices fiscaux + sélecteur)', () => {
+describe('FiscalYearCreateDialog — assistant de création (Paramètres → Exercices fiscaux)', () => {
   it('préremplit les dates avec le prochain exercice suggéré, à partir du dernier exercice réel du tenant — le libellé est calculé, jamais saisi', () => {
     const tenantId = 'T-TEST-FY-PREFILL';
-    const years = [makeYear({ tenantId, startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false })];
+    const years = [makeYear({ tenantId, startDate: '2027-01-01', endDate: '2027-12-31' })];
     renderWithProviders(<Harness tenantId={tenantId} years={years} />);
 
     expect(screen.queryByLabelText('Exercice')).not.toBeInTheDocument();
@@ -62,7 +62,7 @@ describe('FiscalYearCreateDialog — assistant de création (partagé Paramètre
 
   it('création réussie : passe les 2 étapes, ferme la modale et n’active jamais automatiquement le nouvel exercice', async () => {
     const tenantId = 'T-TEST-FY-CREATE-OK';
-    const years = [makeYear({ tenantId, startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true })];
+    const years = [makeYear({ tenantId, startDate: '2026-01-01', endDate: '2026-12-31' })];
     const user = userEvent.setup();
     renderWithProviders(<Harness tenantId={tenantId} years={years} />);
 
@@ -76,8 +76,7 @@ describe('FiscalYearCreateDialog — assistant de création (partagé Paramètre
     const created = fiscalYears.find((year) => year.tenantId === tenantId && year.startDate === '2027-01-01' && year.endDate === '2027-12-31');
     expect(created).toBeTruthy();
     expect(fiscalYearLabel(created!)).toBe('Exercice 2027');
-    expect(created?.status).toBe('upcoming');
-    expect(created?.isCurrent).toBe(false);
+    expect(created && fiscalYearStatus(created, '2026-09-25')).toBe('upcoming');
   });
 
   it('désactive le bouton de confirmation pendant la création (empêche la double soumission)', async () => {
@@ -102,9 +101,9 @@ describe('FiscalYearCreateDialog — assistant de création (partagé Paramètre
   it('affiche proprement l’erreur retournée par la validation métier (chevauchement/doublon) sans fermer la modale', async () => {
     const tenantId = 'T-TEST-FY-DUPLICATE';
     // Suggestion calculée à partir de ce dernier exercice → 01/01/2028-31/12/2028.
-    const previous = makeYear({ tenantId, startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false });
+    const previous = makeYear({ tenantId, startDate: '2027-01-01', endDate: '2027-12-31' });
     // Doublon déjà présent côté "backend" (source de vérité) pour ce tenant, avec exactement les mêmes dates que la suggestion.
-    const duplicate = makeYear({ tenantId, startDate: '2028-01-01', endDate: '2028-12-31', status: 'upcoming', isCurrent: false });
+    const duplicate = makeYear({ tenantId, startDate: '2028-01-01', endDate: '2028-12-31' });
     fiscalYears.push(previous, duplicate);
     const user = userEvent.setup();
     renderWithProviders(<Harness tenantId={tenantId} years={[previous, duplicate]} />);

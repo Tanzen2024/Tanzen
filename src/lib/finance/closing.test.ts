@@ -3,25 +3,20 @@ import { computeFiscalYearClosing, recomputeClosingEntry } from './closing';
 import { makeCashbox, makeClosingEntry, makeCtx, makeFiscalYear, makeOpeningEntry, makeTransaction } from './__fixtures__/factories';
 
 describe('computeFiscalYearClosing', () => {
-  it('refuse si l’exercice n’est pas open (upcoming)', () => {
-    const fy = makeFiscalYear({ status: 'upcoming' });
-    const ctx = makeCtx({ cashboxes: [makeCashbox({ tenantId: 'T-1' })] });
-    const result = computeFiscalYearClosing(ctx, fy);
-    expect(result).toEqual({ ok: false, reason: 'FISCAL_YEAR_NOT_OPEN' });
-  });
-
-  it('refuse si l’exercice n’est pas open (closed)', () => {
-    const fy = makeFiscalYear({ status: 'closed' });
+  // « Pas encore commencé » (À venir) est refusé en amont par settingsService.closeFiscalYear
+  // (NOT_STARTED, testé dans settings.service.test.ts) — la fonction pure reste indépendante de la date du jour.
+  it('refuse si l’exercice est déjà clôturé', () => {
+    const fy = makeFiscalYear({ isClosed: true });
     const ctx = makeCtx({ cashboxes: [makeCashbox({ tenantId: 'T-1' })] });
     const result = computeFiscalYearClosing(ctx, fy);
     expect(result).toEqual({ ok: false, reason: 'FISCAL_YEAR_NOT_OPEN' });
   });
 
   it('refuse (ALREADY_CLOSED) si une caisse a déjà un ClosingEntry FINAL pour cet exercice — idempotence par refus', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1' });
     const ctx = makeCtx({
-      cashboxes: [account],
+      cashboxes: [cashbox],
       closingEntries: [makeClosingEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-1', status: 'FINAL' })],
     });
     const result = computeFiscalYearClosing(ctx, fy);
@@ -29,10 +24,10 @@ describe('computeFiscalYearClosing', () => {
   });
 
   it('un ClosingEntry SUPERSEDED ne bloque pas une nouvelle clôture', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', endDate: '2026-12-31' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 0 });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, endDate: '2026-12-31' });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 0 });
     const ctx = makeCtx({
-      cashboxes: [account],
+      cashboxes: [cashbox],
       closingEntries: [makeClosingEntry({ cashboxId: 'AC-1', fiscalYearId: 'FY-1', status: 'SUPERSEDED' })],
     });
     const result = computeFiscalYearClosing(ctx, fy);
@@ -40,22 +35,22 @@ describe('computeFiscalYearClosing', () => {
   });
 
   it('premier closing d’une caisse — baseline legacy (openingBalance), aucune OpeningEntry consultée', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', startDate: '2026-01-01', endDate: '2026-12-31' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 100_000 });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, startDate: '2026-01-01', endDate: '2026-12-31' });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 100_000 });
     const ctx = makeCtx({
-      cashboxes: [account],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01' })],
+      cashboxes: [cashbox],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01' })],
     });
     const result = computeFiscalYearClosing(ctx, fy);
     expect(result).toEqual({ ok: true, computations: [{ cashboxId: 'AC-1', amount: 150_000, openingEntryId: undefined }] });
   });
 
   it('caisse avec OpeningEntry active — baseline = OpeningEntry, openingEntryId tracé', () => {
-    const fy = makeFiscalYear({ id: 'FY-2027', tenantId: 'T-1', status: 'open', startDate: '2027-01-01', endDate: '2027-12-31' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 999_999 });
+    const fy = makeFiscalYear({ id: 'FY-2027', tenantId: 'T-1', isClosed: false, startDate: '2027-01-01', endDate: '2027-12-31' });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 999_999 });
     const ctx = makeCtx({
-      cashboxes: [account],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 20_000, date: '2027-03-01' })],
+      cashboxes: [cashbox],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 20_000, date: '2027-03-01' })],
       openingEntries: [makeOpeningEntry({ id: 'OE-1', cashboxId: 'AC-1', fiscalYearId: 'FY-2027', date: '2027-01-01', amount: 230_000 })],
     });
     const result = computeFiscalYearClosing(ctx, fy);
@@ -63,22 +58,22 @@ describe('computeFiscalYearClosing', () => {
   });
 
   it('caisse sans transaction — closing = opening, solde plat', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', endDate: '2026-12-31' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 300_000 });
-    const ctx = makeCtx({ cashboxes: [account], transactions: [] });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, endDate: '2026-12-31' });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 300_000 });
+    const ctx = makeCtx({ cashboxes: [cashbox], transactions: [] });
     const result = computeFiscalYearClosing(ctx, fy);
     expect(result).toEqual({ ok: true, computations: [{ cashboxId: 'AC-1', amount: 300_000, openingEntryId: undefined }] });
   });
 
   it('transactions cancelled/pending exclues du calcul de clôture', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', endDate: '2026-12-31' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 0 });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, endDate: '2026-12-31' });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 0 });
     const ctx = makeCtx({
-      cashboxes: [account],
+      cashboxes: [cashbox],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-02', status: 'pending' }),
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 888_000, date: '2026-06-03', status: 'cancelled' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 50_000, date: '2026-06-01', status: 'completed' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-02', status: 'pending' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 888_000, date: '2026-06-03', status: 'cancelled' }),
       ],
     });
     const result = computeFiscalYearClosing(ctx, fy);
@@ -86,7 +81,7 @@ describe('computeFiscalYearClosing', () => {
   });
 
   it('inclut TOUTES les caisses du tenant, actives ou inactives — jamais celles d’un autre tenant', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', endDate: '2026-12-31' });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, endDate: '2026-12-31' });
     const active = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', status: 'active', openingBalance: 10 });
     const inactive = makeCashbox({ id: 'AC-2', tenantId: 'T-1', cashboxNumber: 'CX-2', status: 'inactive', openingBalance: 20 });
     const otherTenant = makeCashbox({ id: 'AC-3', tenantId: 'T-2', cashboxNumber: 'CX-3', openingBalance: 999 });
@@ -108,17 +103,17 @@ describe('recomputeClosingEntry', () => {
 
   it('FISCAL_YEAR_TENANT_MISMATCH si la caisse appartient à un autre tenant que l’exercice', () => {
     const fy = makeFiscalYear({ tenantId: 'T-1' });
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-2' });
-    const ctx = makeCtx({ cashboxes: [account] });
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-2' });
+    const ctx = makeCtx({ cashboxes: [cashbox] });
     expect(recomputeClosingEntry(ctx, fy, 'AC-1')).toEqual({ ok: false, reason: 'FISCAL_YEAR_TENANT_MISMATCH' });
   });
 
   it('recalcule correctement même sans passer par computeFiscalYearClosing (pas de garde sur status)', () => {
-    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', status: 'open', endDate: '2026-12-31' }); // rouvert, par exemple
-    const account = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 100_000 });
+    const fy = makeFiscalYear({ id: 'FY-1', tenantId: 'T-1', isClosed: false, endDate: '2026-12-31' }); // rouvert, par exemple
+    const cashbox = makeCashbox({ id: 'AC-1', tenantId: 'T-1', cashboxNumber: 'CX-1', openingBalance: 100_000 });
     const ctx = makeCtx({
-      cashboxes: [account],
-      transactions: [makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 25_000, date: '2026-07-01' })],
+      cashboxes: [cashbox],
+      transactions: [makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 25_000, date: '2026-07-01' })],
     });
     expect(recomputeClosingEntry(ctx, fy, 'AC-1')).toEqual({ ok: true, amount: 125_000, openingEntryId: undefined });
   });

@@ -24,7 +24,7 @@ function nextCalendarDay(date: string): string {
  *
  * Refuse (ne calcule rien) si :
  *   - les deux exercices n'appartiennent pas au même tenant (`TENANT_MISMATCH`) ;
- *   - `fromFiscalYear.status !== 'closed'` (`FROM_NOT_CLOSED`) ;
+ *   - `!fromFiscalYear.isClosed` (`FROM_NOT_CLOSED`) ;
  *   - les exercices ne sont pas STRICTEMENT contigus, i.e.
  *     `toFiscalYear.startDate !== fromFiscalYear.endDate + 1 jour`
  *     (`NOT_CONTIGUOUS`) — `createFiscalYear` (`settings.service.ts`) n'impose
@@ -46,38 +46,38 @@ export function computeCarryForward(
   if (fromFiscalYear.tenantId !== toFiscalYear.tenantId) {
     return { ok: false, reason: 'TENANT_MISMATCH' };
   }
-  if (fromFiscalYear.status !== 'closed') {
+  if (!fromFiscalYear.isClosed) {
     return { ok: false, reason: 'FROM_NOT_CLOSED' };
   }
   if (toFiscalYear.startDate !== nextCalendarDay(fromFiscalYear.endDate)) {
     return { ok: false, reason: 'NOT_CONTIGUOUS' };
   }
 
-  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fromFiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((cashbox) => cashbox.tenantId === fromFiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
   const openingEntries = ctx.openingEntries ?? [];
 
-  const missingClosingAccountIds = tenantCashboxes
-    .filter((account) => !finalClosingEntry(closingEntries, account.id, fromFiscalYear.id))
-    .map((account) => account.id);
-  if (missingClosingAccountIds.length > 0) {
-    return { ok: false, reason: 'MISSING_CLOSING_ENTRIES', cashboxIds: missingClosingAccountIds };
+  const missingClosingCashboxIds = tenantCashboxes
+    .filter((cashbox) => !finalClosingEntry(closingEntries, cashbox.id, fromFiscalYear.id))
+    .map((cashbox) => cashbox.id);
+  if (missingClosingCashboxIds.length > 0) {
+    return { ok: false, reason: 'MISSING_CLOSING_ENTRIES', cashboxIds: missingClosingCashboxIds };
   }
 
-  const alreadyCarriedAccountIds = tenantCashboxes
-    .filter((account) =>
+  const alreadyCarriedCashboxIds = tenantCashboxes
+    .filter((cashbox) =>
       openingEntries.some(
-        (entry) => entry.cashboxId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
+        (entry) => entry.cashboxId === cashbox.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
       ),
     )
-    .map((account) => account.id);
-  if (alreadyCarriedAccountIds.length > 0) {
-    return { ok: false, reason: 'ALREADY_CARRIED', cashboxIds: alreadyCarriedAccountIds };
+    .map((cashbox) => cashbox.id);
+  if (alreadyCarriedCashboxIds.length > 0) {
+    return { ok: false, reason: 'ALREADY_CARRIED', cashboxIds: alreadyCarriedCashboxIds };
   }
 
-  const computations = tenantCashboxes.map((account) => {
-    const closing = finalClosingEntry(closingEntries, account.id, fromFiscalYear.id)!;
-    return { cashboxId: account.id, amount: closing.amount, date: toFiscalYear.startDate, sourceClosingEntryId: closing.id };
+  const computations = tenantCashboxes.map((cashbox) => {
+    const closing = finalClosingEntry(closingEntries, cashbox.id, fromFiscalYear.id)!;
+    return { cashboxId: cashbox.id, amount: closing.amount, date: toFiscalYear.startDate, sourceClosingEntryId: closing.id };
   });
   return { ok: true, computations };
 }
@@ -96,18 +96,18 @@ export function verifyCarryForwardIntegrity(
   fromFiscalYear: FiscalYear,
   toFiscalYear: FiscalYear,
 ): IntegrityMismatch[] {
-  const tenantCashboxes = ctx.cashboxes.filter((account) => account.tenantId === fromFiscalYear.tenantId);
+  const tenantCashboxes = ctx.cashboxes.filter((cashbox) => cashbox.tenantId === fromFiscalYear.tenantId);
   const closingEntries = ctx.closingEntries ?? [];
   const openingEntries = ctx.openingEntries ?? [];
 
   const mismatches: IntegrityMismatch[] = [];
-  for (const account of tenantCashboxes) {
-    const closing = finalClosingEntry(closingEntries, account.id, fromFiscalYear.id);
+  for (const cashbox of tenantCashboxes) {
+    const closing = finalClosingEntry(closingEntries, cashbox.id, fromFiscalYear.id);
     const opening = openingEntries.find(
-      (entry) => entry.cashboxId === account.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
+      (entry) => entry.cashboxId === cashbox.id && entry.fiscalYearId === toFiscalYear.id && entry.status === 'FINAL',
     );
     if (closing && opening && closing.amount !== opening.amount) {
-      mismatches.push({ cashboxId: account.id, closingAmount: closing.amount, openingAmount: opening.amount });
+      mismatches.push({ cashboxId: cashbox.id, closingAmount: closing.amount, openingAmount: opening.amount });
     }
   }
   return mismatches;

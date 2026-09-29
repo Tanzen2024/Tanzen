@@ -1,12 +1,20 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatNumberWith } from './number-format';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Nombre affiché avec le FORMAT RÉGIONAL DE L'ASSOCIATION courante (`lib/number-format`) —
+ * séparateurs de milliers / décimales de Paramètres → Organisation, plus ceux de la langue
+ * de l'interface (`locale` est conservé pour compatibilité des appels, sans effet sur les
+ * séparateurs). Ex. (défaut) 1234567.89 → « 1 234 567,89 ». Jamais pour un identifiant.
+ */
 export function formatNumber(value: number, locale: 'fr' | 'en' = 'fr'): string {
-  return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'fr-FR').format(value);
+  void locale;
+  return formatNumberWith(value, undefined, { maximumFractionDigits: 3 });
 }
 
 /**

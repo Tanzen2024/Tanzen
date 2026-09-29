@@ -62,11 +62,14 @@ export const permissionCatalog: Permission[] = [
   'distributions.read', 'distributions.create', 'distributions.approve',
   'applications.read', 'applications.create', 'applications.approve',
   'loans.read', 'loans.create', 'loans.approve',
+  /** Approbation d'un prêt PAR NIVEAU (mandat « Workflow d'approbation des prêts », 2026-09-27) : le niveau de la règle de crédit (Membre / Bureau / Administrateur) désigne laquelle est exigée à l'étape du workflow. Suit `roleTemplates` : exclues de role-manager (filtre « approve »), incluses dans role-admin. */
+  'loans.approve.member', 'loans.approve.board', 'loans.approve.admin',
   'repayments.read', 'repayments.create',
   'guarantors.read', 'guarantors.create',
-  'loanRules.manage',
+  /** `loanRules.manage` = créer la règle / DEMANDER sa modification ; `loanRules.approve` (2026-09-28) = approuver une modification (double approbation WD-009). Suit `roleTemplates` : exclue de role-manager (filtre « approve »), incluse dans role-admin. */
+  'loanRules.manage', 'loanRules.approve',
   /** Domaine Tontines (reconstruction complète) : `cycles.*`/`draws.*` (ancien modèle Cycle/Draw, supprimé) retirés — plus aucune trace de terminologie Cycle/Draw dans le catalogue. `beneficiaries.manage` couvre à la fois les `OccurrenceBeneficiary` (avec-achat), les `TontineBeneficiaryPlan` (sans-achat) et leur permutation (même capacité métier : décider qui bénéficie, et dans quel ordre) — aucune permission dédiée « plans »/« permutations » introduite, pour ne pas dupliquer une même capacité sous plusieurs clés. */
-  'tontines.read', 'tontines.create', 'tontines.update',
+  'tontines.read', 'tontines.create', 'tontines.update', 'tontines.delete',
   'beneficiaries.manage',
   'adhesions.read', 'adhesions.manage',
   'contributions.manage',
@@ -79,7 +82,7 @@ export const permissionCatalog: Permission[] = [
   'sessions.read', 'sessions.revoke',
   'mfa.read', 'mfa.manage',
   'audit.read', 'audit.readSensitive',
-  'settings.read', 'localization.manage', 'fiscalYears.read', 'fiscalYears.manage', 'fiscalYears.approve',
+  'settings.read', 'fiscalYears.read', 'fiscalYears.manage', 'fiscalYears.approve',
   'branding.manage', 'notificationSettings.read', 'notificationSettings.manage',
   'securityPolicies.manage', 'modules.manage', 'integrations.manage',
 ];
@@ -88,7 +91,7 @@ type RoleTemplate = { key: string; name: string; description: string; scope: Pla
 
 const roleTemplates: RoleTemplate[] = [
   { key: 'role-admin', name: 'Administrateur Tenant', description: 'Accès complet aux fonctionnalités du tenant courant.', scope: 'platform', permissions: permissionCatalog },
-  { key: 'role-manager', name: 'Gestionnaire', description: 'Gestion opérationnelle sans suppression ni approbation finale, restreinte au tenant courant.', scope: 'tenant', permissions: permissionCatalog.filter((permission) => !permission.endsWith('.delete') && !permission.endsWith('.approve')) },
+  { key: 'role-manager', name: 'Gestionnaire', description: 'Gestion opérationnelle sans suppression ni approbation finale, restreinte au tenant courant.', scope: 'tenant', permissions: permissionCatalog.filter((permission) => !permission.endsWith('.delete') && !/\.approve(\.|$)/.test(permission)) },
   { key: 'role-viewer', name: 'Lecture seule', description: 'Consultation uniquement, restreinte au tenant courant.', scope: 'tenant', permissions: permissionCatalog.filter((permission) => permission.endsWith('.read')) },
 ];
 
@@ -116,7 +119,7 @@ export const systemRoles: SystemRole[] = tenants.flatMap((tenant) =>
   })),
 );
 
-function resolveScope(roleIds: string[]): PlatformScope {
+export function resolveScope(roleIds: string[]): PlatformScope {
   const roles = roleIds.map((id) => systemRoles.find((role) => role.id === id)).filter((role): role is SystemRole => Boolean(role));
   return roles.some((role) => role.scope === 'platform') ? 'platform' : 'tenant';
 }
@@ -130,7 +133,7 @@ function resolveScope(roleIds: string[]): PlatformScope {
 export const currentUser: CurrentUser = {
   id: 'U-001',
   name: 'Amadou Mbaye',
-  email: 'amadou.mbaye@sutura.sn',
+  email: 'amadou.mbaye@sutura.cm',
   tenantId: 'T-001',
   roleIds: ['role-admin'],
   permissions: systemRoles.find((role) => role.id === 'role-admin')?.permissions ?? [],

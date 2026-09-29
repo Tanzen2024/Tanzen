@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { suggestNextFiscalYear, fiscalYearLabel, hasFiscalYearOverlap, type FiscalYear } from './fiscal-years';
+import { suggestNextFiscalYear, fiscalYearLabel, hasFiscalYearOverlap, fiscalYearStatus, findCurrentFiscalYear, defaultFiscalYear, fiscalYearContaining, type FiscalYear } from './fiscal-years';
 
 function makeYear(overrides: Partial<FiscalYear>): FiscalYear {
-  return { id: 'FY-X', tenantId: 'T-X', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, ...overrides };
+  return { id: 'FY-X', tenantId: 'T-X', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null, ...overrides };
 }
 
 describe('suggestNextFiscalYear', () => {
@@ -20,11 +20,11 @@ describe('suggestNextFiscalYear', () => {
     expect(suggestNextFiscalYear(years)).toEqual({ startDate: '2026-07-01', endDate: '2027-06-30' });
   });
 
-  it('utilise le dernier exercice par date de fin, pas le premier du tableau ni celui marqué isCurrent', () => {
+  it('utilise le dernier exercice par date de fin, pas le premier du tableau ni celui en cours', () => {
     const years = [
-      makeYear({ startDate: '2024-01-01', endDate: '2024-12-31', status: 'closed', isCurrent: false }),
-      makeYear({ startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false }),
-      makeYear({ startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true }),
+      makeYear({ startDate: '2024-01-01', endDate: '2024-12-31', isClosed: true }),
+      makeYear({ startDate: '2027-01-01', endDate: '2027-12-31', isClosed: false }),
+      makeYear({ startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false }),
     ];
     expect(suggestNextFiscalYear(years)).toEqual({ startDate: '2028-01-01', endDate: '2028-12-31' });
   });
@@ -71,5 +71,57 @@ describe('hasFiscalYearOverlap', () => {
 
   it('excludeYearId exclut l’exercice en cours de modification de la détection', () => {
     expect(hasFiscalYearOverlap(existing, 'T-X', '2026-01-01', '2026-12-31', 'FY-1')).toBe(false);
+  });
+});
+
+/**
+ * Mandat « Caisse + exercice fiscal contexte global » — statut métier calculé,
+ * centralisé dans `fiscalYearStatus` (seule implémentation de la règle).
+ */
+describe('fiscalYearStatus / findCurrentFiscalYear / defaultFiscalYear', () => {
+  const TODAY = '2026-09-25';
+
+  it('À venir : date de début pas encore atteinte (et non clôturé)', () => {
+    expect(fiscalYearStatus(makeYear({ startDate: '2027-01-01', endDate: '2027-12-31' }), TODAY)).toBe('upcoming');
+  });
+
+  it('En cours : date de début atteinte, exercice non clôturé', () => {
+    expect(fiscalYearStatus(makeYear({ startDate: '2026-01-01', endDate: '2026-12-31' }), TODAY)).toBe('in_progress');
+    expect(fiscalYearStatus(makeYear({ startDate: TODAY, endDate: '2027-06-30' }), TODAY)).toBe('in_progress');
+  });
+
+  it('En cours même après la date de fin tant que la clôture n’a pas été prononcée — jamais « Clôturé » par la seule date', () => {
+    expect(fiscalYearStatus(makeYear({ startDate: '2025-01-01', endDate: '2025-12-31', isClosed: false }), TODAY)).toBe('in_progress');
+  });
+
+  it('Clôturé : uniquement sur clôture explicite — prioritaire sur les dates, même pour un exercice futur', () => {
+    expect(fiscalYearStatus(makeYear({ startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true }), TODAY)).toBe('closed');
+    expect(fiscalYearStatus(makeYear({ startDate: '2030-01-01', endDate: '2030-12-31', isClosed: true }), TODAY)).toBe('closed');
+  });
+
+  it('exercice courant = l’exercice en cours qui contient la date du jour ; défaut = le plus récent si aucun n’est en cours', () => {
+    const years = [
+      makeYear({ id: 'A', startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true }),
+      makeYear({ id: 'B', startDate: '2026-01-01', endDate: '2026-12-31' }),
+      makeYear({ id: 'C', startDate: '2027-01-01', endDate: '2027-12-31' }),
+    ];
+    expect(findCurrentFiscalYear(years, TODAY)?.id).toBe('B');
+    expect(defaultFiscalYear(years, TODAY)?.id).toBe('B');
+    const noneInProgress = [years[0], years[2]];
+    expect(findCurrentFiscalYear(noneInProgress, TODAY)).toBeUndefined();
+    expect(defaultFiscalYear(noneInProgress, TODAY)?.id).toBe('C');
+  });
+
+  it('fiscalYearContaining : exercice du tenant dont la période contient la date (bornes incluses), jamais celui d’un autre tenant', () => {
+    const years = [makeYear({ id: 'X26', tenantId: 'T-X', startDate: '2026-01-01', endDate: '2026-12-31' }), makeYear({ id: 'Y26', tenantId: 'T-Y', startDate: '2026-01-01', endDate: '2026-12-31' })];
+    expect(fiscalYearContaining(years, 'T-X', '2026-12-31')?.id).toBe('X26');
+    expect(fiscalYearContaining(years, 'T-Y', '2026-01-01')?.id).toBe('Y26');
+    expect(fiscalYearContaining(years, 'T-X', '2027-01-01')).toBeUndefined();
+  });
+
+  it('libellé dérivé des dates, jamais stocké : même année → « Exercice YYYY », sinon « Exercice YYYY-YYYY »', () => {
+    expect(fiscalYearLabel({ startDate: '2026-01-01', endDate: '2026-12-31' })).toBe('Exercice 2026');
+    expect(fiscalYearLabel({ startDate: '2025-05-15', endDate: '2026-04-09' })).toBe('Exercice 2025-2026');
+    expect('label' in makeYear({})).toBe(false);
   });
 });

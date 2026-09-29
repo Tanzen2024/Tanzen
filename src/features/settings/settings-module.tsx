@@ -1,14 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
-import { Bell, Building2, CalendarDays, Cloud, Database, Eye, Globe2, KeyRound, Landmark, Lock, Mail, MapPin, Palette, Plug, Plus, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Webhook } from 'lucide-react';
-import { Route, Routes, useNavigate } from 'react-router-dom';
-import { PageHeader, DataTable, StatusBadge, EmptyState, FormSection, PermissionGate, ConfirmDialog, FieldError } from '@/components';
+import { Bell, Building2, Cloud, Database, Globe2, KeyRound, Lock, Mail, MapPin, Plug, RefreshCw, ShieldCheck, Sparkles, Webhook } from 'lucide-react';
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { PageHeader, DataTable, StatusBadge, EmptyState, PermissionGate, ConfirmDialog } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -16,16 +15,15 @@ import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
 import { useTheme } from '@/contexts/theme-context';
 import { usePermissions } from '@/contexts/permission-context';
-import { NotFoundPage } from '@/routes';
+import { NotFoundPage, PermissionRoute, RouteLoadingFallback } from '@/routes';
 import { organizationService } from '@/services/organization.service';
 import { settingsService } from '@/services/settings.service';
 import { queryKeys } from '@/services/query-keys';
 import { supportedLocales } from '@/i18n';
-import { fiscalYearLabel, type FiscalYear, type FiscalYearStatus } from '@/mocks/settings/fiscal-years';
-import { isValidSessionScheduleConfig, formatSessionScheduleDescription, sessionFrequencyLabel, sessionRuleLabel, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
-import { SessionScheduleFields } from './session-schedule-fields';
-import { FiscalYearCreateDialog } from './fiscal-year-create-dialog';
-import type { DateFormat, NumberFormatStyle } from '@/mocks/settings/localization-settings';
+import { SettingsFiscalYears, FiscalYearDetail, LegacySessionRedirect } from './settings-fiscal-years';
+import type { DateFormat, OrganizationSettings } from '@/mocks/settings/organization-settings';
+import { DEFAULT_CURRENCY_CODE, currencies, getCurrencyDisplayLabel, getCurrencyLabel } from '@/constants/currencies';
+import { DECIMAL_SEPARATORS, THOUSANDS_SEPARATORS, formatNumberWith, isRegionalFormatValid, resolveRegionalFormat } from '@/lib/number-format';
 import type { NotificationChannel, NotificationChannelType, NotificationRule, NotificationRuleTrigger } from '@/mocks/settings/notification-settings';
 import type { ModuleConfig, ModuleKey } from '@/mocks/settings/modules';
 import type { PasswordPolicy, SessionPolicy, MfaPolicy, LoginPolicy } from '@/mocks/settings/security-policies';
@@ -35,10 +33,16 @@ import type { TableColumn, StatusTone } from '@/types/ui';
 import { formatDate } from '@/lib/utils';
 import { ValidationWorkflowsList, ValidationWorkflowCreate, ValidationWorkflowDetail, ValidationWorkflowEdit } from './settings-validation-workflows';
 
+/**
+ * Règles de crédit : administrées ici (Paramètres → Règles de crédit) depuis le
+ * mandat « Simplification du module Caisses » (2026-09-25). Les écrans restent
+ * dans le domaine Finance (chargé à la demande pour ne pas alourdir le chunk
+ * Paramètres).
+ */
+const LoanRulesRoutes = lazy(() => import('@/features/finance').then((m) => ({ default: m.LoanRulesRoutes })));
+
 type T = (section: 'settings' | 'nav' | 'system', key: string, values?: Record<string, string>) => string;
 
-const FY_STATUS_TONE: Record<FiscalYearStatus, StatusTone> = { open: 'success', closed: 'default', upcoming: 'info' };
-const FY_STATUS_KEY: Record<FiscalYearStatus, string> = { open: 'statusOpen', closed: 'statusClosed', upcoming: 'statusUpcoming' };
 const CHANNEL_KEY: Record<NotificationChannelType, string> = { email: 'channelEmail', sms: 'channelSms', push: 'channelPush', inApp: 'channelInApp' };
 const TRIGGER_KEY: Record<NotificationRuleTrigger, string> = { loanOverdue: 'triggerLoanOverdue', applicationSubmitted: 'triggerApplicationSubmitted', workflowPending: 'triggerWorkflowPending', sessionRevoked: 'triggerSessionRevoked', memberJoined: 'triggerMemberJoined' };
 const MODULE_LABEL_KEY: Record<ModuleKey, string> = { dashboard: 'moduleDashboard', organization: 'moduleOrganization', finance: 'moduleFinance', credit: 'moduleCredit', tontines: 'moduleTontines', operations: 'moduleOperations', accessSecurity: 'moduleAccessSecurity', audit: 'moduleAudit', settings: 'moduleSettings' };
@@ -54,267 +58,138 @@ function Info({ label, value, icon: Icon }: { label: string; value: string; icon
 
 // ----------------------------------------------------------------------- Organization
 
+/** Champs éditables de Paramètres → Organisation (tout sauf l'identifiant du tenant). */
+type OrganizationForm = Omit<OrganizationSettings, 'tenantId'>;
+const DATE_FORMATS: DateFormat[] = ['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'];
+const THOUSANDS_LABEL_KEY = { space: 'numberFormatSpace', comma: 'numberFormatComma', period: 'numberFormatPeriod' } as const;
+const DECIMAL_LABEL_KEY = { comma: 'decimalSeparatorComma', period: 'decimalSeparatorPeriod' } as const;
+
+/**
+ * Paramètres → Organisation = CONFIGURATION DE L'ASSOCIATION (mandat « Format régional »,
+ * 2026-09-26) : identité, langue, fuseau, format de date et FORMAT RÉGIONAL (devise,
+ * séparateurs). L'ancienne page Localisation, qui dupliquait fuseau/devise sans effet sur
+ * l'affichage, a été fusionnée ici puis supprimée. Valeurs par défaut : XAF, espace, virgule.
+ */
 function SettingsOrganization({ t }: { t: T }) {
   const { currentTenant } = useTenant();
+  const { locale, setLocale } = useLocale();
+  const { can } = usePermissions();
+  const { branding, setBranding } = useTheme();
   const { data: tenant } = useQuery({ queryKey: queryKeys.tenants.detail(currentTenant.id), queryFn: () => organizationService.getTenant(currentTenant.id, currentTenant.id) });
   const { data: settings } = useQuery({ queryKey: queryKeys.settings.organization(currentTenant.id), queryFn: () => settingsService.getOrganizationSettings(currentTenant.id) });
-  const [values, setValues] = useState<{ timezone: string; currency: string } | null>(null);
+  const [values, setValues] = useState<OrganizationForm | null>(null);
+  const [brandingDraft, setBrandingDraft] = useState<BrandingForm | null>(null);
   useEffect(() => setValues(null), [currentTenant.id]);
-  const mutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateOrganizationSettings>>, { timezone: string; currency: string }>({
+  const mutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateOrganizationSettings>>, OrganizationForm>({
     mutationFn: (patch) => settingsService.updateOrganizationSettings(currentTenant.id, patch),
     invalidateKeys: [queryKeys.settings.organization(currentTenant.id)],
-    onSuccess: () => notify.success(t('settings', 'saved')),
+    onSuccess: (saved) => { if (!saved) { notify.error(t('settings', 'regionalFormatInvalid')); return; } notify.success(t('settings', 'saved')); setValues(null); },
   });
   if (!tenant) return null;
-  const current = values ?? { timezone: settings?.timezone ?? '', currency: settings?.currency ?? '' };
+  const regional = resolveRegionalFormat(settings);
+  const current: OrganizationForm = values ?? { timezone: settings?.timezone ?? '', currency: settings?.currency ?? DEFAULT_CURRENCY_CODE, dateFormat: settings?.dateFormat ?? 'DD/MM/YYYY', thousandsSeparator: regional.thousandsSeparator, decimalSeparator: regional.decimalSeparator };
+  const set = (patch: Partial<OrganizationForm>) => setValues({ ...current, ...patch });
+  const brandingValues: BrandingForm = brandingDraft ?? { tenantName: branding.tenantName, logoLight: branding.logoLight, logoDark: branding.logoDark, primaryColor: branding.primaryColor };
+  const setBrandingField = (patch: Partial<BrandingForm>) => setBrandingDraft({ ...brandingValues, ...patch });
+  const formatValid = isRegionalFormatValid(current);
+  const canSaveOrganization = can('tenants.update');
+  const canSaveBranding = can('branding.manage');
+  const selectClass = 'flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm';
+  // Aperçu calculé avec le format EN COURS DE SAISIE (pas encore enregistré) — même fonction que tout l'affichage.
+  const preview = formatValid ? `${formatNumberWith(1234567.89, current, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${getCurrencyDisplayLabel(current.currency)}` : '—';
+  /**
+   * UN SEUL « Enregistrer » pour la page : chaque partie reste enregistrée dans SON stockage et
+   * sous SA permission — paramètres d'organisation (`tenants.update`, service) et identité
+   * visuelle (`branding.manage`, ThemeContext). « Annuler » abandonne les deux brouillons.
+   */
+  const save = () => {
+    if (canSaveBranding) { setBranding(brandingValues); setBrandingDraft(null); }
+    if (canSaveOrganization) mutation.mutate(current);
+    else notify.success(t('settings', 'saved'));
+  };
+  const cancel = () => { setValues(null); setBrandingDraft(null); };
   return <Page title={t('settings', 'organizationTitle')} description={t('settings', 'organizationDescription')}>
-    <div className="grid gap-5 lg:grid-cols-2">
-      <FormSection title={t('settings', 'generalInfo')} description={t('settings', 'organizationIdentityNotice')}><div className="space-y-4">
-        <Info label={t('settings', 'name')} value={tenant.name} icon={Building2} />
-        <Info label={t('settings', 'legalName')} value={tenant.legalName} icon={Building2} />
-        <Info label={t('settings', 'country')} value={tenant.country} icon={MapPin} />
-      </div></FormSection>
-      <FormSection title={t('settings', 'contact')}><div className="space-y-4">
-        <Info label={t('settings', 'email')} value={tenant.email} icon={Mail} />
-        <Info label={t('settings', 'phone')} value={tenant.phone} icon={Building2} />
-        <Info label={t('settings', 'address')} value={tenant.address} icon={MapPin} />
-      </div></FormSection>
-      <FormSection title={t('settings', 'general')}><div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2"><Label htmlFor="org-timezone">{t('settings', 'timezone')}</Label><Input id="org-timezone" value={current.timezone} onChange={(event) => setValues({ ...current, timezone: event.target.value })} /></div>
-        <div className="space-y-2"><Label htmlFor="org-currency">{t('settings', 'currency')}</Label><Input id="org-currency" value={current.currency} onChange={(event) => setValues({ ...current, currency: event.target.value })} /></div>
-      </div></FormSection>
-      <div className="flex justify-end gap-2 lg:col-span-2"><PermissionGate permission="tenants.update"><Button disabled={mutation.isPending} onClick={() => mutation.mutate(current)}>{mutation.isPending ? t('settings', 'saving') : t('settings', 'save')}</Button></PermissionGate></div>
-    </div>
-  </Page>;
-}
-
-// ----------------------------------------------------------------------- Localization
-
-function SettingsLocalization({ t }: { t: T }) {
-  const { currentTenant } = useTenant();
-  const { locale, setLocale } = useLocale();
-  const { data: settings } = useQuery({ queryKey: queryKeys.settings.localization(currentTenant.id), queryFn: () => settingsService.getLocalizationSettings(currentTenant.id) });
-  const [values, setValues] = useState<{ timezone: string; currency: string; dateFormat: DateFormat; numberFormat: NumberFormatStyle } | null>(null);
-  useEffect(() => setValues(null), [currentTenant.id]);
-  const mutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateLocalizationSettings>>, NonNullable<typeof values>>({
-    mutationFn: (patch) => settingsService.updateLocalizationSettings(currentTenant.id, patch),
-    invalidateKeys: [queryKeys.settings.localization(currentTenant.id)],
-    onSuccess: () => notify.success(t('settings', 'saved')),
-  });
-  const current = values ?? { timezone: settings?.timezone ?? '', currency: settings?.currency ?? '', dateFormat: settings?.dateFormat ?? 'DD/MM/YYYY', numberFormat: settings?.numberFormat ?? 'space' };
-  return <Page title={t('settings', 'localizationTitle')} description={t('settings', 'localizationDescription')}>
-    <div className="grid gap-5 lg:grid-cols-2">
-      <FormSection title={t('settings', 'language')}><div className="flex flex-wrap gap-2">
-        <Button variant={locale === 'fr' ? 'default' : 'outline'} aria-pressed={locale === 'fr'} onClick={() => setLocale('fr')}><Globe2 size={15} />{t('settings', 'french')}</Button>
-        <Button variant={locale === 'en' ? 'default' : 'outline'} aria-pressed={locale === 'en'} onClick={() => setLocale('en')}><Globe2 size={15} />{t('settings', 'english')}</Button>
-      </div></FormSection>
-      <FormSection title={t('settings', 'supportedLocales')}><div className="flex flex-wrap gap-2">{supportedLocales.map((code) => <StatusBadge key={code} label={code === 'fr' ? t('settings', 'french') : t('settings', 'english')} tone="success" />)}</div></FormSection>
-      <FormSection title={t('settings', 'general')}><div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-2"><Label htmlFor="loc-timezone">{t('settings', 'timezone')}</Label><Input id="loc-timezone" value={current.timezone} onChange={(event) => setValues({ ...current, timezone: event.target.value })} /></div>
-        <div className="space-y-2"><Label htmlFor="loc-currency">{t('settings', 'currency')}</Label><Input id="loc-currency" value={current.currency} onChange={(event) => setValues({ ...current, currency: event.target.value })} /></div>
-        <div className="space-y-2"><Label htmlFor="loc-date-format">{t('settings', 'dateFormat')}</Label><select id="loc-date-format" value={current.dateFormat} onChange={(event) => setValues({ ...current, dateFormat: event.target.value as DateFormat })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="DD/MM/YYYY">DD/MM/YYYY</option><option value="MM/DD/YYYY">MM/DD/YYYY</option><option value="YYYY-MM-DD">YYYY-MM-DD</option></select></div>
-        <div className="space-y-2"><Label htmlFor="loc-number-format">{t('settings', 'numberFormat')}</Label><select id="loc-number-format" value={current.numberFormat} onChange={(event) => setValues({ ...current, numberFormat: event.target.value as NumberFormatStyle })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"><option value="space">{t('settings', 'numberFormatSpace')}</option><option value="comma">{t('settings', 'numberFormatComma')}</option><option value="period">{t('settings', 'numberFormatPeriod')}</option></select></div>
-      </div></FormSection>
-      <div className="flex justify-end gap-2 lg:col-span-2"><PermissionGate permission="localization.manage"><Button disabled={mutation.isPending} onClick={() => mutation.mutate(current)}>{mutation.isPending ? t('settings', 'saving') : t('settings', 'save')}</Button></PermissionGate></div>
-    </div>
-  </Page>;
-}
-
-// ----------------------------------------------------------------------- Fiscal years
-
-function SettingsFiscalYears({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
-  const { currentTenant } = useTenant();
-  const { can } = usePermissions();
-  const navigate = useNavigate();
-  const { data: years = [] } = useQuery({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id), queryFn: () => settingsService.listFiscalYears(currentTenant.id) });
-  const { data: reopenRequests = [] } = useQuery({ queryKey: queryKeys.settings.reopenRequests(currentTenant.id), queryFn: () => settingsService.listReopenRequests(currentTenant.id) });
-  const current = years.find((year) => year.isCurrent);
-  const pendingReopenByYearId = new Map(reopenRequests.filter((request) => request.status === 'pending' || request.status === 'inProgress').map((request) => [request.entityId, request]));
-  const [closeTarget, setCloseTarget] = useState(false);
-  const [openTarget, setOpenTarget] = useState<FiscalYear | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [reopenTarget, setReopenTarget] = useState<FiscalYear | null>(null);
-  const [reopenJustification, setReopenJustification] = useState('');
-  const [reopenError, setReopenError] = useState<string | undefined>();
-  /** Détail « Fréquence des séances » d'un exercice — lecture + configuration si l'exercice n'est pas clôturé. */
-  const [calendarTarget, setCalendarTarget] = useState<FiscalYear | null>(null);
-  const [calendarDraft, setCalendarDraft] = useState<Partial<SessionScheduleConfig>>({});
-  /** Prorogation (mandat §6) — modifie uniquement `endDate`, jamais un indicateur de clôture. */
-  const [extendTarget, setExtendTarget] = useState<FiscalYear | null>(null);
-  const [extendEndDate, setExtendEndDate] = useState('');
-  const [extendError, setExtendError] = useState<string | undefined>();
-  useEffect(() => { setCloseTarget(false); setOpenTarget(null); setCreateOpen(false); setReopenTarget(null); setReopenError(undefined); setCalendarTarget(null); setExtendTarget(null); setExtendError(undefined); }, [currentTenant.id]);
-  const closeMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.closeCurrentFiscalYear>>, void>({
-    mutationFn: () => settingsService.closeCurrentFiscalYear(currentTenant.id),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
-    onSuccess: (result) => {
-      if (!result.ok) { notify.error(t('settings', result.reason === 'FINANCE_CLOSING_FAILED' ? 'closeFiscalYearFinanceFailed' : 'fiscalYearInvalid')); return; }
-      const pendingTotal = result.pendingOperations.applications + result.pendingOperations.distributions + result.pendingOperations.transactions;
-      notify.success(pendingTotal > 0 ? t('settings', 'fiscalYearClosedWithPending', { count: String(pendingTotal) }) : t('settings', 'fiscalYearClosed'));
-      setCloseTarget(false);
-    },
-  });
-  const extendMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.extendFiscalYearEndDate>>, { fiscalYearId: string; newEndDate: string }>({
-    mutationFn: ({ fiscalYearId, newEndDate }) => settingsService.extendFiscalYearEndDate(currentTenant.id, fiscalYearId, newEndDate),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id)],
-    onSuccess: (result) => {
-      if (!result.ok) {
-        const key = result.reason === 'CLOSED' ? 'extendFiscalYearClosed' : result.reason === 'OVERLAPS_NEXT_YEAR' ? 'extendFiscalYearOverlap' : 'extendFiscalYearInvalid';
-        setExtendError(t('settings', key));
-        return;
-      }
-      notify.success(t('settings', 'extendFiscalYearSuccess'));
-      setExtendTarget(null);
-      setExtendEndDate('');
-      setExtendError(undefined);
-    },
-  });
-  const openMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.openFiscalYear>>, string>({
-    mutationFn: (fiscalYearId) => settingsService.openFiscalYear(currentTenant.id, fiscalYearId),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.settings.currentFiscalYear(currentTenant.id)],
-    onSuccess: () => { notify.success(t('settings', 'fiscalYearOpened')); setOpenTarget(null); },
-  });
-  /** §24-BIS : soumet une DEMANDE de réouverture (WorkflowRequest, WD-005) — ne rouvre plus directement l'exercice. Le passage effectif CLOSED→OPEN n'intervient qu'après approbation, dans Operations > Workflows (settingsService.applyFiscalYearReopenDecision). */
-  const reopenRequestMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.requestFiscalYearReopen>>, { fiscalYearId: string; justification: string }>({
-    mutationFn: ({ fiscalYearId, justification }) => settingsService.requestFiscalYearReopen(currentTenant.id, fiscalYearId, justification),
-    invalidateKeys: [queryKeys.settings.reopenRequests(currentTenant.id)],
-    onSuccess: (request) => {
-      if (!request) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
-      notify.success(t('settings', 'reopenRequestSubmitted'));
-      setReopenTarget(null);
-      setReopenJustification('');
-      setReopenError(undefined);
-    },
-  });
-  /** Configure / met à jour / retire la fréquence des séances d'un exercice existant (autorisé tant qu'il n'est pas clôturé, cf. `updateFiscalYearSessionSchedule`). */
-  const sessionScheduleMutation = useMockMutation<Awaited<ReturnType<typeof settingsService.updateFiscalYearSessionSchedule>>, { fiscalYearId: string; config: SessionScheduleConfig | null }>({
-    mutationFn: ({ fiscalYearId, config }) => settingsService.updateFiscalYearSessionSchedule(currentTenant.id, fiscalYearId, config),
-    invalidateKeys: [queryKeys.settings.fiscalYears(currentTenant.id), queryKeys.finance.sessions.next(currentTenant.id, undefined)],
-    onSuccess: (year, variables) => {
-      if (!year) { notify.error(t('settings', 'fiscalYearInvalid')); return; }
-      notify.success(t('settings', variables.config ? 'sessionScheduleSaved' : 'sessionScheduleRemoved'));
-      setCalendarTarget(null);
-    },
-  });
-  const openCalendar = (year: FiscalYear) => { setCalendarTarget(year); setCalendarDraft(year.sessionSchedule ?? {}); };
-  const saveCalendar = () => { if (calendarTarget && isValidSessionScheduleConfig(calendarDraft)) sessionScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: calendarDraft }); };
-  const handleReopenRequest = () => {
-    if (!reopenTarget) return;
-    if (!reopenJustification.trim()) { setReopenError(t('settings', 'reopenJustificationRequired')); return; }
-    setReopenError(undefined);
-    reopenRequestMutation.mutate({ fiscalYearId: reopenTarget.id, justification: reopenJustification });
-  };
-  const openExtend = (year: FiscalYear) => { setExtendTarget(year); setExtendEndDate(year.endDate); setExtendError(undefined); };
-  const handleExtend = () => {
-    if (!extendTarget) return;
-    if (!extendEndDate) { setExtendError(t('settings', 'fieldRequired')); return; }
-    extendMutation.mutate({ fiscalYearId: extendTarget.id, newEndDate: extendEndDate });
-  };
-  const columns: TableColumn<FiscalYear>[] = [
-    { key: 'label', header: t('settings', 'fiscalYear'), render: (row) => <span className="font-semibold">{fiscalYearLabel(row)}</span> },
-    { key: 'startDate', header: t('settings', 'startDate'), render: (row) => formatDate(row.startDate) },
-    { key: 'endDate', header: t('settings', 'endDate'), render: (row) => formatDate(row.endDate) },
-    { key: 'status', header: t('settings', 'status'), render: (row) => <div className="flex flex-col gap-1">
-      <StatusBadge label={t('settings', FY_STATUS_KEY[row.status])} tone={FY_STATUS_TONE[row.status]} />
-      {pendingReopenByYearId.has(row.id) && <StatusBadge label={t('settings', 'reopenPending')} tone="warning" />}
-      {row.status === 'closed' && row.closedAt && <p className="text-[11px] text-muted-foreground">{t('settings', 'closedAtBy', { date: formatDate(row.closedAt), actor: row.closedBy ?? '—' })}</p>}
-    </div> },
-    { key: 'sessionSchedule', header: t('settings', 'sessionScheduleTitle'), render: (row) => (
-      <span className="text-xs text-muted-foreground">{row.sessionSchedule ? formatSessionScheduleDescription(row.sessionSchedule, locale) : t('settings', 'noSessionSchedule')}</span>
-    ) },
-    { key: 'actions', header: '', className: 'w-64', render: (row) => {
-      const pendingRequest = pendingReopenByYearId.get(row.id);
-      return <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => openCalendar(row)}><CalendarDays size={14} />{t('settings', 'viewSessionSchedule')}</Button>
-        {row.status !== 'closed' && <PermissionGate permission="fiscalYears.manage"><Button variant="ghost" size="sm" onClick={() => openExtend(row)}>{t('settings', 'extendFiscalYear')}</Button></PermissionGate>}
-        {row.status === 'upcoming' && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => setOpenTarget(row)}>{t('settings', 'openFiscalYear')}</Button></PermissionGate>}
-        {row.status === 'closed' && pendingRequest && <Button variant="outline" size="sm" onClick={() => navigate(`/operations/workflows/${pendingRequest.id}`)}><Eye size={14} />{t('settings', 'viewReopenRequest')}</Button>}
-        {row.status === 'closed' && !pendingRequest && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" size="sm" onClick={() => { setReopenTarget(row); setReopenJustification(''); setReopenError(undefined); }}><RotateCcw size={14} />{t('settings', 'requestReopenFiscalYear')}</Button></PermissionGate>}
-      </div>;
-    } },
-  ];
-  if (!can('fiscalYears.read')) {
-    return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')}><EmptyState icon={Lock} title={t('system', 'unauthorizedTitle')} description={t('system', 'unauthorizedDescription')} /></Page>;
-  }
-  return <Page title={t('settings', 'fiscalYearsTitle')} description={t('settings', 'fiscalYearsDescription')} actions={<div className="flex gap-2">{current && <PermissionGate permission="fiscalYears.manage"><Button variant="outline" onClick={() => setCloseTarget(true)}>{t('settings', 'closeFiscalYear')}</Button></PermissionGate>}<PermissionGate permission="fiscalYears.manage"><Button onClick={() => setCreateOpen(true)}><Plus size={16} />{t('settings', 'createFiscalYear')}</Button></PermissionGate></div>}>
-    {current && <Card className="border-primary/30 bg-primary/5"><CardContent className="flex items-center gap-4 p-5"><span className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><Landmark size={20} /></span><div><p className="text-xs text-muted-foreground">{t('settings', 'currentFiscalYear')}</p><p className="text-lg font-semibold">{fiscalYearLabel(current)}</p><p className="text-xs text-muted-foreground">{formatDate(current.startDate)} → {formatDate(current.endDate)}</p></div></CardContent></Card>}
-    <Card><CardHeader><CardTitle className="text-sm">{t('settings', 'history')}</CardTitle></CardHeader><CardContent className="p-0"><DataTable columns={columns} rows={years} empty={<EmptyState icon={Landmark} title={t('settings', 'noFiscalYears')} />} /></CardContent></Card>
-    {closeTarget && <ConfirmDialog open title={t('settings', 'closeFiscalYear')} description={t('settings', 'closeFiscalYearConfirm')} confirmLabel={t('settings', 'closeFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => closeMutation.mutate()} onCancel={() => setCloseTarget(false)} />}
-    {openTarget && <ConfirmDialog open title={t('settings', 'openFiscalYear')} description={t('settings', 'openFiscalYearConfirm')} confirmLabel={t('settings', 'openFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={() => openMutation.mutate(openTarget.id)} onCancel={() => setOpenTarget(null)} />}
-    <FiscalYearCreateDialog open={createOpen} onOpenChange={setCreateOpen} tenantId={currentTenant.id} years={years} />
-    {reopenTarget && <ConfirmDialog open title={t('settings', 'requestReopenFiscalYear')} description={t('settings', 'requestReopenFiscalYearDescription', { label: fiscalYearLabel(reopenTarget) })} confirmLabel={t('settings', 'submitReopenRequest')} cancelLabel={t('settings', 'cancel')} onConfirm={handleReopenRequest} onCancel={() => { setReopenTarget(null); setReopenJustification(''); setReopenError(undefined); }}>
-      <div className="mt-4 space-y-1 text-left">
-        <Label htmlFor="fy-reopen-justification">{t('settings', 'reopenJustificationLabel')}</Label>
-        <Textarea id="fy-reopen-justification" value={reopenJustification} onChange={(event) => setReopenJustification(event.target.value)} aria-invalid={Boolean(reopenError)} />
-        <FieldError message={reopenError} />
-        <p className="text-xs text-muted-foreground">{t('settings', 'reopenApprovalNotice')}</p>
-      </div>
-    </ConfirmDialog>}
-    {extendTarget && <ConfirmDialog open title={t('settings', 'extendFiscalYear')} description={t('settings', 'extendFiscalYearDescription', { label: fiscalYearLabel(extendTarget), current: formatDate(extendTarget.endDate) })} confirmLabel={t('settings', 'extendFiscalYear')} cancelLabel={t('settings', 'cancel')} onConfirm={handleExtend} onCancel={() => { setExtendTarget(null); setExtendEndDate(''); setExtendError(undefined); }}>
-      <div className="mt-4 space-y-1 text-left">
-        <Label htmlFor="fy-extend-end-date">{t('settings', 'newEndDate')}</Label>
-        <Input id="fy-extend-end-date" type="date" value={extendEndDate} onChange={(event) => setExtendEndDate(event.target.value)} aria-invalid={Boolean(extendError)} />
-        <FieldError message={extendError} />
-      </div>
-    </ConfirmDialog>}
-    {calendarTarget && (() => {
-      const editable = calendarTarget.status !== 'closed' && can('fiscalYears.manage');
-      const previewSchedule = editable ? (isValidSessionScheduleConfig(calendarDraft) ? calendarDraft : undefined) : calendarTarget.sessionSchedule;
-      return <ConfirmDialog
-        open
-        title={`${t('settings', 'sessionScheduleTitle')} — ${fiscalYearLabel(calendarTarget)}`}
-        description={t('settings', 'sessionScheduleDescription')}
-        confirmLabel={editable ? t('settings', 'save') : t('settings', 'sessionScheduleClose')}
-        cancelLabel={editable ? t('settings', 'cancel') : t('settings', 'sessionScheduleClose')}
-        onConfirm={() => { if (editable) saveCalendar(); else setCalendarTarget(null); }}
-        onCancel={() => setCalendarTarget(null)}
-      >
-        <div className="mt-4 max-h-[60vh] space-y-3 overflow-y-auto pr-1 text-left">
-          {calendarTarget.status === 'closed' && <p className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('settings', 'sessionScheduleClosedYearNotice')}</p>}
-          {editable && <SessionScheduleFields locale={locale} value={calendarDraft} onChange={setCalendarDraft} idPrefix="fy-calendar-session" />}
-          {!editable && !calendarTarget.sessionSchedule && <p className="text-sm text-muted-foreground">{t('settings', 'noSessionSchedule')}</p>}
-          {previewSchedule && <div className="grid grid-cols-2 gap-3 rounded-lg border border-border p-3 text-xs">
-            <div><p className="text-muted-foreground">{t('settings', 'sessionScheduleFrequency')}</p><p className="font-medium">{sessionFrequencyLabel(previewSchedule.frequency, locale)}</p></div>
-            <div><p className="text-muted-foreground">{t('settings', 'sessionScheduleRule')}</p><p className="font-medium">{previewSchedule.rule ? sessionRuleLabel(previewSchedule.rule, locale) : '—'}</p></div>
-            <div className="col-span-2"><p className="text-muted-foreground">{t('settings', 'preview')}</p><p className="font-medium">{formatSessionScheduleDescription(previewSchedule, locale)}</p></div>
-          </div>}
-          {editable && calendarTarget.sessionSchedule && <button type="button" onClick={() => sessionScheduleMutation.mutate({ fiscalYearId: calendarTarget.id, config: null })} className="text-xs font-medium text-destructive hover:underline">{t('settings', 'removeSessionSchedule')}</button>}
+    <section aria-labelledby="organization-general-title" className="space-y-3">
+      <SectionHeading id="organization-general-title" title={t('settings', 'generalInfo')} description={t('settings', 'regionalFormatDescription')} />
+      <Card><CardContent className="space-y-6 p-5 sm:p-6">
+        <div className="grid gap-x-6 gap-y-4 md:grid-cols-2" data-testid="regional-format">
+          <div className="space-y-2"><Label htmlFor="org-name">{t('settings', 'organizationName')}</Label><Input id="org-name" value={tenant.name} readOnly aria-describedby="org-name-notice" className="bg-muted/40" /><p id="org-name-notice" className="text-xs text-muted-foreground">{t('settings', 'organizationIdentityNotice')}</p></div>
+          <div className="space-y-2"><Label htmlFor="org-currency">{t('settings', 'currency')}</Label><select id="org-currency" value={current.currency} onChange={(event) => set({ currency: event.target.value })} className={selectClass}>{currencies.map((currency) => <option key={currency.code} value={currency.code}>{`${getCurrencyLabel(currency.code, locale === 'en' ? 'en' : 'fr')} (${currency.code})`}</option>)}</select></div>
+          <div className="space-y-2"><Label htmlFor="org-thousands-separator">{t('settings', 'thousandsSeparator')}</Label><select id="org-thousands-separator" value={current.thousandsSeparator} onChange={(event) => set({ thousandsSeparator: event.target.value as OrganizationForm['thousandsSeparator'] })} className={selectClass}>{THOUSANDS_SEPARATORS.map((separator) => <option key={separator} value={separator}>{t('settings', THOUSANDS_LABEL_KEY[separator])}</option>)}</select></div>
+          <div className="space-y-2"><Label htmlFor="org-decimal-separator">{t('settings', 'decimalSeparator')}</Label><select id="org-decimal-separator" value={current.decimalSeparator} onChange={(event) => set({ decimalSeparator: event.target.value as OrganizationForm['decimalSeparator'] })} className={selectClass}>{DECIMAL_SEPARATORS.map((separator) => <option key={separator} value={separator}>{t('settings', DECIMAL_LABEL_KEY[separator])}</option>)}</select></div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/50 px-3 py-2 text-sm md:col-span-2"><span className="text-muted-foreground">{t('settings', 'regionalFormatPreview')}</span><span className="font-medium tabular-nums" data-testid="regional-format-preview">{preview}</span></div>
+          {!formatValid && <p role="alert" className="text-xs text-destructive md:col-span-2">{t('settings', 'regionalFormatSameSeparator')}</p>}
         </div>
-      </ConfirmDialog>;
-    })()}
+        <div className="grid gap-x-6 gap-y-4 border-t border-border pt-6 md:grid-cols-3">
+          <div className="space-y-2"><Label htmlFor="org-timezone">{t('settings', 'timezone')}</Label><Input id="org-timezone" value={current.timezone} onChange={(event) => set({ timezone: event.target.value })} /></div>
+          <div className="space-y-2"><Label htmlFor="org-date-format">{t('settings', 'dateFormat')}</Label><select id="org-date-format" value={current.dateFormat} onChange={(event) => set({ dateFormat: event.target.value as DateFormat })} className={selectClass}>{DATE_FORMATS.map((format) => <option key={format} value={format}>{format}</option>)}</select></div>
+          <div className="space-y-2"><p className="text-sm font-medium leading-none">{t('settings', 'language')}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant={locale === 'fr' ? 'default' : 'outline'} aria-pressed={locale === 'fr'} onClick={() => setLocale('fr')}><Globe2 size={14} />{t('settings', 'french')}</Button>
+              <Button size="sm" variant={locale === 'en' ? 'default' : 'outline'} aria-pressed={locale === 'en'} onClick={() => setLocale('en')}><Globe2 size={14} />{t('settings', 'english')}</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('settings', 'supportedLocales')} : {supportedLocales.map((code) => (code === 'fr' ? t('settings', 'french') : t('settings', 'english'))).join(', ')}</p>
+          </div>
+        </div>
+        <div className="grid gap-4 border-t border-border pt-6 sm:grid-cols-2 lg:grid-cols-5">
+          <Info label={t('settings', 'legalName')} value={tenant.legalName} icon={Building2} />
+          <Info label={t('settings', 'country')} value={tenant.country} icon={MapPin} />
+          <div className="space-y-3 sm:col-span-2 lg:col-span-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('settings', 'contact')}</h3><div className="grid gap-4 sm:grid-cols-3">
+            <Info label={t('settings', 'email')} value={tenant.email} icon={Mail} />
+            <Info label={t('settings', 'phone')} value={tenant.phone} icon={Building2} />
+            <Info label={t('settings', 'address')} value={tenant.address} icon={MapPin} />
+          </div></div>
+        </div>
+      </CardContent></Card>
+    </section>
+    <OrganizationBrandingSection t={t} values={brandingValues} onChange={setBrandingField} />
+    {(canSaveOrganization || canSaveBranding) && <div className="flex justify-end gap-2 border-t border-border pt-5">
+      <Button variant="outline" disabled={mutation.isPending} onClick={cancel}>{t('settings', 'cancel')}</Button>
+      <Button disabled={mutation.isPending || !formatValid} onClick={save}>{mutation.isPending ? t('settings', 'saving') : t('settings', 'save')}</Button>
+    </div>}
   </Page>;
+}
+
+function SectionHeading({ id, title, description }: { id: string; title: string; description?: string }) {
+  return <div><h2 id={id} className="font-heading text-base font-semibold">{title}</h2>{description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}</div>;
 }
 
 // ----------------------------------------------------------------------- Branding
 
-function SettingsBranding({ t }: { t: T }) {
-  const { branding, setBranding } = useTheme();
-  const [tenantName, setTenantName] = useState(branding.tenantName);
-  const [logoLight, setLogoLight] = useState(branding.logoLight);
-  const [logoDark, setLogoDark] = useState(branding.logoDark);
-  const [primaryColor, setPrimaryColor] = useState(branding.primaryColor);
-  const save = () => setBranding({ tenantName, logoLight, logoDark, primaryColor });
-  return <Page title={t('settings', 'brandingTitle')} description={t('settings', 'brandingDescription')}>
-    <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
-      <div className="space-y-5">
-        <FormSection title={t('settings', 'organizationBrandingLabel')}><div className="space-y-2"><Label htmlFor="branding-name">{t('settings', 'organizationBrandingLabel')}</Label><Input id="branding-name" value={tenantName} onChange={(event) => setTenantName(event.target.value)} /></div></FormSection>
-        <FormSection title={t('settings', 'logos')}><div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2"><Label htmlFor="branding-logo-light">{t('settings', 'logoLight')}</Label><Input id="branding-logo-light" value={logoLight} onChange={(event) => setLogoLight(event.target.value)} /></div>
-          <div className="space-y-2"><Label htmlFor="branding-logo-dark">{t('settings', 'logoDark')}</Label><Input id="branding-logo-dark" value={logoDark} onChange={(event) => setLogoDark(event.target.value)} /></div>
-        </div></FormSection>
-        <FormSection title={t('settings', 'primaryColor')}><div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-2"><Label htmlFor="branding-primary-color-swatch">{t('settings', 'primaryColor')}</Label><input id="branding-primary-color-swatch" type="color" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} className="block size-10 cursor-pointer rounded-lg border border-input bg-transparent p-1" /></div>
-          <div className="space-y-2"><Label htmlFor="branding-primary-color-text">{t('settings', 'primaryColorHex')}</Label><Input id="branding-primary-color-text" value={primaryColor} onChange={(event) => setPrimaryColor(event.target.value)} className="max-w-32 font-mono" /></div>
-        </div></FormSection>
-        <div className="flex justify-end"><PermissionGate permission="branding.manage"><Button onClick={save}><Palette size={15} />{t('settings', 'save')}</Button></PermissionGate></div>
+type BrandingForm = { tenantName: string; logoLight: string; logoDark: string; primaryColor: string };
+
+/**
+ * Section « Identité visuelle » de Paramètres → Organisation (ancienne page Paramètres →
+ * Identité visuelle, fusionnée le 2026-09-27). Identité du TENANT uniquement (ThemeContext :
+ * nom affiché, logos, couleur principale) — le branding TANZEN du sidebar n'est pas concerné.
+ * Composant contrôlé : le brouillon et l'enregistrement (bouton unique de la page, sous
+ * `branding.manage`) sont portés par `SettingsOrganization`.
+ */
+function OrganizationBrandingSection({ t, values, onChange }: { t: T; values: BrandingForm; onChange: (patch: Partial<BrandingForm>) => void }) {
+  const { tenantName, logoLight, logoDark, primaryColor } = values;
+  const subheading = 'text-xs font-semibold uppercase tracking-wide text-muted-foreground';
+  return <section aria-labelledby="organization-branding-title" data-testid="organization-branding" className="space-y-3">
+    <SectionHeading id="organization-branding-title" title={t('settings', 'brandingTitle')} description={t('settings', 'brandingDescription')} />
+    <Card className="overflow-hidden"><div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(280px,380px)]">
+      <div className="space-y-6 p-5 sm:p-6">
+        <div className="space-y-2"><Label htmlFor="branding-name">{t('settings', 'organizationBrandingLabel')}</Label><Input id="branding-name" value={tenantName} onChange={(event) => onChange({ tenantName: event.target.value })} /></div>
+        <div className="space-y-3 border-t border-border pt-6"><h3 className={subheading}>{t('settings', 'logos')}</h3><div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="branding-logo-light">{t('settings', 'logoLight')}</Label><Input id="branding-logo-light" value={logoLight} onChange={(event) => onChange({ logoLight: event.target.value })} /></div>
+          <div className="space-y-2"><Label htmlFor="branding-logo-dark">{t('settings', 'logoDark')}</Label><Input id="branding-logo-dark" value={logoDark} onChange={(event) => onChange({ logoDark: event.target.value })} /></div>
+        </div></div>
+        <div className="flex flex-wrap items-end gap-4 border-t border-border pt-6">
+          <div className="space-y-2"><Label htmlFor="branding-primary-color-swatch">{t('settings', 'primaryColor')}</Label><input id="branding-primary-color-swatch" type="color" value={primaryColor} onChange={(event) => onChange({ primaryColor: event.target.value })} className="block h-9 w-12 cursor-pointer rounded-md border border-input bg-transparent p-1" /></div>
+          <div className="space-y-2"><Label htmlFor="branding-primary-color-text">{t('settings', 'primaryColorHex')}</Label><Input id="branding-primary-color-text" value={primaryColor} onChange={(event) => onChange({ primaryColor: event.target.value })} className="w-32 font-mono" /></div>
+        </div>
       </div>
-      <Card className="h-fit"><CardHeader><CardTitle className="text-sm">{t('settings', 'preview')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
-        <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"><span className="grid size-10 place-items-center rounded-lg font-heading text-lg font-bold text-white" style={{ backgroundColor: primaryColor }}>{tenantName.charAt(0)}</span><div><p className="text-sm font-semibold">{tenantName}</p><p className="text-xs text-muted-foreground">TANZEN Enterprise</p></div></div>
-        <div className="flex items-center gap-3 rounded-xl bg-[hsl(var(--sidebar))] p-4"><span className="grid size-9 place-items-center rounded-xl font-heading text-lg font-bold text-white" style={{ backgroundColor: primaryColor }}>T</span><p className="text-sm font-semibold text-white">{tenantName}</p></div>
+      <div className="space-y-4 border-t border-border bg-muted/30 p-5 sm:p-6 lg:border-l lg:border-t-0">
+        <h3 className={subheading}>{t('settings', 'preview')}</h3>
+        <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"><span className="grid size-10 shrink-0 place-items-center rounded-lg font-heading text-lg font-bold text-white" style={{ backgroundColor: primaryColor }}>{tenantName.charAt(0)}</span><div className="min-w-0"><p className="truncate text-sm font-semibold">{tenantName}</p><p className="text-xs text-muted-foreground">TANZEN Enterprise</p></div></div>
+        <div className="flex items-center gap-3 rounded-xl bg-[hsl(var(--sidebar))] p-4"><span className="grid size-9 shrink-0 place-items-center rounded-xl font-heading text-lg font-bold text-white" style={{ backgroundColor: primaryColor }}>T</span><p className="truncate text-sm font-semibold text-white">{tenantName}</p></div>
         <Button style={{ backgroundColor: primaryColor }} className="text-white hover:opacity-90"><Sparkles size={15} />{t('settings', 'preview')}</Button>
-      </CardContent></Card>
-    </div>
-  </Page>;
+      </div>
+    </div></Card>
+  </section>;
 }
 
 // ----------------------------------------------------------------------- Notifications (configuration)
@@ -484,7 +359,8 @@ function SettingsIntegrations({ t }: { t: T }) {
   const { data: integrations = [] } = useQuery({ queryKey: queryKeys.settings.integrations(currentTenant.id), queryFn: () => settingsService.listIntegrations(currentTenant.id) });
   const groups = (['api', 'storage', 'sync', 'external'] as IntegrationCategory[]).map((category) => ({ category, items: integrations.filter((integration) => integration.category === category) }));
   return <Page title={t('settings', 'integrationsTitle')} description={t('settings', 'integrationsDescription')}>
-    <div className="space-y-6">{groups.map(({ category, items }) => { const Icon = CATEGORY_ICON[category]; return items.length > 0 ? <div key={category}><h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground"><Icon size={16} className="text-primary" />{t('settings', CATEGORY_KEY[category])}</h2><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{items.map((integration: Integration) => <Card key={integration.id}><CardContent className="space-y-3 p-5"><div className="flex items-start justify-between gap-2"><p className="text-sm font-semibold">{integration.name}</p><StatusBadge label={t('settings', INTEGRATION_STATUS_KEY[integration.status])} tone={INTEGRATION_STATUS_TONE[integration.status]} /></div><p className="text-xs leading-5 text-muted-foreground">{integration.description}</p><p className="text-[11px] text-muted-foreground">{t('settings', 'lastSync')}: {integration.lastSyncAt ? formatDate(integration.lastSyncAt) : t('settings', 'never')}</p><PermissionGate permission="integrations.manage"><Button variant="outline" size="sm"><Plug size={14} />{t('settings', 'configure')}</Button></PermissionGate></CardContent></Card>)}</div></div> : null; })}</div>
+    {/* Une colonne pleine largeur : chaque catégorie ne compte en pratique qu'une carte par tenant — une grille `md:grid-cols-2` la réduisait à la moitié de la largeur, laissant l'autre colonne vide. Toutes les cartes ont ainsi la même largeur. */}
+    <div className="space-y-4">{groups.map(({ category, items }) => { const Icon = CATEGORY_ICON[category]; return items.length > 0 ? <section key={category}><h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground"><Icon size={16} className="text-primary" />{t('settings', CATEGORY_KEY[category])}</h2><div className="grid gap-3">{items.map((integration: Integration) => <Card key={integration.id} className="flex flex-col"><CardContent className="flex flex-1 flex-col gap-2 p-4 sm:p-5"><div className="flex items-start justify-between gap-3"><p className="min-w-0 text-sm font-semibold">{integration.name}</p><span className="shrink-0"><StatusBadge label={t('settings', INTEGRATION_STATUS_KEY[integration.status])} tone={INTEGRATION_STATUS_TONE[integration.status]} /></span></div><p className="text-xs leading-5 text-muted-foreground">{integration.description}</p><div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-1"><p className="text-[11px] text-muted-foreground">{t('settings', 'lastSync')}: {integration.lastSyncAt ? formatDate(integration.lastSyncAt) : t('settings', 'never')}</p><PermissionGate permission="integrations.manage"><Button variant="outline" size="sm"><Plug size={14} />{t('settings', 'configure')}</Button></PermissionGate></div></CardContent></Card>)}</div></section> : null; })}</div>
   </Page>;
 }
 
@@ -497,9 +373,15 @@ export function SettingsModule() {
     <Routes>
       <Route index element={<SettingsOrganization t={t} />} />
       <Route path="organization" element={<SettingsOrganization t={t} />} />
-      <Route path="localization" element={<SettingsLocalization t={t} />} />
+      {/* Ancienne page Localisation fusionnée dans Organisation (mandat « Format régional ») : l'URL y renvoie. */}
+      <Route path="localization" element={<Navigate to="/settings/organization" replace />} />
       <Route path="fiscal-years" element={<SettingsFiscalYears t={t} locale={typedLocale} />} />
-      <Route path="branding" element={<SettingsBranding t={t} />} />
+      <Route path="fiscal-years/:id" element={<PermissionRoute permission="fiscalYears.read"><FiscalYearDetail t={t} /></PermissionRoute>} />
+      {/* Plus de page séance : redirection vers Trésorerie → Transactions, séance pré-filtrée. */}
+      <Route path="fiscal-years/:id/sessions/:sessionId" element={<LegacySessionRedirect />} />
+      <Route path="loan-rules/*" element={<Suspense fallback={<RouteLoadingFallback />}><LoanRulesRoutes /></Suspense>} />
+      {/* Ancienne page Identité visuelle fusionnée dans Organisation (2026-09-27) : l'URL y renvoie. */}
+      <Route path="branding" element={<Navigate to="/settings/organization" replace />} />
       <Route path="notifications" element={<SettingsNotifications t={t} />} />
       <Route path="security-policies" element={<SettingsSecurityPolicies t={t} />} />
       <Route path="modules" element={<SettingsModules t={t} />} />

@@ -29,8 +29,8 @@ describe('formatCurrency — formatter central (audit normalisation devises)', (
     it('10000 → "10 000,00 €"', () => {
       expect(formatCurrency(10_000, 'EUR', 'fr').replace(/\s/g, '')).toBe('10000,00€');
     });
-    it('locale en → "10,000.00 €"', () => {
-      expect(formatCurrency(10_000, 'EUR', 'en').replace(/\s/g, '')).toBe('10,000.00€');
+    it('locale en → même format que l’association (défaut : "10 000,00 €") — mandat « Format régional » 2026-09-26', () => {
+      expect(formatCurrency(10_000, 'EUR', 'en').replace(/\s/g, '')).toBe('10000,00€');
     });
     it('0 → "0,00 €"', () => {
       expect(formatCurrency(0, 'EUR', 'fr').replace(/\s/g, '')).toBe('0,00€');
@@ -57,13 +57,30 @@ describe('formatCurrency — formatter central (audit normalisation devises)', (
     expect(formatCurrency(1_000, 'ZZZ', 'fr').replace(/\s/g, '')).toBe('1000ZZZ');
   });
 
-  it('code ISO undefined (devise non encore chargée) : aucun libellé fabriqué, juste le nombre', () => {
-    expect(formatCurrency(1_000, undefined, 'fr').replace(/\s/g, '')).toBe('1000');
+  it('code ISO undefined (association sans devise configurée) : devise par défaut XAF → « 1 000 FCFA »', () => {
+    expect(formatCurrency(1_000, undefined, 'fr').replace(/\s/g, '')).toBe('1000FCFA');
   });
 
-  it('formatage compact respecte toujours le libellé de la devise', () => {
-    expect(formatCurrency(1_500_000, 'XOF', 'fr', { compact: true })).toContain('FCFA');
-    expect(formatCurrency(1_500_000, 'EUR', 'fr', { compact: true })).toContain('€');
+  /** Mandat « Normalisation des montants » (2026-09-25) : valeur COMPLÈTE, séparateur de milliers = espace, jamais k / M / Md. */
+  it.each([
+    [0, '0 FCFA'],
+    [1_000, '1 000 FCFA'],
+    [10_000, '10 000 FCFA'],
+    [100_000, '100 000 FCFA'],
+    [720_000, '720 000 FCFA'],
+    [1_400_000, '1 400 000 FCFA'],
+    [24_500_000, '24 500 000 FCFA'],
+    [-850_000, '-850 000 FCFA'],
+  ])('%d XOF → « %s » (montant complet, jamais compact)', (amount, expected) => {
+    const output = formatCurrency(amount, 'XOF', 'fr');
+    // Intl fr-FR sépare les milliers par une espace fine insécable (U+202F) : normalisée ici en espace simple.
+    expect(output.replace(/\s/g, ' ').replace('−', '-')).toBe(expected);
+    expect(output).not.toMatch(/\d\s*(k|M|Md)\b/);
+  });
+
+  it('devise à décimales : précision conservée, aucune notation compacte', () => {
+    expect(formatCurrency(1_400_000.5, 'EUR', 'fr').replace(/\s/g, ' ')).toBe('1 400 000,50 €');
+    expect(formatCurrency(24_500_000, 'EUR', 'en').replace(/\s/g, ' ')).toBe('24 500 000,00 €'); // langue sans effet : format de l'association
   });
 });
 

@@ -37,7 +37,7 @@ describe('TenantBreadcrumb — tenant courant uniquement (mono-tenant, sans sél
   });
 
   it('tenant-scoped user (T-002) : étiquette statique seulement — pas de dropdown, recherche, ni ajout de tenant', async () => {
-    await renderTenantBreadcrumbAs({ id: 'U-004', name: 'Mamadou Sow', email: 'mamadou.sow@horizon.sn', tenantId: 'T-002', roleIds: ['role-manager'], scope: 'tenant' });
+    await renderTenantBreadcrumbAs({ id: 'U-004', name: 'Mamadou Sow', email: 'mamadou.sow@horizon.cm', tenantId: 'T-002', roleIds: ['role-manager'], scope: 'tenant' });
 
     expect(screen.getByText('Tontine Horizon')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -47,7 +47,7 @@ describe('TenantBreadcrumb — tenant courant uniquement (mono-tenant, sans sél
   });
 
   it('platform-scoped user (T-001) : ne voit que son propre tenant, même contrainte', async () => {
-    await renderTenantBreadcrumbAs({ id: 'U-001', name: 'Amadou Mbaye', email: 'amadou.mbaye@sutura.sn', tenantId: 'T-001', roleIds: ['role-admin'], scope: 'platform' });
+    await renderTenantBreadcrumbAs({ id: 'U-001', name: 'Amadou Mbaye', email: 'amadou.mbaye@sutura.cm', tenantId: 'T-001', roleIds: ['role-admin'], scope: 'platform' });
 
     expect(screen.getByText('Coopérative Sutura')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -58,7 +58,7 @@ describe('TenantBreadcrumb — tenant courant uniquement (mono-tenant, sans sél
   });
 
   it("n'affiche aucun chemin de navigation, quelle que soit la route affichée", async () => {
-    await renderTenantBreadcrumbAs({ id: 'U-001', name: 'Amadou Mbaye', email: 'amadou.mbaye@sutura.sn', tenantId: 'T-001', roleIds: ['role-admin'], scope: 'platform' }, '/finance/accounts');
+    await renderTenantBreadcrumbAs({ id: 'U-001', name: 'Amadou Mbaye', email: 'amadou.mbaye@sutura.cm', tenantId: 'T-001', roleIds: ['role-admin'], scope: 'platform' }, '/finance/cashboxes');
 
     expect(await screen.findByText('Coopérative Sutura')).toBeInTheDocument();
     expect(screen.queryByText(/Finances/)).not.toBeInTheDocument();

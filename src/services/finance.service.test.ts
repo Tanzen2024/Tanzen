@@ -1,66 +1,67 @@
-import { describe, it, expect } from 'vitest';
-import { financeService, ensureSystemCashbox, resolveSystemCashbox, systemCashboxMigrationConflicts, SYSTEM_CASHBOX_CODES } from './finance.service';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { financeService, ensureSystemCashbox, resolveSystemCashbox, systemCashboxMigrationConflicts, SYSTEM_CASHBOX_CODES, transactionBelongsToFiscalYear } from './finance.service';
 import { fiscalSessionService } from './fiscal-session.service';
+import { fiscalSessions } from '@/mocks/settings/fiscal-sessions';
 import { cashboxes, isSystemCashbox, normalizeCashboxLabel, type CashboxRecord } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
 
-describe('financeService — Accounts', () => {
+describe('financeService — Cashboxes', () => {
   it('ALLOW: listCashboxes returns only cashboxes of the requesting tenant', async () => {
     const result = await financeService.listCashboxes('T-001');
-    expect(result.every((account) => account.tenantId === 'T-001')).toBe(true);
+    expect(result.every((cashbox) => cashbox.tenantId === 'T-001')).toBe(true);
     expect(result.length).toBeGreaterThan(0);
   });
 
-  it('DENY: getCashbox returns null for an account of another tenant', async () => {
+  it('DENY: getCashbox returns null for an cashbox of another tenant', async () => {
     const [t001Cashboxes, t002Cashboxes] = await Promise.all([financeService.listCashboxes('T-001'), financeService.listCashboxes('T-002')]);
     expect(t002Cashboxes.length).toBeGreaterThan(0);
     const otherTenantCashboxId = t002Cashboxes[0].id;
     const result = await financeService.getCashbox('T-001', otherTenantCashboxId);
     expect(result).toBeNull();
-    expect(t001Cashboxes.some((account) => account.id === otherTenantCashboxId)).toBe(false);
+    expect(t001Cashboxes.some((cashbox) => cashbox.id === otherTenantCashboxId)).toBe(false);
   });
 
-  it('ALLOW: getCashbox returns the account when it belongs to the requesting tenant', async () => {
-    const [account] = await financeService.listCashboxes('T-001');
-    const result = await financeService.getCashbox('T-001', account.id);
-    expect(result?.id).toBe(account.id);
+  it('ALLOW: getCashbox returns the cashbox when it belongs to the requesting tenant', async () => {
+    const [cashbox] = await financeService.listCashboxes('T-001');
+    const result = await financeService.getCashbox('T-001', cashbox.id);
+    expect(result?.id).toBe(cashbox.id);
   });
 });
 
 describe('financeService — createCashbox (caisse)', () => {
-  it('ALLOW: creates a LIBRE account without an amount', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Epargne libre ${Date.now()}`, type: 'LIBRE', amount: null, description: 'Epargne volontaire des adhérents' });
-    expect(account).toBeTruthy();
-    expect(account?.type).toBe('LIBRE');
-    expect(account?.amount).toBeNull();
+  it('ALLOW: creates a LIBRE cashbox without an amount', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Epargne libre ${Date.now()}`, type: 'LIBRE', amount: null, description: 'Epargne volontaire des adhérents' });
+    expect(cashbox).toBeTruthy();
+    expect(cashbox?.type).toBe('LIBRE');
+    expect(cashbox?.amount).toBeNull();
   });
 
-  it('ALLOW: creates a TAUX_FIXE account with a fixed amount', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Inscription ${Date.now()}`, type: 'TAUX_FIXE', amount: 500, description: "Cotisation d'inscription" });
-    expect(account).toBeTruthy();
-    expect(account?.type).toBe('TAUX_FIXE');
-    expect(account?.amount).toBe(500);
+  it('ALLOW: creates a TAUX_FIXE cashbox with a fixed amount', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Inscription ${Date.now()}`, type: 'TAUX_FIXE', amount: 500, description: "Cotisation d'inscription" });
+    expect(cashbox).toBeTruthy();
+    expect(cashbox?.type).toBe('TAUX_FIXE');
+    expect(cashbox?.amount).toBe(500);
   });
 
-  it('DENY: rejects a TAUX_FIXE account without an amount', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Secours ${Date.now()}`, type: 'TAUX_FIXE', amount: null, description: '' });
-    expect(account).toBeNull();
+  it('DENY: rejects a TAUX_FIXE cashbox without an amount', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Secours ${Date.now()}`, type: 'TAUX_FIXE', amount: null, description: '' });
+    expect(cashbox).toBeNull();
   });
 
-  it('DENY: rejects a TAUX_FIXE account with a negative amount', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Négatif ${Date.now()}`, type: 'TAUX_FIXE', amount: -100, description: '' });
-    expect(account).toBeNull();
+  it('DENY: rejects a TAUX_FIXE cashbox with a negative amount', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Négatif ${Date.now()}`, type: 'TAUX_FIXE', amount: -100, description: '' });
+    expect(cashbox).toBeNull();
   });
 
-  it('DENY: rejects a TAUX_FIXE account with an amount of exactly 0 (must be strictly positive)', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Zéro ${Date.now()}`, type: 'TAUX_FIXE', amount: 0, description: '' });
-    expect(account).toBeNull();
+  it('DENY: rejects a TAUX_FIXE cashbox with an amount of exactly 0 (must be strictly positive)', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Zéro ${Date.now()}`, type: 'TAUX_FIXE', amount: 0, description: '' });
+    expect(cashbox).toBeNull();
   });
 
-  it('DENY: rejects an unknown account type', async () => {
+  it('DENY: rejects an unknown cashbox type', async () => {
     // @ts-expect-error — runtime guard test for a value TypeScript would otherwise reject at compile time.
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Inconnu ${Date.now()}`, type: 'ASSET', amount: null, description: '' });
-    expect(account).toBeNull();
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Inconnu ${Date.now()}`, type: 'ASSET', amount: null, description: '' });
+    expect(cashbox).toBeNull();
   });
 
   it('DENY: rejects a duplicate title within the same tenant', async () => {
@@ -80,17 +81,17 @@ describe('financeService — createCashbox (caisse)', () => {
   });
 
   it('ISOLATION: tenantId is always taken from the service parameter, never from the input body', async () => {
-    // CashboxCreateInput has no `tenantId` field at the type level — this proves the created account is scoped to the tenant passed explicitly.
-    const account = await financeService.createCashbox('T-002', 'Tontine Horizon', { title: `Scopé ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
-    expect(account?.tenantId).toBe('T-002');
-    expect(account?.tenantName).toBe('Tontine Horizon');
+    // CashboxCreateInput has no `tenantId` field at the type level — this proves the created cashbox is scoped to the tenant passed explicitly.
+    const cashbox = await financeService.createCashbox('T-002', 'Tontine Horizon', { title: `Scopé ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    expect(cashbox?.tenantId).toBe('T-002');
+    expect(cashbox?.tenantName).toBe('Tontine Horizon');
   });
 
   it('AUTO: cashboxNumber is always generated by the service, never supplied by the caller', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Auto n° ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
-    expect(account?.cashboxNumber).toBeTruthy();
-    expect(account?.status).toBe('active');
-    expect(account?.balance).toBe(0);
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Auto n° ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    expect(cashbox?.cashboxNumber).toBeTruthy();
+    expect(cashbox?.status).toBe('active');
+    expect(cashbox?.balance).toBe(0);
   });
 });
 
@@ -102,7 +103,7 @@ describe('financeService — updateCashbox', () => {
     expect(updated?.amount).toBe(1000);
   });
 
-  it('DENY: cannot update an account of another tenant', async () => {
+  it('DENY: cannot update an cashbox of another tenant', async () => {
     const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Isolé ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     const result = await financeService.updateCashbox('T-002', created!.id, { title: 'Piraté' });
     expect(result).toBeNull();
@@ -128,22 +129,40 @@ describe('financeService — updateCashbox', () => {
   });
 });
 
-describe('financeService — deleteCashbox', () => {
-  it('ALLOW: deletes an account with no linked transactions', async () => {
+describe('financeService — deleteCashbox (suppression = désactivation logique)', () => {
+  it('NON-DESTRUCTIF : une caisse sans mouvement n’est jamais retirée — elle passe inactive et reste en base', async () => {
     const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Jetable ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    const countBefore = cashboxes.length;
     const result = await financeService.deleteCashbox('T-001', created!.id);
-    expect(result?.deleted).toBe(true);
+    expect(result).toMatchObject({ ok: true, cashbox: { id: created!.id, status: 'inactive' } });
+    expect(cashboxes.length).toBe(countBefore);
     const after = await financeService.getCashbox('T-001', created!.id);
-    expect(after).toBeNull();
+    expect(after?.status).toBe('inactive');
   });
 
-  it('SAFE: deactivates instead of deleting an account with existing movements', async () => {
-    // AC-001 (CS-001-TRÉS) is referenced by seeded transactions (fromAccount/toAccount).
-    const result = await financeService.deleteCashbox('T-001', 'AC-001');
-    expect(result?.deleted).toBe(false);
-    expect(result?.deactivated).toBe(true);
-    const after = await financeService.getCashbox('T-001', 'AC-001');
-    expect(after?.status).toBe('inactive');
+  it('NON-DESTRUCTIF : une caisse avec mouvements passe inactive, ses transactions restent intactes', async () => {
+    // AC-012 (CS-001-CX-004, Transport) is referenced by seeded transactions (source/destination).
+    const cashbox = cashboxes.find((item) => item.id === 'AC-012')!;
+    const linked = () => transactions.filter((transaction) => transaction.source === cashbox.cashboxNumber || transaction.destination === cashbox.cashboxNumber).map((transaction) => transaction.id);
+    const before = linked();
+    expect(before.length).toBeGreaterThan(0);
+    const result = await financeService.deleteCashbox('T-001', 'AC-012');
+    expect(result).toMatchObject({ ok: true });
+    expect((await financeService.getCashbox('T-001', 'AC-012'))?.status).toBe('inactive');
+    expect(linked()).toEqual(before);
+    await financeService.reactivateCashbox('T-001', 'AC-012'); // remet la donnée partagée en état pour les autres tests
+  });
+
+  it('DENY : une caisse déjà inactive n’est pas « re-supprimée » (pas de no-op silencieux)', async () => {
+    const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Déjà inactive ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.deleteCashbox('T-001', created!.id);
+    expect(await financeService.deleteCashbox('T-001', created!.id)).toEqual({ ok: false, reason: 'invalidStatus' });
+  });
+
+  it('TENANT : impossible de supprimer la caisse d’un autre tenant', async () => {
+    const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Autre tenant ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    expect(await financeService.deleteCashbox('T-002', created!.id)).toBeNull();
+    expect((await financeService.getCashbox('T-001', created!.id))?.status).toBe('active');
   });
 });
 
@@ -154,7 +173,7 @@ describe('financeService — deleteCashbox', () => {
  * donnée financière, la réactivation n'est qu'un flip de statut.
  */
 describe('financeService — reactivateCashbox', () => {
-  it('ALLOW: reactivates an inactive account (AC-008, seeded inactive)', async () => {
+  it('ALLOW: reactivates an inactive cashbox (AC-008, seeded inactive)', async () => {
     const before = await financeService.getCashbox('T-004', 'AC-008');
     expect(before?.status).toBe('inactive');
     const result = await financeService.reactivateCashbox('T-004', 'AC-008');
@@ -163,21 +182,21 @@ describe('financeService — reactivateCashbox', () => {
     expect(after?.status).toBe('active');
   });
 
-  it('DENY: refuses an already-active account (no silent no-op)', async () => {
-    const [account] = await financeService.listCashboxes('T-002');
-    expect(account.status).toBe('active');
-    const result = await financeService.reactivateCashbox('T-002', account.id);
+  it('DENY: refuses an already-active cashbox (no silent no-op)', async () => {
+    const [cashbox] = await financeService.listCashboxes('T-002');
+    expect(cashbox.status).toBe('active');
+    const result = await financeService.reactivateCashbox('T-002', cashbox.id);
     expect(result).toBeNull(); // mockRequest coerces undefined -> null (see api-client.ts)
   });
 
-  it('DENY: refuses an account belonging to another tenant', async () => {
+  it('DENY: refuses an cashbox belonging to another tenant', async () => {
     const result = await financeService.reactivateCashbox('T-001', 'AC-008'); // AC-008 belongs to T-004
     expect(result).toBeNull();
   });
 });
 
-describe('financeService — account member assignment (adhésions à la caisse)', () => {
-  it('ALLOW: adds a single member to an account', async () => {
+describe('financeService — cashbox member assignment (adhésions à la caisse)', () => {
+  it('ALLOW: adds a single member to an cashbox', async () => {
     const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Caisse membre unique ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     const updated = await financeService.addCashboxMembers('T-001', created!.id, ['M-001']);
     expect(updated?.memberIds).toContain('M-001');
@@ -209,7 +228,7 @@ describe('financeService — account member assignment (adhésions à la caisse)
     expect(updated?.memberIds).toEqual(['M-001']);
   });
 
-  it('ISOLATION: cannot manage members of an account belonging to another tenant', async () => {
+  it('ISOLATION: cannot manage members of an cashbox belonging to another tenant', async () => {
     const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Caisse protégée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     const result = await financeService.addCashboxMembers('T-002', created!.id, ['M-002']);
     expect(result).toBeNull();
@@ -245,10 +264,10 @@ describe('financeService — account member assignment (adhésions à la caisse)
  */
 describe('financeService — CashboxMembership (adhésion datée)', () => {
   it('addCashboxMembers ouvre une adhésion datée (startDate = aujourd’hui, endDate null, status active)', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Adhésion ouverte ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
-    await financeService.addCashboxMembers('T-001', account!.id, ['M-001']);
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Adhésion ouverte ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addCashboxMembers('T-001', cashbox!.id, ['M-001']);
     const memberships = await financeService.listCashboxMemberships('T-001');
-    const created = memberships.find((m) => m.cashboxId === account!.id && m.memberId === 'M-001');
+    const created = memberships.find((m) => m.cashboxId === cashbox!.id && m.memberId === 'M-001');
     expect(created).toBeTruthy();
     expect(created!.endDate).toBeNull();
     expect(created!.status).toBe('active');
@@ -256,60 +275,60 @@ describe('financeService — CashboxMembership (adhésion datée)', () => {
   });
 
   it('removeCashboxMembers CLÔT l’adhésion (endDate + status ended), sans la supprimer', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Adhésion clôturée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
-    await financeService.addCashboxMembers('T-001', account!.id, ['M-001']);
-    await financeService.removeCashboxMembers('T-001', account!.id, ['M-001']);
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Adhésion clôturée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addCashboxMembers('T-001', cashbox!.id, ['M-001']);
+    await financeService.removeCashboxMembers('T-001', cashbox!.id, ['M-001']);
 
     const memberships = await financeService.listCashboxMemberships('T-001');
-    const closed = memberships.filter((m) => m.cashboxId === account!.id && m.memberId === 'M-001');
+    const closed = memberships.filter((m) => m.cashboxId === cashbox!.id && m.memberId === 'M-001');
     expect(closed).toHaveLength(1); // toujours présente
     expect(closed[0].endDate).toBe(new Date().toISOString().slice(0, 10));
     expect(closed[0].status).toBe('ended');
 
     // le cache Cashbox.memberIds ne reflète plus que les adhésions actives
-    const refreshed = await financeService.getCashbox('T-001', account!.id);
+    const refreshed = await financeService.getCashbox('T-001', cashbox!.id);
     expect(refreshed!.memberIds).toEqual([]);
   });
 
   it('ré-ajouter un membre dont l’adhésion était clôturée ouvre une NOUVELLE adhésion', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Ré-adhésion ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
-    await financeService.addCashboxMembers('T-001', account!.id, ['M-001']);
-    await financeService.removeCashboxMembers('T-001', account!.id, ['M-001']);
-    await financeService.addCashboxMembers('T-001', account!.id, ['M-001']);
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Ré-adhésion ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
+    await financeService.addCashboxMembers('T-001', cashbox!.id, ['M-001']);
+    await financeService.removeCashboxMembers('T-001', cashbox!.id, ['M-001']);
+    await financeService.addCashboxMembers('T-001', cashbox!.id, ['M-001']);
 
-    const memberships = (await financeService.listCashboxMemberships('T-001')).filter((m) => m.cashboxId === account!.id && m.memberId === 'M-001');
+    const memberships = (await financeService.listCashboxMemberships('T-001')).filter((m) => m.cashboxId === cashbox!.id && m.memberId === 'M-001');
     expect(memberships).toHaveLength(2);
     expect(memberships.filter((m) => m.endDate === null)).toHaveLength(1);
   });
 
-  it('SEED : Fatou (M-001) est adhérente active de Trésorerie, Épargne et Secours (AC-011, sans transaction)', async () => {
-    const [tresorerie, epargne, secours] = await Promise.all([
-      financeService.listCashboxMembers('T-001', 'AC-001'),
-      financeService.listCashboxMembers('T-001', 'AC-002'),
+  it('SEED : Fatou (M-001) est adhérente active de Transport, Épargne et Secours (AC-011, sans transaction à elle)', async () => {
+    const [transport, epargne, secours] = await Promise.all([
+      financeService.listCashboxMembers('T-001', 'AC-012'),
+      financeService.listCashboxMembers('T-001', 'AC-009'),
       financeService.listCashboxMembers('T-001', 'AC-011'),
     ]);
-    expect(tresorerie.map((m) => m.id)).toContain('M-001');
+    expect(transport.map((m) => m.id)).toContain('M-001');
     expect(epargne.map((m) => m.id)).toContain('M-001');
-    // Adhésion ≠ transaction : Secours n'a aucune écriture, Fatou y est pourtant adhérente.
+    // Adhésion ≠ transaction : Fatou n'a aucune écriture sur Secours, elle y est pourtant adhérente.
     expect(secours.map((m) => m.id)).toEqual(['M-001']);
   });
 
-  it('SEED : Cheikh (M-006), adhésion Épargne clôturée au 30/06/2026, n’apparaît plus dans les adhérents actifs d’Épargne', async () => {
-    const epargne = await financeService.listCashboxMembers('T-001', 'AC-002');
+  it('SEED : Cheikh (M-006), adhésion Épargne clôturée au 31/08/2026, n’apparaît plus dans les adhérents actifs d’Épargne', async () => {
+    const epargne = await financeService.listCashboxMembers('T-001', 'AC-009');
     expect(epargne.map((m) => m.id)).not.toContain('M-006');
-    // mais il reste adhérent actif de Trésorerie
-    const tresorerie = await financeService.listCashboxMembers('T-001', 'AC-001');
-    expect(tresorerie.map((m) => m.id)).toContain('M-006');
+    // mais il reste adhérent actif de Transport
+    const transport = await financeService.listCashboxMembers('T-001', 'AC-012');
+    expect(transport.map((m) => m.id)).toContain('M-006');
     // et l'adhésion clôturée reste tracée
     const memberships = await financeService.listCashboxMemberships('T-001');
-    const ended = memberships.find((m) => m.cashboxId === 'AC-002' && m.memberId === 'M-006');
-    expect(ended?.endDate).toBe('2026-06-30');
+    const ended = memberships.find((m) => m.cashboxId === 'AC-009' && m.memberId === 'M-006');
+    expect(ended?.endDate).toBe('2026-08-31');
     expect(ended?.status).toBe('ended');
   });
 
   it('SEED : Cashbox.memberIds (cache projeté) reflète les adhésions actives', async () => {
-    const account = await financeService.getCashbox('T-001', 'AC-001');
-    expect([...account!.memberIds].sort()).toEqual(['M-001', 'M-006']);
+    const cashbox = await financeService.getCashbox('T-001', 'AC-012');
+    expect([...cashbox!.memberIds].sort()).toEqual(['M-001', 'M-006']);
   });
 
   it('ISOLATION : listCashboxMemberships est tenant-scoped (T-001 ne voit pas les adhésions de T-002)', async () => {
@@ -320,14 +339,14 @@ describe('financeService — CashboxMembership (adhésion datée)', () => {
 });
 
 describe('financeService — createCashbox validation', () => {
-  it('DENY: rejects an account without a title', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: '   ', type: 'LIBRE', amount: null, description: '' });
-    expect(account).toBeNull();
+  it('DENY: rejects an cashbox without a title', async () => {
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: '   ', type: 'LIBRE', amount: null, description: '' });
+    expect(cashbox).toBeNull();
   });
 
   it('TAUX_FIXE still requires a positive amount', async () => {
-    const account = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Fixe sans montant ${Date.now()}`, type: 'TAUX_FIXE', amount: null, description: '' });
-    expect(account).toBeNull();
+    const cashbox = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Fixe sans montant ${Date.now()}`, type: 'TAUX_FIXE', amount: null, description: '' });
+    expect(cashbox).toBeNull();
   });
 
   it('updateCashbox changes the type without touching the rest', async () => {
@@ -352,7 +371,7 @@ describe('financeService — recordCashboxMovement', () => {
     expect(await financeService.recordCashboxMovement('T-001', created!.id, -100)).toBeNull();
   });
 
-  it('ISOLATION: cannot record a movement against an account of another tenant', async () => {
+  it('ISOLATION: cannot record a movement against an cashbox of another tenant', async () => {
     const created = await financeService.createCashbox('T-001', 'Coopérative Sutura', { title: `Isolée mouvement ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     const result = await financeService.recordCashboxMovement('T-002', created!.id, 10_000);
     expect(result).toBeNull();
@@ -360,7 +379,7 @@ describe('financeService — recordCashboxMovement', () => {
     expect(after?.balance).toBe(created!.balance);
   });
 
-  it('DENY: recordCashboxMovement returns null for a non-existent account', async () => {
+  it('DENY: recordCashboxMovement returns null for a non-existent cashbox', async () => {
     expect(await financeService.recordCashboxMovement('T-001', 'AC-DOES-NOT-EXIST', 1000)).toBeNull();
   });
 });
@@ -374,10 +393,10 @@ describe('financeService — Transactions', () => {
     expect(t001.some((transaction) => t002Ids.has(transaction.id))).toBe(false);
   });
 
-  it('ALLOW/DENY: listTransactionsInDateRange is scoped to the requesting tenant (mandat « vue consolidée Finance → Transactions »)', async () => {
+  it('ALLOW/DENY: listTransactionsForFiscalYear is scoped to tenant + fiscal year (Tenant A + 2026 never sees Tenant B)', async () => {
     const [t001, t002] = await Promise.all([
-      financeService.listTransactionsInDateRange('T-001', '2026-01-01', '2026-12-31'),
-      financeService.listTransactionsInDateRange('T-002', '2026-01-01', '2026-12-31'),
+      financeService.listTransactionsForFiscalYear('T-001', 'FY-T001-2026'),
+      financeService.listTransactionsForFiscalYear('T-002', 'FY-T002-2026'),
     ]);
     expect(t001.length).toBeGreaterThan(0);
     expect(t001.every((transaction) => transaction.tenantId === 'T-001')).toBe(true);
@@ -385,19 +404,31 @@ describe('financeService — Transactions', () => {
     expect(t001.some((transaction) => t002Ids.has(transaction.id))).toBe(false);
   });
 
-  it('ALLOW: listTransactionsInDateRange only returns transactions within the inclusive date range (fiscal year scoping)', async () => {
-    const result = await financeService.listTransactionsInDateRange('T-001', '2026-08-01', '2026-08-31');
-    expect(result.length).toBeGreaterThan(0);
-    expect(result.every((transaction) => transaction.date >= '2026-08-01' && transaction.date <= '2026-08-31')).toBe(true);
+  it('DENY: a tenant cannot read another tenant’s fiscal year through listTransactionsForFiscalYear (empty, never the other tenant’s data)', async () => {
+    expect(await financeService.listTransactionsForFiscalYear('T-001', 'FY-T002-2026')).toEqual([]);
   });
 
-  it('ALLOW: listTransactionsInDateRange returns an empty list for a fiscal year with no transactions', async () => {
-    const result = await financeService.listTransactionsInDateRange('T-001', '2025-01-01', '2025-12-31');
-    expect(result).toEqual([]);
+  it('ISOLATION: Tenant A + 2025 never sees Tenant A + 2026 transactions (and vice versa)', async () => {
+    const [y2025, y2026] = await Promise.all([
+      financeService.listTransactionsForFiscalYear('T-001', 'FY-T001-2025'),
+      financeService.listTransactionsForFiscalYear('T-001', 'FY-T001-2026'),
+    ]);
+    expect(y2025.every((transaction) => transaction.date >= '2025-01-01' && transaction.date <= '2025-12-31')).toBe(true);
+    expect(y2026.every((transaction) => transaction.fiscalYearId ? transaction.fiscalYearId === 'FY-T001-2026' : transaction.date.startsWith('2026'))).toBe(true);
+    const ids2025 = new Set(y2025.map((transaction) => transaction.id));
+    expect(y2026.some((transaction) => ids2025.has(transaction.id))).toBe(false);
+  });
+
+  it('transactionBelongsToFiscalYear: explicit fiscalYearId wins, otherwise the fiscal year whose period contains the date', () => {
+    const fy2026 = { id: 'FY-X-2026', tenantId: 'T-X', startDate: '2026-01-01', endDate: '2026-12-31' };
+    expect(transactionBelongsToFiscalYear({ tenantId: 'T-X', date: '2026-05-01' }, fy2026)).toBe(true);
+    expect(transactionBelongsToFiscalYear({ tenantId: 'T-X', date: '2025-05-01' }, fy2026)).toBe(false);
+    expect(transactionBelongsToFiscalYear({ tenantId: 'T-X', date: '2026-05-01', fiscalYearId: 'FY-X-2025' }, fy2026)).toBe(false);
+    expect(transactionBelongsToFiscalYear({ tenantId: 'T-Y', date: '2026-05-01' }, fy2026)).toBe(false);
   });
 
   it('ALLOW: transactions with a memberId resolve to a real member of the same tenant, transactions with no counterpart member have no memberId', async () => {
-    const t001 = await financeService.listTransactionsInDateRange('T-001', '2026-01-01', '2026-12-31');
+    const t001 = await financeService.listTransactionsForFiscalYear('T-001', 'FY-T001-2026');
     const withMember = t001.filter((transaction) => transaction.memberId);
     const withoutMember = t001.filter((transaction) => !transaction.memberId);
     expect(withMember.length).toBeGreaterThan(0);
@@ -407,7 +438,7 @@ describe('financeService — Transactions', () => {
   });
 
   it('ALLOW: the same member appearing on multiple transactions is trivially deduplicated by building a Set of memberId', async () => {
-    const t001 = await financeService.listTransactionsInDateRange('T-001', '2026-01-01', '2026-12-31');
+    const t001 = await financeService.listTransactionsForFiscalYear('T-001', 'FY-T001-2026');
     const memberIds = new Set(t001.flatMap((transaction) => (transaction.memberId ? [transaction.memberId] : [])));
     // Fatou Ndiaye (M-001) a 3 transactions dans le jeu de données seed T-001 — un seul id dans le Set malgré les doublons.
     const fatouCount = t001.filter((transaction) => transaction.memberId === 'M-001').length;
@@ -420,7 +451,7 @@ describe('financeService — Transactions', () => {
   // l'unique point d'écriture dans le journal.
   it('ALLOW: createTransaction appends to the tenant journal with a system timestamp and derived cashboxes', async () => {
     const created = await financeService.createTransaction('T-001', {
-      cashboxNumber: 'CS-001-ÉPG', memberId: 'M-001', memberName: 'Fatou Ndiaye',
+      cashboxNumber: 'CS-001-CX-001', memberId: 'M-001', memberName: 'Fatou Ndiaye',
       category: 'EPARGNE', type: 'credit', amount: 25_000, description: 'Épargne test',
     });
     expect(created).toBeDefined();
@@ -430,19 +461,19 @@ describe('financeService — Transactions', () => {
     expect(created!.date).toBe(created!.recordedAt!.slice(0, 10));
     expect(created!.status).toBe('completed');
     // credit → les fonds vont vers le compte
-    expect(created!.toAccount).toBe('CS-001-ÉPG');
-    expect(created!.fromAccount).toBe('Fatou Ndiaye');
+    expect(created!.destination).toBe('CS-001-CX-001');
+    expect(created!.source).toBe('Fatou Ndiaye');
     const journal = await financeService.listTransactions('T-001');
     expect(journal.some((transaction) => transaction.id === created!.id)).toBe(true);
   });
 
-  it('DENY: createTransaction rejects a missing account or a non-positive amount', async () => {
+  it('DENY: createTransaction rejects a missing cashbox or a non-positive amount', async () => {
     expect(await financeService.createTransaction('T-001', { cashboxNumber: '', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 1000, description: '' })).toBeNull();
-    expect(await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-COUR', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 0, description: '' })).toBeNull();
+    expect(await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-CX-004', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 0, description: '' })).toBeNull();
   });
 
   it('ALLOW/DENY: cancelTransaction cancels a completed transaction once, then refuses (append-only journal)', async () => {
-    const created = await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-COUR', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 5000, description: 'À annuler' });
+    const created = await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-CX-004', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 5000, description: 'À annuler' });
     const cancelled = await financeService.cancelTransaction('T-001', created!.id);
     expect(cancelled!.status).toBe('cancelled');
     expect(await financeService.cancelTransaction('T-001', created!.id)).toBeNull();
@@ -451,7 +482,7 @@ describe('financeService — Transactions', () => {
   });
 
   it('DENY: updateTransaction refuses to modify a cancelled transaction', async () => {
-    const created = await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-COUR', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 7000, description: 'x' });
+    const created = await financeService.createTransaction('T-001', { cashboxNumber: 'CS-001-CX-004', category: 'AUTRES', subcategory: 'FRAIS', type: 'debit', amount: 7000, description: 'x' });
     await financeService.cancelTransaction('T-001', created!.id);
     expect(await financeService.updateTransaction('T-001', created!.id, { amount: 8000 })).toBeNull();
   });
@@ -463,7 +494,7 @@ describe('financeService — Transactions', () => {
  * renseignée uniquement pour AUTRES. Toutes les validations sont côté service.
  */
 describe('financeService — createTransaction : classification (mandat §26)', () => {
-  const base = { cashboxNumber: 'CS-001-COUR', type: 'credit', amount: 10_000, description: 'test' } as const;
+  const base = { cashboxNumber: 'CS-001-CX-004', type: 'credit', amount: 10_000, description: 'test' } as const;
 
   it('§26.1 : une transaction ÉPARGNE (sans sous-catégorie) est créée', async () => {
     const created = await financeService.createTransaction('T-001', { ...base, category: 'EPARGNE' });
@@ -471,16 +502,20 @@ describe('financeService — createTransaction : classification (mandat §26)', 
     expect(created?.subcategory).toBeUndefined();
   });
 
-  it('§26.2 : une transaction PRÊT (sans sous-catégorie) est créée', async () => {
-    const created = await financeService.createTransaction('T-001', { ...base, category: 'PRET', type: 'debit' });
-    expect(created?.category).toBe('PRET');
-    expect(created?.subcategory).toBeUndefined();
+  // Mandat 2026-09-25 : PRÊT / REMBOURSEMENT = sous-catégories d'AUTRES.
+  it('§26.2 : une transaction PRÊT est créée en AUTRES / PRET', async () => {
+    const created = await financeService.createTransaction('T-001', { ...base, category: 'AUTRES', subcategory: 'PRET', type: 'debit' });
+    expect(created).toMatchObject({ category: 'AUTRES', subcategory: 'PRET', type: 'debit' });
   });
 
-  it('§26.3 : une transaction REMBOURSEMENT (sans sous-catégorie) est créée', async () => {
-    const created = await financeService.createTransaction('T-001', { ...base, category: 'REMBOURSEMENT' });
-    expect(created?.category).toBe('REMBOURSEMENT');
-    expect(created?.subcategory).toBeUndefined();
+  it('§26.3 : une transaction REMBOURSEMENT est créée en AUTRES / REMBOURSEMENT', async () => {
+    const created = await financeService.createTransaction('T-001', { ...base, category: 'AUTRES', subcategory: 'REMBOURSEMENT' });
+    expect(created).toMatchObject({ category: 'AUTRES', subcategory: 'REMBOURSEMENT', type: 'credit' });
+  });
+
+  it('§26.3 bis : l’ancienne catégorie PRET / REMBOURSEMENT est refusée', async () => {
+    expect(await financeService.createTransaction('T-001', { ...base, category: 'PRET' as never, type: 'debit' })).toBeNull();
+    expect(await financeService.createTransaction('T-001', { ...base, category: 'REMBOURSEMENT' as never })).toBeNull();
   });
 
   it('§26.4 : une transaction AUTRES avec sous-catégorie valide est créée et persiste la sous-catégorie', async () => {
@@ -529,7 +564,7 @@ describe('financeService — createTransaction : classification (mandat §26)', 
     expect(updated?.category).toBe('AUTRES');
     expect(updated?.subcategory).toBe('CORRECTION');
     // Retour vers une catégorie directe → la sous-catégorie est effacée.
-    const back = await financeService.updateTransaction('T-001', created!.id, { category: 'REMBOURSEMENT' });
+    const back = await financeService.updateTransaction('T-001', created!.id, { category: 'EPARGNE', type: 'credit' });
     expect(back?.subcategory).toBeUndefined();
   });
 });
@@ -587,10 +622,15 @@ describe('financeService — Distributions', () => {
 });
 
 describe('financeService — createTransaction × séance d\'exercice fiscal (reconstruction « Exercices fiscaux / Séances »)', () => {
-  const EPARGNE = { cashboxNumber: 'CS-001-ÉPG', category: 'EPARGNE' as const, type: 'credit' as const, amount: 25_000, description: 'Épargne test séance' };
+  // Séances créées après le seed FS-001 (14/07) ; ordre chronologique strict → seed des séances restauré à chaque cas.
+  const SESSIONS_SEED = structuredClone(fiscalSessions);
+  const restoreSessions = () => { fiscalSessions.splice(0, fiscalSessions.length, ...structuredClone(SESSIONS_SEED)); };
+  beforeEach(restoreSessions);
+  afterEach(restoreSessions);
+  const EPARGNE = { cashboxNumber: 'CS-001-CX-001', category: 'EPARGNE' as const, type: 'credit' as const, amount: 25_000, description: 'Épargne test séance' };
 
   it('la transaction porte sessionId, et transaction_at (recordedAt) est généré côté service — la date de la séance se lit via FiscalSession, jamais dupliquée sur la transaction', async () => {
-    const session = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-01-13');
+    const session = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-08-11');
     const before = Date.now();
     const transaction = await financeService.createTransaction('T-001', { ...EPARGNE, sessionId: session!.id, fiscalYearId: 'FY-T001-2026' });
     expect(transaction?.sessionId).toBe(session!.id);
@@ -612,16 +652,32 @@ describe('financeService — createTransaction × séance d\'exercice fiscal (re
     expect(transaction).toBeNull();
   });
 
-  it('une séance sans fiscalYearId associé est rejetée (aucune date inventée)', async () => {
-    const session = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-03-10');
+  it('sans fiscalYearId fourni, la transaction est rattachée à l’exercice du tenant qui contient sa date — et sa séance doit appartenir à CET exercice', async () => {
+    const session = await fiscalSessionService.createSession('T-001', 'FY-T001-2026', '2026-08-18');
     const transaction = await financeService.createTransaction('T-001', { ...EPARGNE, sessionId: session!.id });
-    expect(transaction).toBeNull();
+    expect(transaction?.fiscalYearId).toBe('FY-T001-2026');
+    expect(transaction?.sessionId).toBe(session!.id);
   });
 
-  it('une transaction sans séance reste possible (champ optionnel)', async () => {
+  it('une transaction sans séance reste possible (champ optionnel) et est tout de même rattachée à son exercice', async () => {
     const transaction = await financeService.createTransaction('T-001', EPARGNE);
     expect(transaction?.sessionId).toBeUndefined();
     expect(transaction?.recordedAt).toBeTruthy();
+    expect(transaction?.fiscalYearId).toBe('FY-T001-2026');
+  });
+
+  it('DENY: exercice incohérent — un exercice qui ne contient pas la date de la transaction (2027 à venir) est refusé', async () => {
+    expect(await financeService.createTransaction('T-001', { ...EPARGNE, fiscalYearId: 'FY-T001-2027' })).toBeNull();
+  });
+
+  it('DENY: exercice clôturé — aucune transaction ne peut y être rattachée', async () => {
+    expect(await financeService.createTransaction('T-001', { ...EPARGNE, fiscalYearId: 'FY-T001-2025' })).toBeNull();
+  });
+
+  it('DENY: tenant incohérent — exercice d’un autre tenant, caisse d’un autre tenant, adhérent d’un autre tenant', async () => {
+    expect(await financeService.createTransaction('T-001', { ...EPARGNE, fiscalYearId: 'FY-T002-2026' })).toBeNull();
+    expect(await financeService.createTransaction('T-001', { ...EPARGNE, cashboxNumber: 'TH-002-ÉPG' })).toBeNull();
+    expect(await financeService.createTransaction('T-001', { ...EPARGNE, memberId: 'M-002', memberName: 'Mamadou Sow' })).toBeNull();
   });
 });
 
@@ -670,26 +726,23 @@ describe('financeService — unicité du libellé de caisse (règle métier norm
     expect(alphaAfter?.title).toBe(`Caisse Alpha ${stamp}`);
   });
 
-  it('ANOMALIE DE DONNÉES CONNUE (seed) : AC-002 « Épargne » et AC-009 « Epargne » (T-001) sont un conflit selon la règle — signalé, JAMAIS corrigé/fusionné automatiquement', () => {
-    const ac002 = cashboxes.find((account) => account.id === 'AC-002');
-    const ac009 = cashboxes.find((account) => account.id === 'AC-009');
-    expect(ac002?.tenantId).toBe('T-001');
+  it('ANCIENNE ANOMALIE (seed) : deux caisses « Épargne » dans T-001 — résolue : AC-002 retirée du jeu de démonstration, seule AC-009 (SAVINGS) porte ce libellé et le report', () => {
+    const ac009 = cashboxes.find((cashbox) => cashbox.id === 'AC-009');
+    expect(cashboxes.some((cashbox) => cashbox.id === 'AC-002')).toBe(false);
     expect(ac009?.tenantId).toBe('T-001');
-    // Libellés distincts à l'affichage, mais équivalents après normalisation → conflit.
-    expect(ac002?.title).not.toBe(ac009?.title);
-    expect(normalizeCashboxLabel(ac002!.title)).toBe(normalizeCashboxLabel(ac009!.title));
-    // Le seed n'est pas réécrit : correction métier humaine requise (renommer AC-009,
-    // ex. « Épargne volontaire », ou fusionner les deux caisses si doublon réel).
+    expect(ac009?.systemCode).toBe('SAVINGS');
+    expect(cashboxes.filter((cashbox) => cashbox.tenantId === 'T-001' && normalizeCashboxLabel(cashbox.title) === normalizeCashboxLabel('Épargne'))).toHaveLength(1);
+    expect(ac009?.openingBalance).toBe(8_650_000);
   });
 });
 
 describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robustifier Achat tontine »)', () => {
   it('CRÉATION : chaque tenant connu possède déjà son compte système TONTINE_PURCHASE (couverture immédiate, pas seulement T-001/T-002)', () => {
     for (const tenantId of ['T-001', 'T-002', 'T-003', 'T-004', 'T-005']) {
-      const account = resolveSystemCashbox(tenantId, 'TONTINE_PURCHASE');
-      expect(account.tenantId).toBe(tenantId);
-      expect(account.systemCode).toBe('TONTINE_PURCHASE');
-      expect(isSystemCashbox(account)).toBe(true);
+      const cashbox = resolveSystemCashbox(tenantId, 'TONTINE_PURCHASE');
+      expect(cashbox.tenantId).toBe(tenantId);
+      expect(cashbox.systemCode).toBe('TONTINE_PURCHASE');
+      expect(isSystemCashbox(cashbox)).toBe(true);
     }
   });
 
@@ -699,7 +752,7 @@ describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robus
     const third = resolveSystemCashbox('T-003', 'TONTINE_PURCHASE');
     expect(second.id).toBe(first.id);
     expect(third.id).toBe(first.id);
-    expect(cashboxes.filter((account) => account.tenantId === 'T-003' && account.systemCode === 'TONTINE_PURCHASE')).toHaveLength(1);
+    expect(cashboxes.filter((cashbox) => cashbox.tenantId === 'T-003' && cashbox.systemCode === 'TONTINE_PURCHASE')).toHaveLength(1);
   });
 
   it('MIGRATION : les caisses historiques AC-015 (T-001) / AC-016 (T-002), nommées « Achat tontine » avant ce chantier, ont été ADOPTÉES par systemCode — jamais dupliquées', () => {
@@ -708,13 +761,13 @@ describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robus
   });
 
   it('IDENTIFICATION TECHNIQUE : la résolution repose sur systemCode, jamais sur le libellé — un libellé incohérent (hors API, ex. corruption) ne casse pas la résolution', () => {
-    const account = resolveSystemCashbox('T-003', 'TONTINE_PURCHASE');
-    const originalTitle = account.title;
-    account.title = 'Libellé incohérent (jamais atteignable via updateCashbox, qui protège ce compte)';
+    const cashbox = resolveSystemCashbox('T-003', 'TONTINE_PURCHASE');
+    const originalTitle = cashbox.title;
+    cashbox.title = 'Libellé incohérent (jamais atteignable via updateCashbox, qui protège ce compte)';
     try {
-      expect(resolveSystemCashbox('T-003', 'TONTINE_PURCHASE').id).toBe(account.id);
+      expect(resolveSystemCashbox('T-003', 'TONTINE_PURCHASE').id).toBe(cashbox.id);
     } finally {
-      account.title = originalTitle;
+      cashbox.title = originalTitle;
     }
   });
 
@@ -739,7 +792,7 @@ describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robus
       expect(systemCashboxMigrationConflicts.at(-1)).toMatchObject({ tenantId: conflictTenantId, systemCode: 'TONTINE_PURCHASE', candidateCashboxIds: [dup1.id, dup2.id] });
     } finally {
       for (const id of [dup1.id, dup2.id, created?.id]) {
-        const index = cashboxes.findIndex((account) => account.id === id);
+        const index = cashboxes.findIndex((cashbox) => cashbox.id === id);
         if (index >= 0) cashboxes.splice(index, 1);
       }
       systemCashboxMigrationConflicts.length = conflictsBefore;
@@ -747,19 +800,19 @@ describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robus
   });
 
   it('PROTECTION RENOMMAGE : updateCashbox refuse un renommage RÉEL du compte système, mais autorise un ré-enregistrement du même libellé (mandat §10/§26 : ne pas casser l’API pour les comptes ordinaires)', async () => {
-    const account = resolveSystemCashbox('T-003', 'TONTINE_PURCHASE');
-    const refused = await financeService.updateCashbox('T-003', account.id, { title: 'Caisse générale', type: 'LIBRE', amount: null, description: account.description });
+    const cashbox = resolveSystemCashbox('T-003', 'TONTINE_PURCHASE');
+    const refused = await financeService.updateCashbox('T-003', cashbox.id, { title: 'Caisse générale', type: 'LIBRE', amount: null, description: cashbox.description });
     expect(refused).toBeNull();
-    expect(cashboxes.find((item) => item.id === account.id)?.title).toBe('Achat tontine');
-    const allowed = await financeService.updateCashbox('T-003', account.id, { title: account.title, type: 'LIBRE', amount: null, description: `Description mise à jour ${Date.now()}` });
+    expect(cashboxes.find((item) => item.id === cashbox.id)?.title).toBe('Achat tontine');
+    const allowed = await financeService.updateCashbox('T-003', cashbox.id, { title: cashbox.title, type: 'LIBRE', amount: null, description: `Description mise à jour ${Date.now()}` });
     expect(allowed).toBeTruthy(); // même libellé → jamais un renommage réel, jamais bloqué inutilement
   });
 
   it('PROTECTION SUPPRESSION/DÉSACTIVATION : deleteCashbox refuse explicitement pour un compte système — jamais un succès silencieux, jamais désactivé', async () => {
-    const account = resolveSystemCashbox('T-004', 'TONTINE_PURCHASE');
-    const result = await financeService.deleteCashbox('T-004', account.id);
-    expect(result).toMatchObject({ deleted: false, deactivated: false, systemProtected: true });
-    const stillThere = cashboxes.find((item) => item.id === account.id);
+    const cashbox = resolveSystemCashbox('T-004', 'TONTINE_PURCHASE');
+    const result = await financeService.deleteCashbox('T-004', cashbox.id);
+    expect(result).toEqual({ ok: false, reason: 'systemProtected' });
+    const stillThere = cashboxes.find((item) => item.id === cashbox.id);
     expect(stillThere).toBeTruthy();
     expect(stillThere?.status).toBe('active');
   });
@@ -770,7 +823,7 @@ describe('financeService — Comptes système (TONTINE_PURCHASE, mandat « robus
     const renamed = await financeService.updateCashbox('T-001', created!.id, { title: `Caisse renommée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     expect(renamed).toBeTruthy();
     const deleted = await financeService.deleteCashbox('T-001', created!.id);
-    expect(deleted).toMatchObject({ deleted: true, deactivated: false });
+    expect(deleted).toMatchObject({ ok: true, cashbox: { status: 'inactive' } });
   });
 });
 
@@ -778,10 +831,10 @@ describe('financeService — Comptes système, extension « centre financier » 
   it('LES 4 CODES SONT RECONNUS : chaque tenant connu possède les 4 caisses système (TONTINE_PURCHASE, SAVINGS, REGISTRATION, EMERGENCY_FUND)', () => {
     for (const tenantId of ['T-001', 'T-002', 'T-003', 'T-004', 'T-005']) {
       for (const code of SYSTEM_CASHBOX_CODES) {
-        const account = resolveSystemCashbox(tenantId, code);
-        expect(account.tenantId).toBe(tenantId);
-        expect(account.systemCode).toBe(code);
-        expect(isSystemCashbox(account)).toBe(true);
+        const cashbox = resolveSystemCashbox(tenantId, code);
+        expect(cashbox.tenantId).toBe(tenantId);
+        expect(cashbox.systemCode).toBe(code);
+        expect(isSystemCashbox(cashbox)).toBe(true);
       }
     }
   });
@@ -796,15 +849,15 @@ describe('financeService — Comptes système, extension « centre financier » 
     expect(resolveSystemCashbox('T-001', 'REGISTRATION').id).toBe('AC-010');
     expect(resolveSystemCashbox('T-001', 'EMERGENCY_FUND').id).toBe('AC-011');
     for (const code of ['SAVINGS', 'REGISTRATION', 'EMERGENCY_FUND'] as const) {
-      expect(cashboxes.filter((account) => account.tenantId === 'T-001' && account.systemCode === code)).toHaveLength(1);
+      expect(cashboxes.filter((cashbox) => cashbox.tenantId === 'T-001' && cashbox.systemCode === code)).toHaveLength(1);
     }
   });
 
   it('CRÉATION POUR LES AUTRES TENANTS : un tenant sans caisse « Épargne »/« Inscription »/« Secours » préexistante en obtient une, propre à lui, jamais un doublon', () => {
     for (const code of ['SAVINGS', 'REGISTRATION', 'EMERGENCY_FUND'] as const) {
-      const account = resolveSystemCashbox('T-003', code);
-      expect(account.tenantId).toBe('T-003');
-      expect(account.systemCode).toBe(code);
+      const cashbox = resolveSystemCashbox('T-003', code);
+      expect(cashbox.tenantId).toBe('T-003');
+      expect(cashbox.systemCode).toBe(code);
       expect(cashboxes.filter((item) => item.tenantId === 'T-003' && item.systemCode === code)).toHaveLength(1);
     }
   });
@@ -816,7 +869,7 @@ describe('financeService — Comptes système, extension « centre financier » 
       const third = resolveSystemCashbox('T-004', code);
       expect(second.id).toBe(first.id);
       expect(third.id).toBe(first.id);
-      expect(cashboxes.filter((account) => account.tenantId === 'T-004' && account.systemCode === code)).toHaveLength(1);
+      expect(cashboxes.filter((cashbox) => cashbox.tenantId === 'T-004' && cashbox.systemCode === code)).toHaveLength(1);
     }
   });
 
@@ -830,12 +883,12 @@ describe('financeService — Comptes système, extension « centre financier » 
   it.each(['SAVINGS', 'REGISTRATION', 'EMERGENCY_FUND'] as const)(
     'PROTECTION RENOMMAGE (%s) : updateCashbox refuse un renommage réel, autorise un ré-enregistrement du même libellé',
     async (code) => {
-      const account = resolveSystemCashbox('T-005', code);
-      const originalTitle = account.title;
-      const refused = await financeService.updateCashbox('T-005', account.id, { title: 'Caisse renommée arbitrairement', type: 'LIBRE', amount: null, description: account.description });
+      const cashbox = resolveSystemCashbox('T-005', code);
+      const originalTitle = cashbox.title;
+      const refused = await financeService.updateCashbox('T-005', cashbox.id, { title: 'Caisse renommée arbitrairement', type: 'LIBRE', amount: null, description: cashbox.description });
       expect(refused).toBeNull();
-      expect(cashboxes.find((item) => item.id === account.id)?.title).toBe(originalTitle);
-      const allowed = await financeService.updateCashbox('T-005', account.id, { title: originalTitle, type: account.type, amount: account.amount, description: `Description mise à jour ${Date.now()}` });
+      expect(cashboxes.find((item) => item.id === cashbox.id)?.title).toBe(originalTitle);
+      const allowed = await financeService.updateCashbox('T-005', cashbox.id, { title: originalTitle, type: cashbox.type, amount: cashbox.amount, description: `Description mise à jour ${Date.now()}` });
       expect(allowed).toBeTruthy();
     },
   );
@@ -843,10 +896,10 @@ describe('financeService — Comptes système, extension « centre financier » 
   it.each(['SAVINGS', 'REGISTRATION', 'EMERGENCY_FUND'] as const)(
     'PROTECTION SUPPRESSION/DÉSACTIVATION (%s) : deleteCashbox refuse explicitement, jamais un succès silencieux',
     async (code) => {
-      const account = resolveSystemCashbox('T-004', code);
-      const result = await financeService.deleteCashbox('T-004', account.id);
-      expect(result).toMatchObject({ deleted: false, deactivated: false, systemProtected: true });
-      const stillThere = cashboxes.find((item) => item.id === account.id);
+      const cashbox = resolveSystemCashbox('T-004', code);
+      const result = await financeService.deleteCashbox('T-004', cashbox.id);
+      expect(result).toEqual({ ok: false, reason: 'systemProtected' });
+      const stillThere = cashboxes.find((item) => item.id === cashbox.id);
       expect(stillThere).toBeTruthy();
       expect(stillThere?.status).toBe('active');
     },
@@ -858,13 +911,13 @@ describe('financeService — Comptes système, extension « centre financier » 
     const renamed = await financeService.updateCashbox('T-002', created!.id, { title: `Caisse renommée ${Date.now()}`, type: 'LIBRE', amount: null, description: '' });
     expect(renamed).toBeTruthy();
     const deleted = await financeService.deleteCashbox('T-002', created!.id);
-    expect(deleted).toMatchObject({ deleted: true, deactivated: false });
+    expect(deleted).toMatchObject({ ok: true, cashbox: { status: 'inactive' } });
   });
 
   it('TRANSACTIONS EXISTANTES INCHANGÉES : le journal seedé n’est pas altéré par l’extension des caisses système', () => {
     const tr001 = transactions.find((transaction) => transaction.id === 'TR-001');
-    expect(tr001).toMatchObject({ amount: 50_000, category: 'EPARGNE', toAccount: 'CS-001-ÉPG' });
+    expect(tr001).toMatchObject({ amount: 50_000, category: 'EPARGNE', destination: 'CS-001-CX-001' });
     const tr010 = transactions.find((transaction) => transaction.id === 'TR-010');
-    expect(tr010).toMatchObject({ amount: 500_000, category: 'AUTRES', subcategory: 'TRANSFERT', fromAccount: 'CS-001-TRÉS', toAccount: 'CS-001-COUR' });
+    expect(tr010).toMatchObject({ amount: 5_000, category: 'AUTRES', subcategory: 'COTISATION', source: 'Cheikh Diop', destination: 'CS-001-CX-004' });
   });
 });

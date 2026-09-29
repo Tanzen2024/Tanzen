@@ -1,11 +1,11 @@
 /**
- * SÉANCE d'un exercice fiscal — reconstruction complète du sous-module
- * « Exercices fiscaux / Séances », remplace intégralement l'ancien mécanisme
- * « Meeting » (dates dérivées, virtuelles, jamais persistées). Une
- * `FiscalSession` est une entité RÉELLEMENT PERSISTÉE, créée un acte manuel à
+ * SÉANCE d'un exercice fiscal — contexte opérationnel de l'exercice (jamais
+ * une caisse, un prêt ni une transaction). Une `FiscalSession` est une entité RÉELLEMENT PERSISTÉE, créée un acte manuel à
  * la fois (`fiscal-session.service.ts`, `createSession`) — exactement le même
  * principe que `TontineOccurrence` (« Tour ») pour les Tontines : jamais de
- * génération en masse, jamais de précréation automatique.
+ * génération en masse, jamais de précréation automatique. AUCUN statut
+ * persistant : « À venir / Aujourd'hui / Passée » est calculé à l'affichage
+ * depuis `date` (`sessionTiming`, `fiscal-session.service.ts`).
  */
 export type FiscalSession = {
   id: string;

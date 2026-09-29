@@ -2,7 +2,9 @@ import { cashboxEntryEffect, cashboxLedgerEntries } from '@/mocks/finance/cashbo
 import { isMemberOfCashboxAsOf } from '@/mocks/finance/cashbox-memberships';
 import type { Loan } from '@/mocks/finance/loans';
 import type { Repayment } from '@/mocks/finance/repayments';
+import { isLoanDisbursement, isLoanRepayment } from '@/mocks/finance/transaction-classification';
 import { referenceDate } from './reference-date';
+import { loanDebtAt } from './interest-distribution';
 import { cashboxesOfAsOf, scopeKey } from './scope';
 import type { FinanceCtx, FinancialScope, MemberCashboxLine, MemberCreditSummary, MemberFinancialPosition } from './types';
 
@@ -19,8 +21,9 @@ type MemberScope = Extract<FinancialScope, { kind: 'MEMBER_ALL_CASHBOXES' | 'MEM
  *     `Transaction(PRET)`, qui existe en parallèle pour le même événement
  *     (ex. seed Fatou/L-001/TR-002) mais n'est PAS additionnée ici : ce
  *     serait compter deux fois le même décaissement.
- *   - `outstanding` = Σ (`Loan.totalRepayable − Σ Repayment.amount
- *     `completed` de CE prêt avec `paymentDate <= asOfDate``) — RECALCULÉ à la
+ *   - `outstanding` = Σ `loanDebtAt(loan, repayments, asOfDate)` (règles de
+ *     référence du 2026-09-28 : capital + intérêts générés selon le type du prêt
+ *     − `Repayment.amount` `completed` ≤ `asOfDate`) — RECALCULÉ à la
  *     date demandée, jamais lu depuis `Loan.outstanding` (un instantané
  *     courant, pas une valeur historique). `Transaction(REMBOURSEMENT)`
  *     n'entre jamais dans ce calcul : la même action UI écrit À LA FOIS une
@@ -50,17 +53,13 @@ function memberLoanSummary(
   let outstanding = 0;
   for (const loan of memberLoans) {
     loansReceived += loan.principal;
-    const paid = repayments
-      .filter(
-        (repayment) =>
-          repayment.loanId === loan.id &&
-          perimeterTenants.has(repayment.tenantId) &&
-          repayment.status === 'completed' &&
-          repayment.paymentDate <= asOfDate,
-      )
+    const loanRepayments = repayments.filter((repayment) => repayment.loanId === loan.id && perimeterTenants.has(repayment.tenantId));
+    const paid = loanRepayments
+      .filter((repayment) => repayment.status === 'completed' && repayment.paymentDate <= asOfDate)
       .reduce((sum, repayment) => sum + repayment.amount, 0);
     totalRepayments += paid;
-    outstanding += loan.totalRepayable - paid;
+    // Dette courante à la date (règles de référence du 2026-09-28) : capital + intérêts générés − remboursements.
+    outstanding += loanDebtAt(loan, loanRepayments, asOfDate);
   }
 
   return { loansReceived, repayments: totalRepayments, outstanding, loanCount: memberLoans.length };
@@ -90,23 +89,25 @@ function memberLoanSummary(
  */
 export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asOfDate: string): MemberFinancialPosition {
   const memberId = scope.memberId;
-  const { cashboxes: accounts, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
+  const { cashboxes: cashboxes, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
 
   const upToDate = ctx.transactions.filter((tx) => tx.status === 'completed' && referenceDate(tx) <= asOfDate);
 
-  const byCashbox: MemberCashboxLine[] = accounts.map((account) => {
-    const entries = cashboxLedgerEntries(account, upToDate).filter(
-      (tx) => tx.memberId === memberId && isMemberOfCashboxAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
+  const byCashbox: MemberCashboxLine[] = cashboxes.map((cashbox) => {
+    const entries = cashboxLedgerEntries(cashbox, upToDate).filter(
+      (tx) => tx.memberId === memberId && isMemberOfCashboxAsOf(ctx.memberships, memberId, cashbox.id, referenceDate(tx)),
     );
 
     let savings = 0;
     let otherMovements = 0;
     let internalTransfers = 0;
     for (const tx of entries) {
-      const effect = cashboxEntryEffect(account.cashboxNumber, tx);
+      const effect = cashboxEntryEffect(cashbox.cashboxNumber, tx);
       if (tx.category === 'EPARGNE') {
         savings += effect;
       } else if (tx.category === 'AUTRES') {
+        // PRET / REMBOURSEMENT (sous-catégories d'AUTRES) : intentionnellement ignorées — source = Loan/Repayment (`credit`).
+        if (isLoanDisbursement(tx.category, tx.subcategory) || isLoanRepayment(tx.category, tx.subcategory)) continue;
         if (tx.subcategory === 'TRANSFERT') internalTransfers += effect;
         else if (tx.subcategory === 'DISTRIBUTION') {
           // Agrégée au niveau membre (voir plus bas), jamais par caisse — pas de double comptage ici.
@@ -114,21 +115,20 @@ export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asO
           otherMovements += effect;
         }
       }
-      // PRET / REMBOURSEMENT : intentionnellement ignorées — source = Loan/Repayment (`credit`).
     }
 
     const active = ctx.memberships.find(
       (m) =>
         m.memberId === memberId &&
-        m.cashboxId === account.id &&
+        m.cashboxId === cashbox.id &&
         m.startDate <= asOfDate &&
         (m.endDate === null || asOfDate <= m.endDate),
     );
 
     return {
-      cashboxId: account.id,
-      cashboxNumber: account.cashboxNumber,
-      cashboxTitle: account.title,
+      cashboxId: cashbox.id,
+      cashboxNumber: cashbox.cashboxNumber,
+      cashboxTitle: cashbox.title,
       savings,
       otherMovements,
       internalTransfers,
@@ -155,7 +155,7 @@ export function memberFinancialPosition(scope: MemberScope, ctx: FinanceCtx, asO
     // Défense tenant dérivée de `ctx.cashboxes` (déjà tenant-scopé par le service), même
     // patron que `flows.ts` — `credit`/`distributions` ne sont pas gated par l'adhésion
     // (un prêt n'exige aucune caisse adhérée), donc calculés même si `outOfScope`.
-    const perimeterTenants = new Set(ctx.cashboxes.map((account) => account.tenantId));
+    const perimeterTenants = new Set(ctx.cashboxes.map((cashbox) => cashbox.tenantId));
 
     result.credit = memberLoanSummary(ctx.loans ?? [], ctx.repayments ?? [], memberId, perimeterTenants, asOfDate);
 

@@ -26,14 +26,23 @@ export type Application = {
    * avant cette règle, ne sont jamais revalidées rétroactivement.
    */
   memberId?: string;
+  /** Caisse de DÉCAISSEMENT prévue (mandat « Séparation Caisses / Crédit ») : sert à résoudre la règle de crédit applicable et à rattacher le futur décaissement. Le prêt (`Loan`) n'en porte aucune — seule la transaction de décaissement est rattachée à une caisse. */
   cashboxId?: string;
   pendingGuarantors?: PendingGuarantor[];
+  /**
+   * Saisie d'un prêt SOUMIS À APPROBATION (mandat « Workflow d'approbation des prêts », 2026-09-27) :
+   * ce qui a été saisi et qui servira au décaissement, une fois la demande approuvée —
+   * caisses complémentaires du financement multi-caisses, séance, commentaire.
+   */
+  complementaryFunding?: { cashboxId: string; amount: number }[];
+  sessionId?: string;
+  description?: string;
 };
 
 export const applications: Application[] = [
-  { id: 'AP-001', tenantId: 'T-001', applicant: 'Fatou Ndiaye', memberId: 'M-001', cashboxId: 'AC-001', requestedAmount: 850_000, purpose: 'Agrandissement commerce', submittedDate: '2026-07-15', reviewDate: '2026-07-18', approvalDate: '2026-07-22', stage: 'stageDisbursed', creditScore: 720, monthlyIncome: 450_000, existingLoans: 1, tenantName: 'Coopérative Sutura' },
+  { id: 'AP-001', tenantId: 'T-001', applicant: 'Fatou Ndiaye', memberId: 'M-001', cashboxId: 'AC-009', requestedAmount: 850_000, purpose: 'Agrandissement commerce', submittedDate: '2026-07-15', reviewDate: '2026-07-18', approvalDate: '2026-07-22', stage: 'stageDisbursed', creditScore: 720, monthlyIncome: 450_000, existingLoans: 1, tenantName: 'Coopérative Sutura' },
   { id: 'AP-002', tenantId: 'T-002', applicant: 'Mamadou Sow', memberId: 'M-002', cashboxId: 'AC-004', requestedAmount: 1_200_000, purpose: 'Achat matériel artisanat', submittedDate: '2026-07-05', reviewDate: '2026-07-08', approvalDate: '2026-07-10', stage: 'stageDisbursed', creditScore: 680, monthlyIncome: 380_000, existingLoans: 1, tenantName: 'Tontine Horizon' },
-  { id: 'AP-003', tenantId: 'T-001', applicant: 'Cheikh Diop', memberId: 'M-006', cashboxId: 'AC-001', requestedAmount: 2_100_000, purpose: 'Achat véhicule professionnel', submittedDate: '2026-07-20', reviewDate: '2026-07-22', approvalDate: '2026-07-25', stage: 'stageDisbursed', creditScore: 750, monthlyIncome: 620_000, existingLoans: 1, tenantName: 'Coopérative Sutura' },
+  { id: 'AP-003', tenantId: 'T-001', applicant: 'Cheikh Diop', memberId: 'M-006', cashboxId: 'AC-009', requestedAmount: 2_100_000, purpose: 'Achat véhicule professionnel', submittedDate: '2026-07-20', reviewDate: '2026-07-22', approvalDate: '2026-07-25', stage: 'stageDisbursed', creditScore: 750, monthlyIncome: 620_000, existingLoans: 1, tenantName: 'Coopérative Sutura' },
   // T-005 (Tontine Avenir) ne possède aucune caisse dans cashboxes.ts — cashboxId volontairement absent, cf. commentaire du type ci-dessus.
   { id: 'AP-004', tenantId: 'T-005', applicant: 'Awa Cissé', memberId: 'M-005', requestedAmount: 540_000, purpose: 'Réhabilitation boutique', submittedDate: '2026-08-01', reviewDate: '2026-08-05', approvalDate: null, stage: 'stageReview', creditScore: 640, monthlyIncome: 320_000, existingLoans: 1, tenantName: 'Tontine Avenir' },
   { id: 'AP-005', tenantId: 'T-002', applicant: 'Khadija Mbaye', memberId: 'M-007', cashboxId: 'AC-004', requestedAmount: 350_000, purpose: 'Formation continue', submittedDate: '2026-08-05', reviewDate: null, approvalDate: null, stage: 'stageSubmitted', creditScore: 710, monthlyIncome: 410_000, existingLoans: 0, tenantName: 'Tontine Horizon' },

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { navigationTree, flattenNavigation } from './navigation';
+import { navigationTree, flattenNavigation, findNavigationTrail, isNavigationNodeActive } from './navigation';
 
 /**
  * Mandat « Restructuration finale de la navigation » (2026-09-16) : « Gouvernance »
@@ -48,59 +48,84 @@ describe('navigationTree — Organization (mandat « Restructuration finale de l
 });
 
 /**
- * Mandat « Le Compte comme point d'entrée des Transactions » (2026-09-23) :
- * Transactions n'est plus un nœud de premier niveau dans le sidebar — le
- * groupe Finance ne contient plus que [Accounts, Tontines] dans le menu.
- * La route `/finance/transactions` (vue globale) et `/finance/transactions/create`
- * restent disponibles techniquement (voir finance-module-routes.test.tsx),
- * atteignables depuis la page Comptes et le détail d'un compte, mais ne sont
- * plus un nœud de `navigationTree`. Contribution / Demandes / Prêts /
- * Remboursements / Garants / Distributions restent des TYPES D'OPÉRATION :
- * aucune entrée de menu, aucune route (`credit/loan-rules` mis à part, hors
- * menu).
+ * Mandat « Correction définitive — structure du menu Finances » (2026-09-25) —
+ * cible EXACTE : Finance = [Caisses, Tontines]. Transactions n'est PAS un menu
+ * (une transaction se consulte depuis sa caisse, `/finance/cashboxes/:id`) ;
+ * Exercices fiscaux n'est administré qu'en Paramètres (le changement
+ * d'exercice passe par le sélecteur global du header). Aucun « Accounts » /
+ * « Comptes » ne subsiste. Contributions / Demandes / Prêts / Remboursements /
+ * Garants / Distributions restent des TYPES D'OPÉRATION, jamais des menus.
  */
-describe('navigationTree — Finance (mandat « Le Compte comme point d\'entrée des Transactions »)', () => {
-  const finance = navigationTree.find((node) => node.label === 'Finance');
-  const paths = flattenNavigation(navigationTree).map((node) => node.path);
+describe('navigationTree — Finance (mandat « Correction définitive — structure du menu Finances »)', () => {
+  const finance = navigationTree.find((node) => node.label === 'Finance')!;
+  const flat = flattenNavigation(navigationTree);
+  const paths = flat.map((node) => node.path);
+  const labels = flat.map((node) => node.label);
 
-  it('ALLOW: "Finance" is a parent group with exactly [Accounts, Fiscal Years, Tontines] — Transactions is no longer a menu entry', () => {
-    expect(finance?.path).toBe('/finance');
-    expect(finance?.children?.map((child) => child.label)).toEqual(['Accounts', 'Fiscal Years', 'Tontines']);
-    expect(finance?.children?.find((child) => child.label === 'Accounts')?.path).toBe('/finance/accounts');
-    expect(finance?.children?.find((child) => child.label === 'Fiscal Years')?.path).toBe('/finance/fiscal-years');
+  it('ALLOW: Finance contains exactly [Treasury, Member Balances, Tontines], in that order (mandats « Trésorerie » + « Bilan des adhérents »)', () => {
+    expect(finance.path).toBe('/finance');
+    expect(finance.children?.map((child) => child.label)).toEqual(['Treasury', 'Member Balances', 'Tontines']);
+    expect(finance.children?.map((child) => child.path)).toEqual(['/finance/treasury', '/finance/member-balances', '/tontines']);
   });
 
-  it('ALLOW: Tontines is a direct child of Finance and keeps its existing /tontines URL — only the sidebar depth changes', () => {
-    expect(finance?.children?.find((child) => child.label === 'Tontines')?.path).toBe('/tontines');
+  it('DENY: Finance exposes neither Financial Position, Credit nor Loan Rules; Loan Rules lives only under Settings', () => {
+    const financeLabels = finance.children?.map((child) => child.label) ?? [];
+    for (const label of ['Financial Position', 'Position', 'Credit', 'Loan Rules']) expect(financeLabels).not.toContain(label);
+    expect(finance.children?.some((child) => child.path.startsWith('/finance/credit') || child.path === '/finance/position')).toBe(false);
+    const settings = navigationTree.find((node) => node.label === 'Settings');
+    expect(settings?.children?.find((child) => child.label === 'Loan Rules')?.path).toBe('/settings/loan-rules');
+    expect(labels.filter((label) => label === 'Loan Rules')).toHaveLength(1);
+    expect(findNavigationTrail('/settings/loan-rules/LR-1').map((node) => node.label)).toEqual(['Settings', 'Loan Rules']);
   });
 
-  it('DENY: Tontines is not nested under Accounts, and no longer a top-level entry', () => {
-    expect(finance?.children?.find((child) => child.label === 'Accounts')?.children).toBeUndefined();
+  it('DENY: no "Transactions" menu entry anywhere, and no node points at /finance/transactions', () => {
+    expect(labels).not.toContain('Transactions');
+    expect(paths.some((path) => path.startsWith('/finance/transactions'))).toBe(false);
+  });
+
+  it('DENY: Finance contains neither Fiscal Years, Sessions/Meetings, nor Accounts/Comptes', () => {
+    const financeLabels = finance.children?.map((child) => child.label) ?? [];
+    for (const label of ['Transactions', 'Fiscal Years', 'Meetings', 'Sessions', 'Accounts', 'Comptes']) expect(financeLabels).not.toContain(label);
+    expect(paths.some((path) => path.startsWith('/finance/fiscal-years'))).toBe(false);
+    expect(paths.some((path) => path.startsWith('/finance/accounts'))).toBe(false);
+  });
+
+  it('DENY: no "Accounts"/"Comptes" node remains anywhere in the tree', () => {
+    expect(labels).not.toContain('Accounts');
+    expect(labels).not.toContain('Comptes');
+    expect(paths.some((path) => /account/i.test(path))).toBe(false);
+  });
+
+  it('ALLOW: Tontines lives only under Finance (no root duplicate) and keeps its /tontines URL', () => {
     expect(navigationTree.some((node) => node.label === 'Tontines')).toBe(false);
+    expect(labels.filter((label) => label === 'Tontines')).toHaveLength(1);
+    expect(findNavigationTrail('/tontines').map((node) => node.label)).toEqual(['Finance', 'Tontines']);
+    expect(findNavigationTrail('/tontines/t-1').map((node) => node.label)).toEqual(['Finance', 'Tontines']);
+    expect(isNavigationNodeActive(finance, '/tontines')).toBe(true);
   });
 
-  it('DENY: no "Transactions" sidebar node remains anywhere in the tree', () => {
-    expect(flattenNavigation(navigationTree).some((node) => node.label === 'Transactions')).toBe(false);
-    expect(paths.some((path) => path === '/finance/transactions')).toBe(false);
-  });
-
-  it('DENY: no duplicate Accounts/Tontines entries anywhere in the tree', () => {
-    const labels = flattenNavigation(navigationTree).map((node) => node.label);
-    for (const label of ['Accounts', 'Tontines']) {
-      expect(labels.filter((item) => item === label)).toHaveLength(1);
+  it('ALLOW: the Treasury tabs, cashbox pages and the technical /finance/transactions/* routes resolve to Finance → Treasury', () => {
+    for (const pathname of ['/finance/treasury', '/finance/treasury/cashboxes', '/finance/treasury/transactions', '/finance/cashboxes', '/finance/cashboxes/c-1', '/finance/transactions', '/finance/transactions/tr-1', '/finance/transactions/create']) {
+      expect(findNavigationTrail(pathname).map((node) => node.label)).toEqual(['Finance', 'Treasury']);
     }
+  });
+
+  it('ALLOW: Fiscal Years exists only once, under Settings (/settings/fiscal-years)', () => {
+    const settings = navigationTree.find((node) => node.label === 'Settings');
+    expect(settings?.children?.find((child) => child.label === 'Fiscal Years')?.path).toBe('/settings/fiscal-years');
+    expect(labels.filter((label) => label === 'Fiscal Years')).toHaveLength(1);
+    expect(findNavigationTrail('/settings/fiscal-years').map((node) => node.label)).toEqual(['Settings', 'Fiscal Years']);
+  });
+
+  it('top-level order: Dashboard, Organization, Finance, Operations, Access & Security, Audit, Settings', () => {
+    expect(navigationTree.map((node) => node.label)).toEqual(['Dashboard', 'Organization', 'Finance', 'Operations', 'Access & Security', 'Audit', 'Settings']);
   });
 
   it('DENY: no "Contributions" / "Credit" / "Distributions" / "Loans" / "Guarantors" menu entries anywhere', () => {
     for (const label of ['Contributions', 'Credit', 'Distributions', 'Loans', 'Guarantors', 'Repayments', 'Applications']) {
-      expect(flattenNavigation(navigationTree).some((node) => node.label === label)).toBe(false);
+      expect(labels).not.toContain(label);
     }
-  });
-
-  it('DENY: no navigation node points at /finance/contributions, /finance/distributions or /finance/credit/*', () => {
-    expect(paths.some((path) => path === '/finance/contributions')).toBe(false);
-    expect(paths.some((path) => path === '/finance/distributions')).toBe(false);
-    expect(paths.some((path) => path.startsWith('/finance/credit'))).toBe(false);
+    expect(paths.some((path) => path === '/finance/contributions' || path === '/finance/distributions' || path.startsWith('/finance/credit'))).toBe(false);
   });
 });
 
@@ -121,11 +146,11 @@ describe('navigationTree — top-level structure (mandat « Restructuration fina
     expect(finance?.children?.some((node) => node.label === 'Dashboard')).toBe(false);
   });
 
-  it('Settings remains a top-level menu with all of its existing sub-menus untouched', () => {
+  it('Settings remains a top-level menu; Branding is merged into Organization and no longer listed', () => {
     const settings = navigationTree.find((node) => node.label === 'Settings');
     expect(settings?.path).toBe('/settings');
     expect(settings?.children?.map((child) => child.label)).toEqual([
-      'Organization', 'Localization', 'Fiscal Years', 'Branding', 'Notifications', 'Security Policies', 'Modules', 'Integrations', 'Validation Workflows',
+      'Organization', 'Fiscal Years', 'Loan Rules', 'Notifications', 'Security Policies', 'Modules', 'Integrations', 'Validation Workflows',
     ]);
   });
 });

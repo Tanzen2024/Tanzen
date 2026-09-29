@@ -25,7 +25,7 @@ function renderShell(route: string) {
 
 describe('AppShell — un seul emplacement pour le tenant et l’exercice : le header, jamais le sidebar', () => {
   it('le header affiche le bloc tenant (tenant uniquement) et le sélecteur d’exercice', async () => {
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
 
     const tenantBlock = await screen.findByTestId('tenant-current');
     expect(within(tenantBlock).getByText('Coopérative Sutura')).toBeInTheDocument();
@@ -34,13 +34,13 @@ describe('AppShell — un seul emplacement pour le tenant et l’exercice : le h
   });
 
   it('le sidebar ne contient plus aucune carte Tenant ni Exercice — uniquement le branding et la navigation', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('Exercice 2026', { exact: false });
 
     const aside = container.querySelector('aside');
     expect(aside).toBeTruthy();
     expect(within(aside!).queryByText('Tenant actuel')).not.toBeInTheDocument();
-    // Le nœud de navigation « Exercices fiscaux » (Finance → Exercices fiscaux) reste légitime dans le sidebar —
+    // Le nœud de navigation « Exercices fiscaux » (Paramètres → Exercices fiscaux) reste légitime dans le sidebar —
     // seule la CARTE d'exercice courant (« Exercice 2026 », sélecteur du header) ne doit jamais s'y trouver.
     expect(within(aside!).queryByText('Exercice 2026', { exact: false })).not.toBeInTheDocument();
     // Exactement une seule instance dans tout le DOM (le header) — pas une deuxième planquée ailleurs.
@@ -48,7 +48,7 @@ describe('AppShell — un seul emplacement pour le tenant et l’exercice : le h
   });
 
   it('le sidebar affiche « TANZEN / TANZEN ENTERPRISE » — jamais « Plateforme »', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     const aside = container.querySelector('aside');
@@ -59,7 +59,7 @@ describe('AppShell — un seul emplacement pour le tenant et l’exercice : le h
 
 describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (mandat "Alignement et fond complet du bloc TANZEN Enterprise", 2026-09-16)', () => {
   it('le fond du bandeau compense le padding du sidebar (bleed) au lieu d’une carte flottante avec marges, et est bleu/navy (bg-primary), pas un fond clair', async () => {
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     const brandingText = screen.getByText('TANZEN ENTERPRISE');
@@ -70,7 +70,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   });
 
   it('le bandeau démarre au sommet du sidebar et a la même hauteur que le header (h-16) — même niveau vertical que « Tenant actuel », par construction et pas par un padding calculé à la main', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     const band = screen.getByText('TANZEN ENTERPRISE').closest('div')?.parentElement;
@@ -84,7 +84,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   });
 
   it('le padding de contenu du bandeau (px-3) est identique à celui de TenantBreadcrumb dans le header', async () => {
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     const band = screen.getByText('TANZEN ENTERPRISE').closest('div')?.parentElement;
@@ -96,7 +96,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   });
 
   it('la largeur globale du sidebar reste inchangée (276px)', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     const aside = container.querySelector('aside')!;
@@ -106,7 +106,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   it('en mode réduit : le logo "T" et le bandeau restent, le texte TANZEN/TANZEN ENTERPRISE disparaît, sans débordement', async () => {
     // `useUiStore` est un singleton de module (zustand) — sa valeur fuiterait sinon vers les
     // autres tests de ce fichier ; on la restaure explicitement après ce test.
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
     await screen.findByText('TANZEN');
 
     fireEvent.click(screen.getByRole('button', { name: 'Réduire le menu' }));
@@ -119,7 +119,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   });
 
   it('le bloc tenant affiche le tenant courant, jamais « TANZEN Enterprise »', async () => {
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
 
     const tenantBlock = await screen.findByTestId('tenant-current');
     expect(within(tenantBlock).getByText('Coopérative Sutura')).toBeInTheDocument();
@@ -129,7 +129,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
   it.each([
     ['/tontines', ['Tontines']],
     ['/organization/members', ['Organisation', 'Membres']],
-    ['/finance/accounts', ['Finances', 'Comptes']],
+    ['/finance/treasury/cashboxes', ['Finances', 'Relevés de comptes']],
     ['/finance/transactions', ['Finances', 'Transactions']],
   ])('page %s : branding, tenant et exercice cohabitent sans duplication, sans fil de navigation dans le bloc tenant', async (route, trailLabels) => {
     const { container } = renderShell(route);
@@ -145,7 +145,7 @@ describe('AppShell — bandeau de branding pleine largeur, fond bleu/navy (manda
 
 describe('AppShell — header final (mandat "Finalisation header/layout", 2026-09-16) : plus de Recherche, Aide ni Système', () => {
   it('n’affiche plus l’icône/le contrôle de recherche', async () => {
-    renderShell('/finance/accounts');
+    renderShell('/finance/cashboxes');
     await screen.findByText('Exercice 2026', { exact: false });
 
     expect(screen.queryByLabelText('Recherche globale')).not.toBeInTheDocument();
@@ -154,7 +154,7 @@ describe('AppShell — header final (mandat "Finalisation header/layout", 2026-0
   });
 
   it('n’affiche plus l’icône/le popover d’aide dans le header (le sidebar garde le sien)', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('Exercice 2026', { exact: false });
 
     const header = container.querySelector('header')!;
@@ -165,7 +165,7 @@ describe('AppShell — header final (mandat "Finalisation header/layout", 2026-0
   });
 
   it('ne propose plus « Système » — uniquement Clair/Sombre', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('Exercice 2026', { exact: false });
 
     const header = container.querySelector('header')!;
@@ -176,7 +176,7 @@ describe('AppShell — header final (mandat "Finalisation header/layout", 2026-0
   });
 
   it('le thème bascule Clair → Sombre → Clair via le contrôle du header, sans option cachée', async () => {
-    const { container } = renderShell('/finance/accounts');
+    const { container } = renderShell('/finance/cashboxes');
     await screen.findByText('Exercice 2026', { exact: false });
     const header = container.querySelector('header')!;
     const lightButton = within(header).getByRole('button', { name: 'Clair' });
@@ -201,5 +201,45 @@ describe('AppShell — tenant.id reste l’identifiant technique, tenant.name se
     const ids = new Set(withDuplicateName.map((tenant) => tenant.id));
     expect(ids.size).toBe(withDuplicateName.length);
     expect(withDuplicateName.filter((tenant) => tenant.name === tenants[0].name)).toHaveLength(2);
+  });
+});
+
+/**
+ * Mandat « Correction définitive — structure du menu Finances » (2026-09-25) :
+ * le sidebar rend Finance = [Caisses, Tontines], sans « Transactions » ;
+ * Tontines (URL `/tontines`, hors préfixe `/finance`) déplie bien Finance.
+ */
+describe('AppShell — sidebar Finance = [Relevés de comptes, Bilan des adhérents, Tontines]', () => {
+  const financeEntries = (aside: HTMLElement) => {
+    const nav = within(aside).getByRole('navigation');
+    return within(nav).getAllByRole('button').map((button) => button.textContent?.trim());
+  };
+
+  it.each(['/finance/treasury/cashboxes', '/finance/treasury/transactions', '/finance/cashboxes/c-1', '/finance/transactions/tr-1', '/tontines'])('sur %s : Finance est déplié avec Relevés de comptes, Bilan des adhérents et Tontines, sans Transactions ni Caisses', async (route) => {
+    const { container } = renderShell(route);
+    await screen.findByText('TANZEN');
+
+    const aside = container.querySelector('aside')!;
+    const entries = financeEntries(aside);
+    const financeIndex = entries.indexOf('Finances');
+    expect(entries.slice(financeIndex + 1, financeIndex + 4)).toEqual(['Relevés de comptes', 'Bilan des adhérents', 'Tontines']);
+    expect(entries).not.toContain('Caisses');
+    expect(entries.filter((label) => label === 'Tontines')).toHaveLength(1);
+    expect(entries).not.toContain('Transactions');
+    expect(entries).not.toContain('Comptes');
+  });
+
+  it('la feuille active suit la page : Tontines sur /tontines, Relevés de comptes sur le détail d’une transaction', async () => {
+    const { container, unmount } = renderShell('/tontines');
+    await screen.findByText('TANZEN');
+    const nav = within(container.querySelector('aside')!).getByRole('navigation');
+    expect(within(nav).getByRole('button', { name: 'Tontines' }).className).toContain('bg-primary');
+    expect(within(nav).getByRole('button', { name: 'Relevés de comptes' }).className).not.toContain('bg-primary');
+    unmount();
+
+    const second = renderShell('/finance/transactions/tr-1');
+    await screen.findByText('TANZEN');
+    const nav2 = within(second.container.querySelector('aside')!).getByRole('navigation');
+    expect(within(nav2).getByRole('button', { name: 'Relevés de comptes' }).className).toContain('bg-primary');
   });
 });

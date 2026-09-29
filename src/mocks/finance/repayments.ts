@@ -10,6 +10,13 @@ export type Repayment = {
   principalPart: number;
   interestPart: number;
   status: RepaymentStatus;
+  /**
+   * Transaction d'ENCAISSEMENT du remboursement (mandat 2026-09-25) — posée par
+   * `creditService.createRepaymentTransaction`, réciproque de `Transaction.repaymentId`.
+   * Le remboursement n'a pas de caisse : la caisse d'encaissement est celle de cette transaction.
+   * Absente sur le seed historique (antérieur au lien).
+   */
+  transactionId?: string;
 };
 
 export const repayments: Repayment[] = [

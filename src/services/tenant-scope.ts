@@ -9,7 +9,7 @@ import type { PlatformScope } from '@/mocks/rbac.mocks';
  *
  * `requesterScope` vaut 'platform' UNIQUEMENT pour les répertoires
  * transverses (registre Organization > Tenants, comptes système d'Access &
- * Security) — jamais pour une donnée métier (Member/Account/Loan/Tontine/
+ * Security) — jamais pour une donnée métier (Member/Cashbox/Loan/Tontine/
  * Cycle/WorkflowRequest...), qui reste strictement isolée au tenant courant
  * quel que soit le scope de l'utilisateur. Les services de ces domaines
  * n'exposent donc pas de paramètre `scope` : ils appellent cette fonction

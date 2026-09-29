@@ -7,11 +7,11 @@ import { MemberTable } from './member-table';
 
 const member: Member = {
   id: 'M-001', uuid: 'uuid-1', tenantId: 'T-001', matricule: '', firstName: 'Fatou', lastName: 'Ndiaye',
-  gender: 'female', birthDate: '1988-04-12', nationality: 'Sénégalaise', idNumber: '', occupation: 'Commerçante',
-  email: 'fatou.ndiaye@email.sn', phone: '+221 77 123 45 67', address: '', photoUrl: '', joinedAt: '2021-03-20', status: 'active',
+  gender: 'female', birthDate: '1988-04-12', nationality: 'Camerounaise', idNumber: '', occupation: 'Commerçante',
+  email: 'fatou.ndiaye@email.cm', phone: '+237 671 23 45 67', address: '', photoUrl: '', joinedAt: '2021-03-20', status: 'active',
   statusHistory: [{ status: 'active', since: '2021-03-20' }], syncStatus: 'synced', version: 1,
   createdAt: '2021-03-20T00:00:00.000Z', updatedAt: '2021-03-20T00:00:00.000Z', deletedAt: null, createdBy: null, updatedBy: null,
-  tenantName: 'Coopérative Sutura', positions: [], accounts: [], documents: [], activities: [], governanceParticipation: [],
+  tenantName: 'Coopérative Sutura', positions: [], cashboxes: [], documents: [], activities: [], governanceParticipation: [],
 };
 
 /**

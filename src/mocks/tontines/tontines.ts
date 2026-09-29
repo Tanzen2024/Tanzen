@@ -35,7 +35,20 @@ import type { UnitCode } from '@/constants/units';
 import type { FrequencyConfig } from './tontine-frequency';
 
 export type ValueType = 'MONEY' | 'GOODS';
-export type TontineStatus = 'statusActive' | 'statusInactive';
+/**
+ * Cycle de vie (mandat « Évolution globale du module Finance » §33) :
+ * `statusActive` (opérationnelle) · `statusInactive` (« Désactivée »,
+ * réversible) · `statusArchived` (« Archivée », hors gestion courante). Aucun
+ * statut ne supprime ni ne modifie l'historique (tours, participations,
+ * bénéficiaires, cotisations, paiements, distributions). Seule une tontine
+ * active reçoit de nouvelles opérations (`isTontineOperational`, appliqué par
+ * les services).
+ */
+export type TontineStatus = 'statusActive' | 'statusInactive' | 'statusArchived';
+
+export function isTontineOperational(tontine: Pick<Tontine, 'status'> | undefined): boolean {
+  return tontine?.status === 'statusActive';
+}
 
 /**
  * Tontine — configuration permanente, jamais recréée. `currency` (MONEY

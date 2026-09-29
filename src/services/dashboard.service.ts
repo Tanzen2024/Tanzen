@@ -1,4 +1,6 @@
 import { mockRequest } from './api-client';
+import { formatCurrency } from '@/constants/currencies';
+import { organizationSettingsList } from '@/mocks/settings/organization-settings';
 import { financialOverviewData, contributionsData, repaymentsData, tontineActivityData } from '@/mocks/dashboard';
 import { members } from '@/mocks/organization/members';
 import { cashboxes, resolveCashbox } from '@/mocks/finance/cashboxes';
@@ -7,7 +9,11 @@ import { contributions } from '@/mocks/finance/contributions';
 import { applications } from '@/mocks/finance/applications';
 import { loans } from '@/mocks/finance/loans';
 import { repayments } from '@/mocks/finance/repayments';
+import { loanDebtAt } from '@/lib/finance/interest-distribution';
 import { tontines } from '@/mocks/tontines/tontines';
+
+/** Devise de l'association (Paramètres → Organisation) ; `undefined` → XAF par défaut dans `formatCurrency`. */
+const organizationCurrencyOf = (tenantId: string) => organizationSettingsList.find((item) => item.tenantId === tenantId)?.currency;
 
 type KpiValue = { value: number; delta: string };
 
@@ -41,7 +47,7 @@ const TX_TYPE_KEY: Record<string, string> = {
 
 function buildOverview(tenantId: string): DashboardOverview {
   const tenantMembers = members.filter((member) => member.tenantId === tenantId);
-  const tenantCashboxes = cashboxes.filter((account) => account.tenantId === tenantId);
+  const tenantCashboxes = cashboxes.filter((cashbox) => cashbox.tenantId === tenantId);
   const tenantTransactions = transactions.filter((transaction) => transaction.tenantId === tenantId);
   const tenantContributions = contributions.filter((contribution) => contribution.tenantId === tenantId);
   const tenantApplications = applications.filter((application) => application.tenantId === tenantId);
@@ -51,14 +57,17 @@ function buildOverview(tenantId: string): DashboardOverview {
 
   const byDateDesc = <T extends { date: string }>(rows: T[]) => [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  // Dette courante de chaque prêt (règles de référence du 2026-09-28), même calcul que le bilan et le module Crédit.
+  const today = new Date().toISOString().slice(0, 10);
+  const debtOf = (loan: (typeof tenantLoans)[number]) => loanDebtAt(loan, tenantRepayments.filter((repayment) => repayment.loanId === loan.id), today);
   const kpis: DashboardOverview['kpis'] = {
     members: kpi(tenantMembers.length),
     // Trésorerie = somme des soldes calculés (report d'ouverture + journal comptabilisé), même source que la fiche caisse.
-    treasury: kpi(tenantCashboxes.reduce((sum, account) => sum + resolveCashbox(account, tenantTransactions).balance, 0)),
+    treasury: kpi(tenantCashboxes.reduce((sum, cashbox) => sum + resolveCashbox(cashbox, tenantTransactions).balance, 0)),
     contributions: kpi(tenantContributions.filter((c) => c.status === 'completed').reduce((sum, c) => sum + c.amount, 0)),
     activeLoans: kpi(tenantLoans.filter((loan) => loan.status === 'active').length),
     repayments: kpi(tenantRepayments.filter((r) => r.status === 'completed').reduce((sum, r) => sum + r.amount, 0)),
-    outstanding: kpi(tenantLoans.reduce((sum, loan) => sum + loan.outstanding, 0)),
+    outstanding: kpi(tenantLoans.reduce((sum, loan) => sum + Math.max(0, debtOf(loan)), 0)),
     activeTontines: kpi(tenantTontines.filter((tontine) => tontine.status === 'statusActive').length),
     pendingWorkflows: kpi(0),
   };
@@ -84,7 +93,7 @@ function buildOverview(tenantId: string): DashboardOverview {
 
   const recentTransactions: DashboardOverview['recentTransactions'] = byDateDesc(tenantTransactions).slice(0, 5).map((transaction) => ({
     id: transaction.id,
-    member: transaction.type === 'credit' ? transaction.fromAccount : transaction.toAccount,
+    member: transaction.type === 'credit' ? transaction.source : transaction.destination,
     typeKey: TX_TYPE_KEY[transaction.category] ?? 'txContribution',
     amount: transaction.amount,
     date: transaction.date,
@@ -101,13 +110,13 @@ function buildOverview(tenantId: string): DashboardOverview {
     .filter((loan) => loan.status === 'active')
     .sort((a, b) => new Date(a.nextPaymentDate).getTime() - new Date(b.nextPaymentDate).getTime())
     .slice(0, 4)
-    .map((loan) => ({ id: loan.id, member: loan.borrower, amount: loan.outstanding, dueDate: loan.nextPaymentDate, progress: loan.progress }));
+    .map((loan) => ({ id: loan.id, member: loan.borrower, amount: debtOf(loan), dueDate: loan.nextPaymentDate, progress: loan.progress }));
 
   const importantNotifications: DashboardOverview['importantNotifications'] = [];
   const applicationsInReview = tenantApplications.filter((application) => application.stage === 'stageReview');
-  if (applicationsInReview[0]) importantNotifications.push({ id: `notif-app-${applicationsInReview[0].id}`, priority: 'high', titleKey: 'loanReview', detail: `${applicationsInReview[0].applicant} · ${applicationsInReview[0].requestedAmount.toLocaleString('fr-FR')} FCFA`, date: applicationsInReview[0].submittedDate });
+  if (applicationsInReview[0]) importantNotifications.push({ id: `notif-app-${applicationsInReview[0].id}`, priority: 'high', titleKey: 'loanReview', detail: `${applicationsInReview[0].applicant} · ${formatCurrency(applicationsInReview[0].requestedAmount, organizationCurrencyOf(tenantId))}`, date: applicationsInReview[0].submittedDate });
   const overdueLoans = tenantLoans.filter((loan) => lateLoanIds.has(loan.id));
-  if (overdueLoans[0]) importantNotifications.push({ id: `notif-loan-${overdueLoans[0].id}`, priority: 'high', titleKey: 'overdueRepayment', detail: `${overdueLoans[0].borrower} · ${overdueLoans[0].outstanding.toLocaleString('fr-FR')} FCFA`, date: overdueLoans[0].nextPaymentDate });
+  if (overdueLoans[0]) importantNotifications.push({ id: `notif-loan-${overdueLoans[0].id}`, priority: 'high', titleKey: 'overdueRepayment', detail: `${overdueLoans[0].borrower} · ${formatCurrency(debtOf(overdueLoans[0]), organizationCurrencyOf(tenantId))}`, date: overdueLoans[0].nextPaymentDate });
   // D-MEM-04 (définitive, docs/P1_MEMBERS_USERS_D_MEM_04_STATUS_ADDENDUM.md) : le statut
   // 'pending' (demande d'adhésion en attente) est retiré du vocabulaire Member — cette
   // notification/approbation ne peut plus jamais se déclencher (aucun membre ne peut plus

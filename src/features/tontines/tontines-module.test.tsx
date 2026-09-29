@@ -41,6 +41,136 @@ describe('Créer une tontine — « Avec achat », jamais « Mode achat »/« Mo
   });
 });
 
+describe('Fiche Tontine — sans carte récapitulative (En-tête → Onglets → Contenu)', () => {
+  it('n’affiche plus la carte statut / fréquence / compteurs ; la fréquence reste rappelée discrètement dans Tours', async () => {
+    renderTontines('/tontines/TON-004'); // MONEY, Mensuelle, withPurchase: true (seed) — défaut Tours
+    await screen.findByRole('heading', { name: 'Coopérative Sutura' });
+    expect(screen.getByRole('tab', { name: 'Tours' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('Active')).not.toBeInTheDocument();
+    expect(screen.queryByText(/adhérents · \d+ tours/)).not.toBeInTheDocument();
+    expect(await screen.findByTestId('tontine-tours-frequency')).toHaveTextContent('Mensuelle · Avec achat');
+    expect(await screen.findByText('#1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Ajouter un tour/ })).toBeInTheDocument();
+  });
+
+  it('« Retour aux tontines » ramène toujours à la liste', async () => {
+    const user = userEvent.setup();
+    renderTontinesWithLocationProbe('/tontines/TON-004');
+    await screen.findByRole('heading', { name: 'Coopérative Sutura' });
+    await user.click(screen.getByRole('button', { name: /Retour aux tontines/ }));
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent(/^\/tontines$/);
+  });
+
+});
+
+/**
+ * Mandat « Remplacer Modifier par un menu ⋯ » (2026-09-25), puis mandat du 2026-09-27 : le menu « ⋯ »
+ * quitte la fiche et passe sur la LIGNE de la tontine dans la liste — même modèle que la liste des Caisses.
+ */
+describe('Tontines — actions de gestion dans le « ⋯ » de la ligne', () => {
+  /** Filtre la liste sur le nom (la tontine créée peut tomber hors de la 1re page) puis ouvre le « ⋯ » de sa ligne. */
+  const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+    await user.type(await screen.findByPlaceholderText('Nom de la tontine'), name);
+    await user.click(await screen.findByRole('button', { name: `Actions — ${name}` }));
+    return screen.findByRole('menu');
+  };
+  const createBlankTontine = async (label: string) => (await tontinesService.createTontine({ tenantId: 'T-001', name: `${label} ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: true } as never))!;
+
+  it('la fiche n’a plus de bouton « ⋯ » ni « Modifier » : seul « Retour aux tontines » reste dans l’en-tête', async () => {
+    renderTontines('/tontines/TON-004');
+    await screen.findByRole('heading', { name: 'Coopérative Sutura' });
+    expect(screen.getByRole('button', { name: /Retour aux tontines/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Actions/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Modifier' })).not.toBeInTheDocument();
+  });
+
+  it('le « ⋯ » de la ligne propose Modifier, le cycle de vie et Supprimer (en rouge), dans cet ordre — jamais « Désactiver »', async () => {
+    const user = userEvent.setup();
+    renderTontines('/tontines');
+    const menu = await openRowMenu(user, 'Coopérative Sutura');
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Modifier la tontine', 'Archiver la tontine', 'Supprimer la tontine']);
+    expect(within(menu).getByRole('menuitem', { name: 'Supprimer la tontine' })).toHaveClass('text-destructive');
+  });
+
+  it('« Modifier la tontine » ouvre exactement le même formulaire (même route), et la modification fonctionne comme avant', async () => {
+    const user = userEvent.setup();
+    const tontine = await createBlankTontine('Test Menu Edit');
+    const originalName = tontine.name; // le service renvoie l'objet vivant : figer le nom avant toute modification
+    renderTontinesWithLocationProbe('/tontines');
+    await user.click(within(await openRowMenu(user, originalName)).getByRole('menuitem', { name: 'Modifier la tontine' }));
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontine.id}/edit`);
+    expect(await screen.findByRole('heading', { name: 'Modifier la tontine' })).toBeInTheDocument();
+
+    // Même validation qu'avant : un nom vide est refusé, rien n'est enregistré, on reste sur le formulaire.
+    await user.clear(screen.getByLabelText(/Nom de la tontine/));
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontine.id}/edit`);
+    expect((await tontinesService.getTontine('T-001', tontine.id))?.name).toBe(originalName);
+
+    await user.clear(screen.getByLabelText(/Nom de la tontine/));
+    await user.type(screen.getByLabelText(/Nom de la tontine/), `${originalName} bis`);
+    await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
+    expect(await screen.findByRole('heading', { name: `${originalName} bis` })).toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontine.id}`);
+  });
+
+  it('« Supprimer la tontine » ouvre une confirmation ; Annuler ne supprime rien', async () => {
+    const user = userEvent.setup();
+    const tontine = await createBlankTontine('Test Menu Cancel');
+    renderTontinesWithLocationProbe('/tontines');
+    await user.click(within(await openRowMenu(user, tontine.name)).getByRole('menuitem', { name: 'Supprimer la tontine' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Supprimer cette tontine ?');
+    expect(dialog).toHaveTextContent('La tontine sera désactivée. Ses données et son historique seront conservés.');
+    expect(within(dialog).getByRole('button', { name: 'Supprimer' })).toHaveClass('bg-destructive');
+    await user.click(within(dialog).getByRole('button', { name: 'Annuler' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location-pathname')).toHaveTextContent(/^\/tontines$/);
+    expect(await tontinesService.getTontine('T-001', tontine.id)).toMatchObject({ id: tontine.id, status: 'statusActive' });
+  });
+
+  it('confirmer une tontine sans historique : désactivation logique (jamais retirée) ; elle quitte « Tontines actives » et apparaît sous « Tontines inactives » et « Toutes les tontines »', async () => {
+    const user = userEvent.setup();
+    const tontine = await createBlankTontine('Test Menu Delete');
+    renderTontinesWithLocationProbe('/tontines');
+    const statusFilter = await screen.findByLabelText('Statut') as HTMLSelectElement;
+    expect(statusFilter.value).toBe('active');
+    expect([...statusFilter.options].map((option) => option.textContent)).toEqual(['Tontines actives', 'Tontines inactives', 'Toutes les tontines']);
+    await user.selectOptions(statusFilter, 'all');
+    await user.selectOptions(statusFilter, 'active');
+    try {
+      const menu = await openRowMenu(user, tontine.name); // saisit le nom dans la recherche (liste paginée)
+      await user.click(within(menu).getByRole('menuitem', { name: 'Supprimer la tontine' }));
+      await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Supprimer' }));
+      await vi.waitFor(async () => expect(await tontinesService.getTontine('T-001', tontine.id)).toMatchObject({ id: tontine.id, status: 'statusInactive' }));
+      await vi.waitFor(() => expect(screen.queryByText(tontine.name)).not.toBeInTheDocument());
+      expect(screen.getByTestId('location-pathname')).toHaveTextContent(/^\/tontines$/);
+      await user.selectOptions(statusFilter, 'inactive');
+      expect(await screen.findByText(tontine.name)).toBeInTheDocument();
+      await user.selectOptions(statusFilter, 'all');
+      expect(screen.getByText(tontine.name)).toBeInTheDocument();
+    } finally {
+      tontine.status = 'statusActive'; // fixture partagée : aucune tontine T-001 inactive pour les tests suivants
+    }
+  });
+
+  it('une tontine avec historique : confirmer la désactive, sans la supprimer, adhésions conservées', async () => {
+    const user = userEvent.setup();
+    const tontine = await createBlankTontine('Test Menu Protected');
+    await tontinesService.addAdhesion('T-001', tontine.id, 'M-001', '2026-01-01');
+    renderTontinesWithLocationProbe('/tontines');
+    await user.click(within(await openRowMenu(user, tontine.name)).getByRole('menuitem', { name: 'Supprimer la tontine' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Supprimer' }));
+    try {
+      await vi.waitFor(async () => expect(await tontinesService.getTontine('T-001', tontine.id)).toMatchObject({ status: 'statusInactive' }));
+      expect(await tontinesService.listAdhesions('T-001', tontine.id)).toHaveLength(1);
+    } finally {
+      // Fixture partagée du fichier : d'autres tests (« Inactive reste à 0 ») supposent qu'aucune tontine T-001 n'est inactive.
+      tontine.status = 'statusActive';
+    }
+  });
+});
+
 describe('Fiche Tontine — édition sans aucun champ Devise', () => {
   it('la fiche en lecture affiche « Avec achat », jamais « Mode achat »', async () => {
     renderTontines('/tontines/TON-004'); // MONEY, tenant T-001, withPurchase: true (seed) — « Vue générale » a été supprimée, l'info reste visible dans l'en-tête de la fiche
@@ -450,10 +580,10 @@ describe('Dashboard Tontines — KPI', () => {
     const activeBefore = before.filter((item) => item.status === 'statusActive').length;
     await tontinesService.createTontine({ tenantId: 'T-001', name: `Test KPI Total ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
     renderTontines('/tontines');
-    await screen.findByText('Tontines actives');
+    await screen.findByText('Tontines actives', { ignore: 'script, style, option' });
     const totalValue = within(screen.getAllByText('Tontines').find((el) => el.closest('article'))!.closest('article')!).getByText(String(before.length + 1));
     expect(totalValue).toBeInTheDocument();
-    const activeValue = within(screen.getByText('Tontines actives').closest('article')!).getByText(String(activeBefore + 1));
+    const activeValue = within(screen.getByText('Tontines actives', { ignore: 'script, style, option' }).closest('article')!).getByText(String(activeBefore + 1));
     expect(activeValue).toBeInTheDocument();
   });
 
@@ -471,7 +601,7 @@ describe('Dashboard Tontines — KPI', () => {
 
   it('la carte KPI « Tours à venir » a été supprimée du dashboard (mandat « suppression KPI Tours à venir + bloc Prochains Tours », 2026-09-24) — plus aucune trace, ni le libellé ni son sous-libellé', async () => {
     renderTontines('/tontines');
-    await screen.findByText('Tontines actives');
+    await screen.findByText('Tontines actives', { ignore: 'script, style, option' });
     expect(screen.queryByText('Tours à venir')).not.toBeInTheDocument();
     expect(screen.queryByText('Prochains tours')).not.toBeInTheDocument();
   });
@@ -564,7 +694,7 @@ describe('Dashboard Tontines — bloc « Prochains Tours » supprimé', () => {
     const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Bloc Supprimé ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
     await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2099-01-01');
     renderTontines('/tontines');
-    await screen.findByText('Tontines actives');
+    await screen.findByText('Tontines actives', { ignore: 'script, style, option' });
     expect(screen.queryByText('Prochains Tours')).not.toBeInTheDocument();
     expect(screen.queryByText('Voir tous les Tours →')).not.toBeInTheDocument();
   });
@@ -703,7 +833,7 @@ describe('Dashboard Tontines — Colonne « Prochain tour » (Tour courant vs To
     renderTontines('/tontines');
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     await user.selectOptions(screen.getByLabelText('Fréquence'), 'QUARTERLY');
-    await user.selectOptions(screen.getByLabelText('Statut'), 'statusActive');
+    await user.selectOptions(screen.getByLabelText('Statut'), 'active');
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
     const expectedDate = suggestNextOccurrenceDate(quarterlyConfig, futureDate(8))!;
     expect(within(row).getByText(formatTourDate(expectedDate))).toBeInTheDocument();
@@ -765,9 +895,9 @@ describe('Dashboard Tontines — Filtres (Fréquence puis Statut) et Réinitiali
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     await screen.findByText(tontine!.name);
     await user.selectOptions(screen.getByLabelText('Fréquence'), 'QUARTERLY');
-    await user.selectOptions(screen.getByLabelText('Statut'), 'statusActive');
+    await user.selectOptions(screen.getByLabelText('Statut'), 'active');
     expect(screen.getByText(tontine!.name)).toBeInTheDocument(); // AND avec une valeur compatible → toujours visible
-    await user.selectOptions(screen.getByLabelText('Statut'), 'statusInactive');
+    await user.selectOptions(screen.getByLabelText('Statut'), 'inactive');
     expect(screen.queryByText(tontine!.name)).not.toBeInTheDocument();
     expect(screen.getByText('Aucune tontine')).toBeInTheDocument(); // aucun résultat, état vide
   });
@@ -790,10 +920,10 @@ describe('Dashboard Tontines — KPI global vs Total de la liste filtrée', () =
     const kpiBefore = (await tontinesService.listTontines('T-001')).filter((item) => item.status === 'statusActive').length;
     const user = userEvent.setup();
     renderTontines('/tontines');
-    await screen.findByText('Tontines actives');
-    const kpiValueBefore = within(screen.getByText('Tontines actives').closest('article')!).getByText(String(kpiBefore)).textContent;
+    await screen.findByText('Tontines actives', { ignore: 'script, style, option' });
+    const kpiValueBefore = within(screen.getByText('Tontines actives', { ignore: 'script, style, option' }).closest('article')!).getByText(String(kpiBefore)).textContent;
     await user.selectOptions(screen.getByLabelText('Fréquence'), 'MONTHLY');
-    const kpiValueAfter = within(screen.getByText('Tontines actives').closest('article')!).getByText(String(kpiBefore)).textContent;
+    const kpiValueAfter = within(screen.getByText('Tontines actives', { ignore: 'script, style, option' }).closest('article')!).getByText(String(kpiBefore)).textContent;
     expect(kpiValueAfter).toBe(kpiValueBefore); // inchangé malgré le filtre Fréquence appliqué à la liste
   });
 });
@@ -824,7 +954,7 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (règle globale «
     // Auto-vérifiant plutôt que dépendant de l'ordre d'exécution (mandat « reliquat > 0 ») : si un test précédent a déjà créé un historique pour T-001, la carte doit être visible ; sinon elle doit être absente.
     const hasHistory = (await tontineOperationsService.listAllRemainders('T-001')).length > 0;
     renderTontines('/tontines');
-    await screen.findByText('Tontines actives');
+    await screen.findByText('Tontines actives', { ignore: 'script, style, option' });
     if (hasHistory) expect(screen.getByText('Reliquats tontines')).toBeInTheDocument();
     else expect(screen.queryByText('Reliquats tontines')).not.toBeInTheDocument();
   });
@@ -887,7 +1017,7 @@ describe('Dashboard Tontines — KPI « Reliquats tontines » (règle globale «
     await createRemainder('T-001', 'M-001', 10_000, 6_000); // garantit un historique pour ce test (indépendant de l'ordre d'exécution)
     renderTontines('/tontines');
     await screen.findByText('Reliquats tontines');
-    expect(screen.getByText('Tontines actives')).toBeInTheDocument();
+    expect(screen.getByText('Tontines actives', { ignore: 'script, style, option' })).toBeInTheDocument();
     // `{ selector: 'p' }` — cible la carte KPI, jamais l'en-tête de colonne « Participations » de la liste (mandat « colonne Reliquats conditionnelle », 2026-09-24).
     expect(screen.getByText('Participations', { selector: 'p' })).toBeInTheDocument();
   });
@@ -1054,6 +1184,8 @@ describe('Routage — /tontines/:tontineId (audit « erreur 404 »)', () => {
     const user = userEvent.setup();
     const tontine = await tontinesService.createTontine({ tenantId: 'T-001', name: `Test Navigation Liste ${Date.now()}`, valueType: 'MONEY', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1, withPurchase: true } as never);
     renderTontinesWithLocationProbe('/tontines');
+    // Recherche par nom : les tontines créées par les autres tests du fichier peuvent la repousser hors de la 1re page (10 lignes).
+    await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     await user.click(await screen.findByText(tontine!.name));
     expect(screen.getByTestId('location-pathname')).toHaveTextContent(`/tontines/${tontine!.id}`);
     expect(await screen.findByRole('heading', { name: tontine!.name })).toBeInTheDocument();

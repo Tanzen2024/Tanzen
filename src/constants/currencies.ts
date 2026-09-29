@@ -1,3 +1,5 @@
+import { formatNumberWith } from '@/lib/number-format';
+
 /**
  * Devises de référence pour les tontines financières (MONEY). Liste
  * centralisée (un seul point de vérité) — étendre se fait uniquement ici.
@@ -12,7 +14,7 @@
 export type Currency = { code: string; labelFr: string; labelEn: string; displayLabel: string; decimals: number };
 
 export const currencies: Currency[] = [
-  { code: 'XAF', labelFr: 'Franc CFA BEAC', labelEn: 'CFA Franc BEAC', displayLabel: 'FCFA', decimals: 0 },
+  { code: 'XAF', labelFr: 'Franc CFA d’Afrique centrale', labelEn: 'Central African CFA franc', displayLabel: 'FCFA', decimals: 0 },
   { code: 'XOF', labelFr: 'Franc CFA BCEAO', labelEn: 'CFA Franc BCEAO', displayLabel: 'FCFA', decimals: 0 },
   { code: 'EUR', labelFr: 'Euro', labelEn: 'Euro', displayLabel: '€', decimals: 2 },
   { code: 'USD', labelFr: 'Dollar américain', labelEn: 'US Dollar', displayLabel: '$', decimals: 2 },
@@ -38,6 +40,11 @@ function findCurrency(code: string | undefined) {
   return currencies.find((item) => item.code === code);
 }
 
+/** Décimales ISO de la devise (0 pour XAF) — devise absente → XAF par défaut, comme `formatCurrency`. */
+export function getCurrencyDecimals(code: string | undefined): number {
+  return findCurrency(code ?? DEFAULT_CURRENCY_CODE)?.decimals ?? 0;
+}
+
 export function getCurrencyDisplayLabel(code: string | undefined): string {
   return findCurrency(code)?.displayLabel ?? code ?? '';
 }
@@ -49,16 +56,19 @@ export function getCurrencyDisplayLabel(code: string | undefined): string {
  * à partir de (montant, code ISO, locale). `Intl.NumberFormat` gère
  * uniquement les séparateurs/décimales régionaux — le libellé métier
  * (`displayLabel`) reste maîtrisé par la table `currencies` ci-dessus.
+ * Mandat « Normalisation des montants » (2026-09-25) : toujours la valeur
+ * COMPLÈTE avec séparateur de milliers (720 000 FCFA) — plus aucune notation
+ * compacte (k / M / Md), nulle part.
  */
-export function formatCurrency(amount: number, currencyCode: string | undefined, locale: 'fr' | 'en' = 'fr', options?: { compact?: boolean }): string {
-  const definition = findCurrency(currencyCode);
-  const decimals = definition?.decimals ?? 0;
-  const label = definition?.displayLabel ?? currencyCode ?? '';
-  const localeStr = locale === 'en' ? 'en-US' : 'fr-FR';
-  const numberOptions: Intl.NumberFormatOptions = options?.compact
-    ? { notation: 'compact', maximumFractionDigits: 1 }
-    : { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
-  const formatted = new Intl.NumberFormat(localeStr, numberOptions).format(amount);
+export function formatCurrency(amount: number, currencyCode: string | undefined, locale: 'fr' | 'en' = 'fr'): string {
+  void locale; // les séparateurs viennent du FORMAT RÉGIONAL DE L'ASSOCIATION (`lib/number-format`), plus de la langue de l'interface
+  // Configuration absente (association sans paramètres) → devise par défaut XAF (mandat « Format régional », 2026-09-26).
+  const code = currencyCode ?? DEFAULT_CURRENCY_CODE;
+  const definition = findCurrency(code);
+  const decimals = getCurrencyDecimals(code);
+  const label = definition?.displayLabel ?? code;
+  // Unité mineure ISO (0 pour XAF) ; un montant fractionnaire garde jusqu'à 2 décimales (1 234 567,89 FCFA), jamais arrondi en silence.
+  const formatted = formatNumberWith(amount, undefined, { minimumFractionDigits: decimals, maximumFractionDigits: Math.max(decimals, 2) });
   return label ? `${formatted} ${label}` : formatted;
 }
 

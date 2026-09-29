@@ -41,12 +41,12 @@ function isMemberScope(
  * Isolation tenant : garantie par le service via `ctx`.
  */
 export function flows(scope: FinancialScope, ctx: FinanceCtx, from: string, to: string): FlowResult {
-  const { cashboxes: accounts, outOfScope } = cashboxesOfDuring(scope, ctx, from, to);
+  const { cashboxes: cashboxes, outOfScope } = cashboxesOfDuring(scope, ctx, from, to);
   const memberId = isMemberScope(scope) ? scope.memberId : undefined;
   // Défense identique à `cashboxLedgerEntries` : ne jamais compter une écriture
   // d'un autre tenant, même si le `ctx` en contenait par erreur (le service ne
   // fournit normalement que le tenant courant).
-  const perimeterTenants = new Set(accounts.map((account) => account.tenantId));
+  const perimeterTenants = new Set(cashboxes.map((cashbox) => cashbox.tenantId));
 
   const inWindow = ctx.transactions.filter((tx) => {
     if (tx.status !== 'completed') return false;
@@ -59,8 +59,8 @@ export function flows(scope: FinancialScope, ctx: FinanceCtx, from: string, to: 
     scope.kind === 'TENANT_ALL_CASHBOXES'
       ? inWindow
       : inWindow.filter((tx) => {
-          const touched = accounts.filter(
-            (a) => tx.fromAccount === a.cashboxNumber || tx.toAccount === a.cashboxNumber,
+          const touched = cashboxes.filter(
+            (a) => tx.source === a.cashboxNumber || tx.destination === a.cashboxNumber,
           );
           if (touched.length === 0) return false;
           if (!memberId) return true;
@@ -77,21 +77,21 @@ export function flows(scope: FinancialScope, ctx: FinanceCtx, from: string, to: 
     else totalCredit += tx.amount;
   }
 
-  const byCashbox: FlowCashboxLine[] = accounts.map((account: CashboxRecord) => {
+  const byCashbox: FlowCashboxLine[] = cashboxes.map((cashbox: CashboxRecord) => {
     const entries = scoped.filter(
-      (tx) => tx.fromAccount === account.cashboxNumber || tx.toAccount === account.cashboxNumber,
+      (tx) => tx.source === cashbox.cashboxNumber || tx.destination === cashbox.cashboxNumber,
     );
     let debit = 0;
     let credit = 0;
     for (const tx of entries) {
-      const effect = cashboxEntryEffect(account.cashboxNumber, tx);
+      const effect = cashboxEntryEffect(cashbox.cashboxNumber, tx);
       if (effect >= 0) credit += effect;
       else debit += -effect;
     }
     return {
-      cashboxId: account.id,
-      cashboxNumber: account.cashboxNumber,
-      cashboxTitle: account.title,
+      cashboxId: cashbox.id,
+      cashboxNumber: cashbox.cashboxNumber,
+      cashboxTitle: cashbox.title,
       debit,
       credit,
       count: entries.length,

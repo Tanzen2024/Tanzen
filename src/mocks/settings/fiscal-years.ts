@@ -5,15 +5,30 @@
  */
 import type { SessionScheduleConfig } from './session-schedule';
 
-export type FiscalYearStatus = 'open' | 'closed' | 'upcoming';
+/**
+ * Statut MÉTIER d'un exercice (mandat « Caisse + exercice fiscal contexte
+ * global », 2026-09-25) — JAMAIS stocké, toujours calculé par
+ * `fiscalYearStatus()`, seule source de vérité. Terminologie unique dans toute
+ * l'application : À venir / En cours / Clôturé (pas de notion « Ouvert »
+ * distincte de « En cours »).
+ */
+export type FiscalYearStatus = 'upcoming' | 'in_progress' | 'closed';
 
 export type FiscalYear = {
   id: string;
   tenantId: string;
   startDate: string;
   endDate: string;
-  status: FiscalYearStatus;
-  isCurrent: boolean;
+  /**
+   * Seul fait de cycle de vie PERSISTÉ : la clôture explicite (opération
+   * métier `settingsService.closeFiscalYear`, annulable uniquement par le
+   * workflow de réouverture). Remplace l'ancien couple `status` stocké
+   * (`open`/`upcoming`/`closed`) + `isCurrent` et l'action manuelle
+   * « Ouvrir l'exercice » : « À venir » / « En cours » se déduisent désormais
+   * des dates (`fiscalYearStatus`). Ne jamais lire ce champ pour afficher un
+   * statut — passer par `fiscalYearStatus`.
+   */
+  isClosed: boolean;
   /**
    * Ajouté par IMPLEMENTATION GO (D-FY-01/D-FY-06) : seule information de
    * cycle de vie portée directement par l'entité — le reste (qui a
@@ -33,7 +48,7 @@ export type FiscalYear = {
    * (2026-09-16) — CACHE DE LECTURE UNIQUEMENT, jamais la source de vérité :
    * qui/quand a clôturé reste tracé intégralement dans `audit_logs`
    * (`fiscalYears.close`/`fiscalYears.reopened`), conformément à D-FY-06.
-   * Ces deux champs ne sont écrits QUE par `settingsService.closeCurrentFiscalYear`
+   * Ces deux champs ne sont écrits QUE par `settingsService.closeFiscalYear`
    * (pose) et `applyFiscalYearReopenDecision` (remise à `null` — la réouverture
    * n'efface rien dans l'audit, seulement ce cache d'affichage qui représente
    * l'état courant, cf. mandat §25/§26). Jamais éditables indépendamment,
@@ -49,29 +64,29 @@ export type FiscalYear = {
    * `undefined` = aucune fréquence configurée : le formulaire « Ajouter une
    * séance » n'a alors aucune suggestion (l'utilisateur saisit la date
    * librement, dans la période de l'exercice). Modifiable tant que l'exercice
-   * n'est pas `closed`.
+   * n'est pas clôturé (`isClosed`).
    */
   sessionSchedule?: SessionScheduleConfig;
 };
 
 export const fiscalYears: FiscalYear[] = [
-  { id: 'FY-T001-2024', tenantId: 'T-001', startDate: '2024-01-01', endDate: '2024-12-31', status: 'closed', isCurrent: false, createdAt: '2024-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T001-2025', tenantId: 'T-001', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  // Fréquence de séances seedée = « deuxième mardi de chaque mois » (l'exemple historique du mandat Meeting).
-  { id: 'FY-T001-2026', tenantId: 'T-001', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'NTH_WEEKDAY', ordinal: 'SECOND', nthWeekday: 'TUESDAY' } },
-  { id: 'FY-T001-2027', tenantId: 'T-001', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T001-2024', tenantId: 'T-001', startDate: '2024-01-01', endDate: '2024-12-31', isClosed: true, createdAt: '2024-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T001-2025', tenantId: 'T-001', startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  // Fréquence de séances seedée = « deuxième mardi de chaque mois » (l'exemple de référence du mandat Séances).
+  { id: 'FY-T001-2026', tenantId: 'T-001', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'NTH_WEEKDAY', ordinal: 'SECOND', nthWeekday: 'TUESDAY' } },
+  { id: 'FY-T001-2027', tenantId: 'T-001', startDate: '2027-01-01', endDate: '2027-12-31', isClosed: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T002-2025', tenantId: 'T-002', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T002-2026', tenantId: 'T-002', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'DAY_OF_MONTH', dayOfMonth: 5 } },
-  { id: 'FY-T002-2027', tenantId: 'T-002', startDate: '2027-01-01', endDate: '2027-12-31', status: 'upcoming', isCurrent: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T002-2025', tenantId: 'T-002', startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T002-2026', tenantId: 'T-002', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null, sessionSchedule: { frequency: 'MONTHLY', rule: 'DAY_OF_MONTH', dayOfMonth: 5 } },
+  { id: 'FY-T002-2027', tenantId: 'T-002', startDate: '2027-01-01', endDate: '2027-12-31', isClosed: false, createdAt: '2027-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T003-2025', tenantId: 'T-003', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T003-2026', tenantId: 'T-003', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T003-2025', tenantId: 'T-003', startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T003-2026', tenantId: 'T-003', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T004-2026', tenantId: 'T-004', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T004-2026', tenantId: 'T-004', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 
-  { id: 'FY-T005-2025', tenantId: 'T-005', startDate: '2025-01-01', endDate: '2025-12-31', status: 'closed', isCurrent: false, createdAt: '2025-01-01', closedAt: null, closedBy: null },
-  { id: 'FY-T005-2026', tenantId: 'T-005', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', isCurrent: true, createdAt: '2026-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T005-2025', tenantId: 'T-005', startDate: '2025-01-01', endDate: '2025-12-31', isClosed: true, createdAt: '2025-01-01', closedAt: null, closedBy: null },
+  { id: 'FY-T005-2026', tenantId: 'T-005', startDate: '2026-01-01', endDate: '2026-12-31', isClosed: false, createdAt: '2026-01-01', closedAt: null, closedBy: null },
 ];
 
 /**
@@ -85,6 +100,45 @@ export function fiscalYearLabel(year: Pick<FiscalYear, 'startDate' | 'endDate'>)
   const startYear = year.startDate.slice(0, 4);
   const endYear = year.endDate.slice(0, 4);
   return startYear === endYear ? `Exercice ${startYear}` : `Exercice ${startYear}-${endYear}`;
+}
+
+/** Date du jour `YYYY-MM-DD` — valeur par défaut du paramètre `today` des fonctions de statut (surchargeable en test). */
+export function todayISODate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Statut MÉTIER d'un exercice — SEULE implémentation de la règle, aucun
+ * composant ne doit la recalculer :
+ *   - Clôturé  ← clôture explicite (`isClosed`), JAMAIS déduite des dates ;
+ *   - À venir  ← sinon, date de début pas encore atteinte (`startDate > today`) ;
+ *   - En cours ← sinon (date de début atteinte, exercice non clôturé — y
+ *     compris après `endDate` tant que la clôture n'a pas été prononcée).
+ */
+export function fiscalYearStatus(year: Pick<FiscalYear, 'startDate' | 'isClosed'>, today: string = todayISODate()): FiscalYearStatus {
+  if (year.isClosed) return 'closed';
+  if (year.startDate > today) return 'upcoming';
+  return 'in_progress';
+}
+
+/**
+ * Exercice « en cours » d'un tenant (déjà filtré par l'appelant) : parmi les
+ * exercices `in_progress`, celui dont la période contient `today`, à défaut le
+ * plus récent. `undefined` si aucun exercice n'est en cours.
+ */
+export function findCurrentFiscalYear<Y extends FiscalYear>(tenantYears: Y[], today: string = todayISODate()): Y | undefined {
+  const inProgress = tenantYears.filter((year) => fiscalYearStatus(year, today) === 'in_progress').sort((a, b) => b.startDate.localeCompare(a.startDate));
+  return inProgress.find((year) => year.startDate <= today && today <= year.endDate) ?? inProgress[0];
+}
+
+/** Exercice sélectionné par défaut dans le contexte global : l'exercice en cours, sinon le plus récent. */
+export function defaultFiscalYear<Y extends FiscalYear>(tenantYears: Y[], today: string = todayISODate()): Y | undefined {
+  return findCurrentFiscalYear(tenantYears, today) ?? [...tenantYears].sort((a, b) => b.startDate.localeCompare(a.startDate))[0];
+}
+
+/** Exercice d'un tenant dont la période [startDate, endDate] contient `date` (bornes incluses) — les exercices d'un tenant ne se chevauchent jamais (`hasFiscalYearOverlap`). */
+export function fiscalYearContaining<Y extends FiscalYear>(years: Y[], tenantId: string, date: string): Y | undefined {
+  return years.find((year) => year.tenantId === tenantId && year.startDate <= date && date <= year.endDate);
 }
 
 /** `YYYY-MM-DD` + N jours, sans dérive de fuseau (calcul en UTC). */

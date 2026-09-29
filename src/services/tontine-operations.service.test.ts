@@ -403,18 +403,18 @@ describe('tontineOperationsService — Représentations multiples d’un même m
 });
 
 describe('tontineOperationsService — Finance : cotisations et réceptions journal-liées', () => {
-  it('ALLOW: recordContribution posts a credit Transaction (EPARGNE) when the tontine is linked to a Finance account', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002' });
+  it('ALLOW: recordContribution posts a credit Transaction (EPARGNE) when the tontine is linked to a Finance cashbox', async () => {
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009' });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const before = transactions.length;
     const contribution = await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
     expect(contribution?.amount).toBe(10_000);
     expect(transactions.length).toBe(before + 1);
-    expect(transactions[transactions.length - 1]).toMatchObject({ category: 'EPARGNE', type: 'credit', amount: 10_000, toAccount: 'CS-001-ÉPG' });
+    expect(transactions[transactions.length - 1]).toMatchObject({ category: 'EPARGNE', type: 'credit', amount: 10_000, destination: 'CS-001-CX-001' });
   });
 
-  it('ALLOW: recordContribution never blocks (best-effort) when the tontine has no linked Finance account', async () => {
+  it('ALLOW: recordContribution never blocks (best-effort) when the tontine has no linked Finance cashbox', async () => {
     const tontine = await makeMoneyTontine('T-001'); // aucun cashboxId
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
@@ -442,18 +442,18 @@ describe('tontineOperationsService — Finance : cotisations et réceptions jour
     expect(contribution).toBeNull();
   });
 
-  it('FINANCE NON-LEAKAGE : recordReception with a purchaseAmount posts the purchase amount ONLY to the "Achat tontine" account — the net reception posts to the general account, never mixed', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+  it('FINANCE NON-LEAKAGE : recordReception with a purchaseAmount posts the purchase amount ONLY to the "Achat tontine" cashbox — the net reception posts to the general cashbox, never mixed', async () => {
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 20_000);
     const before = transactions.length;
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 15_000, 5_000);
     expect(transactions.length).toBe(before + 2);
-    const netTx = transactions.find((t) => t.amount === 15_000 && t.fromAccount === 'CS-001-ÉPG');
-    const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.toAccount === 'CS-001-CX-008');
+    const netTx = transactions.find((t) => t.amount === 15_000 && t.source === 'CS-001-CX-001');
+    const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.destination === 'CS-001-CX-008');
     expect(netTx).toMatchObject({ category: 'AUTRES', subcategory: 'DISTRIBUTION', type: 'debit' });
-    expect(purchaseTx).toMatchObject({ category: 'AUTRES', subcategory: 'AUTRE', type: 'credit' });
+    expect(purchaseTx).toMatchObject({ category: 'AUTRES', subcategory: 'ACHAT_TONTINE', type: 'credit' }); // mandat « Type des transactions » : Autres / Achat tontine, crédit
   });
 
   it('DENY: recordReception is refused once the Occurrence is REALIZED (immutability)', async () => {
@@ -535,7 +535,7 @@ describe('tontineOperationsService — Clôture et Reliquat', () => {
   });
 
   it('RELIQUAT — traçabilité complète : un solde collecté non intégralement distribué crée un TontineRemainder OPEN avec tontine/tour/date/origine/statut', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
@@ -552,7 +552,7 @@ describe('tontineOperationsService — Clôture et Reliquat', () => {
 
   it('ALLOW: no remainder is created when the collected pool exactly matches what was distributed', async () => {
     const before = tontineRemainders.length;
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002' });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009' });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05'); // sans-achat (amountDue = contributionAmount)
@@ -565,7 +565,7 @@ describe('tontineOperationsService — Clôture et Reliquat', () => {
   });
 
   it('ALLOW → DENY: consumeRemainder/writeOffRemainder transition OPEN once, refused a second time', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
@@ -685,13 +685,13 @@ describe('tontineOperationsService — Permutation de positions planifiées (wor
 
 describe('Caisse système « Achat tontine » — audit ciblé', () => {
   it('AVEC ACHAT : la caisse système est résolue automatiquement (aucune sélection utilisateur), et SEULE la jambe achat y transite', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     expect(tontine?.purchaseCashboxId).toBe('AC-015'); // résolution automatique par libellé, jamais un choix utilisateur
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 20_000);
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 15_000, 5_000);
-    const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.toAccount === 'CS-001-CX-008');
+    const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.destination === 'CS-001-CX-008');
     expect(purchaseTx).toBeTruthy(); // ACHAT → caisse système « Achat tontine »
   });
 
@@ -733,7 +733,7 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
       expect(result).toBeTruthy(); // plus de refus silencieux
       expect(result!.amountPaid).toBe(20_000);
       expect(result!.amountPurchased).toBe(5_000); // le montant d'achat reste DISTINCT du montant de règlement
-      const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.toAccount === 'CS-001-CX-008');
+      const purchaseTx = transactions.find((t) => t.amount === 5_000 && t.destination === 'CS-001-CX-008');
       expect(purchaseTx).toBeTruthy(); // « Achat tontine » reste le compte système dédié, jamais une caisse générale
       const refreshed = await tontinesService.getTontine('T-001', tontine.id);
       expect(refreshed?.purchaseCashboxId).toBe('AC-015'); // la référence est réparée pour les règlements suivants
@@ -809,7 +809,7 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
       expect(result).toBeTruthy();
       const refreshed = await tontinesService.getTontine('T-002', tontine.id);
       expect(refreshed?.purchaseCashboxId).toBe('AC-016'); // caisse « Achat tontine » de T-002, jamais AC-015 (T-001)
-      const purchaseTx = transactions.find((t) => t.amount === 4_000 && t.toAccount === 'TH-002-CX-001');
+      const purchaseTx = transactions.find((t) => t.amount === 4_000 && t.destination === 'TH-002-CX-001');
       expect(purchaseTx).toBeTruthy();
     });
 
@@ -825,7 +825,7 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
   });
 
   it('SANS ACHAT : la caisse système « Achat tontine » n’est jamais résolue ni utilisée, même si un montant d’achat est transmis par erreur', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: false });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: false });
     expect(tontine?.purchaseCashboxId).toBeUndefined();
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     await tontineOperationsService.addPlanEntry('T-001', tontine!.id, adhesion!.id);
@@ -836,33 +836,33 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
     await tontineOperationsService.recordReception('T-001', beneficiary.id, 10_000, 999); // purchaseAmount fourni par erreur
     const added = transactions.slice(before);
     expect(added).toHaveLength(1); // uniquement la jambe nette
-    expect(added.some((t) => t.toAccount === 'CS-001-CX-008')).toBe(false); // jamais posté vers « Achat tontine »
+    expect(added.some((t) => t.destination === 'CS-001-CX-008')).toBe(false); // jamais posté vers « Achat tontine »
   });
 
   it('COTISATION : recordContribution ne transite jamais par « Achat tontine », même pour une tontine « avec achat »', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const before = transactions.length;
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
     const added = transactions.slice(before);
     expect(added).toHaveLength(1);
-    expect(added.some((t) => t.toAccount === 'CS-001-CX-008' || t.fromAccount === 'CS-001-CX-008')).toBe(false);
+    expect(added.some((t) => t.destination === 'CS-001-CX-008' || t.source === 'CS-001-CX-008')).toBe(false);
   });
 
   it('RELIQUAT : la création d’un TontineRemainder ne poste aucune écriture Finance dans « Achat tontine » (mécanisme distinct, non financier)', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 6_000);
     await tontineOperationsService.recordReception('T-001', beneficiary!.id, 6_000); // pas de purchaseAmount ici
-    const before = transactions.filter((t) => t.toAccount === 'CS-001-CX-008' || t.fromAccount === 'CS-001-CX-008').length;
+    const before = transactions.filter((t) => t.destination === 'CS-001-CX-008' || t.source === 'CS-001-CX-008').length;
     const closed = await tontineOperationsService.closeOccurrence('T-001', occurrence!.id); // crée le reliquat (10 000 collectés, 6 000 distribués)
     expect(closed?.status).toBe('REALIZED');
     const remainders = await tontineOperationsService.listRemainders('T-001', tontine!.id);
     expect(remainders).toHaveLength(1);
-    const after = transactions.filter((t) => t.toAccount === 'CS-001-CX-008' || t.fromAccount === 'CS-001-CX-008').length;
+    const after = transactions.filter((t) => t.destination === 'CS-001-CX-008' || t.source === 'CS-001-CX-008').length;
     expect(after).toBe(before); // le reliquat ne touche jamais la caisse « Achat tontine »
   });
 
@@ -888,17 +888,17 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
     const before = transactions.length;
     await tontineOperationsService.recordReception('T-002', beneficiary!.id, 15_000, 5_000);
     const added = transactions.slice(before);
-    expect(added.some((t) => t.amount === 5_000 && t.toAccount === 'TH-002-CX-001')).toBe(true); // la caisse de SON PROPRE tenant
-    expect(added.some((t) => t.toAccount === 'CS-001-CX-008' || t.fromAccount === 'CS-001-CX-008')).toBe(false); // jamais celle de T-001
+    expect(added.some((t) => t.amount === 5_000 && t.destination === 'TH-002-CX-001')).toBe(true); // la caisse de SON PROPRE tenant
+    expect(added.some((t) => t.destination === 'CS-001-CX-008' || t.source === 'CS-001-CX-008')).toBe(false); // jamais celle de T-001
   });
 
   it('EXERCICE FISCAL : clôturer/reporter un exercice ne recrée jamais la caisse système et l’identifiant résolu reste stable', async () => {
-    const accountsCountBefore = cashboxes.length;
+    const cashboxesCountBefore = cashboxes.length;
     const tontine = await makeMoneyTontine('T-001', { withPurchase: true });
     expect(tontine?.purchaseCashboxId).toBe('AC-015');
     await financePositionService.closeFiscalYear('T-001', 'FY-T001-2026');
     await financePositionService.carryForward('T-001', 'FY-T001-2026', 'FY-T001-2027');
-    expect(cashboxes.length).toBe(accountsCountBefore); // aucun compte ajouté par la clôture/le report
+    expect(cashboxes.length).toBe(cashboxesCountBefore); // aucun compte ajouté par la clôture/le report
     const refreshed = await tontinesService.getTontine('T-001', tontine!.id);
     expect(refreshed?.purchaseCashboxId).toBe('AC-015'); // toujours la même caisse système, jamais recréée
   });
@@ -910,8 +910,8 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 20_000);
     // Suppression HORS API du compte système — jamais atteignable via `financeService.deleteCashbox` (protégé),
     // reproduit ici uniquement pour simuler une anomalie de données déjà survenue.
-    const accountIndex = cashboxes.findIndex((account) => account.id === tontine!.purchaseCashboxId);
-    const [removedAccount] = cashboxes.splice(accountIndex, 1);
+    const cashboxIndex = cashboxes.findIndex((cashbox) => cashbox.id === tontine!.purchaseCashboxId);
+    const [removedCashbox] = cashboxes.splice(cashboxIndex, 1);
     try {
       const before = transactions.length;
       const result = await tontineOperationsService.recordReception('T-001', beneficiary!.id, 15_000, 5_000);
@@ -920,7 +920,7 @@ describe('Caisse système « Achat tontine » — audit ciblé', () => {
       const [refreshedBeneficiary] = await tontineOperationsService.listBeneficiaries('T-001', occurrence!.id);
       expect(refreshedBeneficiary.amountPaid).toBe(0); // aucune mutation partielle du bénéficiaire
     } finally {
-      cashboxes.push(removedAccount); // restaure l'état pour le reste de la suite
+      cashboxes.push(removedCashbox); // restaure l'état pour le reste de la suite
     }
   });
 });
@@ -944,7 +944,7 @@ describe('tontineOperationsService — Isolation multi-tenant', () => {
 
 describe('tontineOperationsService — Refonte « Tours » : cotisation ON/OFF (mandat espace de travail du Tour)', () => {
   it('ALLOW: setContributionPayment(true) posts the full expected amount and marks the row as paid', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', contributionAmount: 50_000 });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', contributionAmount: 50_000 });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const before = transactions.length;
@@ -963,7 +963,7 @@ describe('tontineOperationsService — Refonte « Tours » : cotisation ON/OFF (
   });
 
   it('ALLOW → ALLOW: toggling ON twice is idempotent (no duplicate Transaction, no double amount)', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', contributionAmount: 20_000 });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', contributionAmount: 20_000 });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     await tontineOperationsService.setContributionPayment('T-001', occurrence!.id, adhesion!.id, true);
@@ -974,7 +974,7 @@ describe('tontineOperationsService — Refonte « Tours » : cotisation ON/OFF (
   });
 
   it('ALLOW: OFF never deletes the historical Contribution — it posts an additive reversal and a compensating debit Transaction', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', contributionAmount: 30_000 });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', contributionAmount: 30_000 });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     await tontineOperationsService.setContributionPayment('T-001', occurrence!.id, adhesion!.id, true);
@@ -986,11 +986,12 @@ describe('tontineOperationsService — Refonte « Tours » : cotisation ON/OFF (
     expect(contributionsAfter.length).toBe(contributionsBefore + 1); // additive, jamais une suppression
     expect(contributionsAfter.reduce((sum, item) => sum + item.amount, 0)).toBe(0); // net = 0, historique conservé
     expect(transactions.length).toBe(before + 1);
-    expect(transactions[transactions.length - 1]).toMatchObject({ category: 'EPARGNE', type: 'debit', amount: 30_000 });
+    // Mandat « Type des transactions » : l'Épargne est toujours un crédit — la sortie compensatoire est une correction « Autres », en débit.
+    expect(transactions[transactions.length - 1]).toMatchObject({ category: 'AUTRES', subcategory: 'CORRECTION', type: 'debit', amount: 30_000 });
   });
 
   it('ALLOW: OFF on an already-unpaid adhesion is a safe no-op (no reversal transaction created)', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', contributionAmount: 30_000 });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', contributionAmount: 30_000 });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const before = transactions.length;
@@ -1034,7 +1035,7 @@ describe('tontineOperationsService — Refonte « Tours » : cotisation ON/OFF (
   });
 
   it('BATCH: markAllContributionsPaid settles every eligible unpaid adhesion in ONE call, skips already-paid ones, never duplicates', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', contributionAmount: 15_000 });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', contributionAmount: 15_000 });
     const adhesionA = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const adhesionB = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
@@ -1236,7 +1237,7 @@ describe('tontineOperationsService — Refonte « Tours » : Ajouter/Enlever des
   });
 
   it('CAS 9 — ajouter plusieurs bénéficiaires ne crée AUCUNE Transaction Finance parasite (seule `recordReception` en poste)', async () => {
-    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-002' });
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-009' });
     const jean = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const marie = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
@@ -1246,7 +1247,7 @@ describe('tontineOperationsService — Refonte « Tours » : Ajouter/Enlever des
   });
 
   it('CAS 10 — reliquat avec plusieurs bénéficiaires : le reliquat reste la différence entre le total collecté et le total RÉELLEMENT distribué à TOUS les bénéficiaires', async () => {
-    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-002', contributionAmount: 50_000 });
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-009', contributionAmount: 50_000 });
     const jean = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const marie = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-006', '2026-09-01');
     const paul = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-016', '2026-09-01');
@@ -1347,7 +1348,7 @@ describe('tontineOperationsService — Action « Régler » : recordReception jo
   });
 
   it('HISTORY : recordReception écrit un AuditEvent avec montant avant/après et statut avant/après', async () => {
-    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-002' });
+    const tontine = await makeMoneyTontine('T-001', { withPurchase: true, cashboxId: 'AC-009' });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-09-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-09-05');
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 25_000);
@@ -1462,7 +1463,7 @@ describe('tontineOperationsService — Cycle système (mandat « recommencement 
   });
 
   it('AUDIT TEST 8 — AVEC-ACHAT : `amountPurchased` (achat) jamais confondu avec la réalisation du bénéfice (`amountPaid`/`amountDue`)', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 20_000);
@@ -1668,7 +1669,7 @@ describe('tontineOperationsService — Cycle système (mandat « recommencement 
   });
 
   it('TEST 14 — le reliquat d’un ancien cycle reste intact après démarrage d’un nouveau cycle', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
     await tontineOperationsService.recordContribution('T-001', occurrence!.id, adhesion!.id, 10_000);
@@ -1685,7 +1686,7 @@ describe('tontineOperationsService — Cycle système (mandat « recommencement 
   });
 
   it('TEST 15 — les transactions Finance d’un ancien cycle restent intactes après démarrage d’un nouveau cycle', async () => {
-    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-002', withPurchase: true });
+    const tontine = await makeMoneyTontine('T-001', { cashboxId: 'AC-009', withPurchase: true });
     const adhesion = await tontinesService.addAdhesion('T-001', tontine!.id, 'M-001', '2026-01-01');
     const occurrence = await tontineOperationsService.createOccurrence('T-001', tontine!.id, '2026-02-01');
     const beneficiary = await tontineOperationsService.addOccurrenceBeneficiary('T-001', occurrence!.id, adhesion!.id, 10_000);

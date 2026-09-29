@@ -1,7 +1,9 @@
 import { mockRequest } from './api-client';
-import { organizationSettingsList } from '@/mocks/settings/organization-settings';
-import { localizationSettingsList } from '@/mocks/settings/localization-settings';
-import { fiscalYears, fiscalYearLabel, hasFiscalYearOverlap, type FiscalYear } from '@/mocks/settings/fiscal-years';
+import { organizationSettingsList, type OrganizationSettings } from '@/mocks/settings/organization-settings';
+import { currencies, DEFAULT_CURRENCY_CODE } from '@/constants/currencies';
+import { DEFAULT_TIMEZONE } from '@/constants/countries';
+import { isRegionalFormatValid, DEFAULT_REGIONAL_FORMAT } from '@/lib/number-format';
+import { fiscalYears, fiscalYearLabel, fiscalYearStatus, findCurrentFiscalYear, hasFiscalYearOverlap, type FiscalYear } from '@/mocks/settings/fiscal-years';
 import { isValidSessionScheduleConfig, type SessionScheduleConfig } from '@/mocks/settings/session-schedule';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
@@ -44,9 +46,9 @@ export type CreateFiscalYearInput = {
   sessionSchedule?: SessionScheduleConfig;
 };
 
-export type CloseCurrentFiscalYearOutcome =
+export type FiscalYearClosureOutcome =
   | { ok: true; year: FiscalYear; pendingOperations: { applications: number; distributions: number; transactions: number } }
-  | { ok: false; reason: 'NO_CURRENT_YEAR' }
+  | { ok: false; reason: 'NOT_FOUND' | 'ALREADY_CLOSED' | 'NOT_STARTED' }
   | { ok: false; reason: 'FINANCE_CLOSING_FAILED' };
 
 export type ExtendFiscalYearEndDateOutcome =
@@ -120,33 +122,51 @@ function computeReopenWarnings(tenantId: string, year: FiscalYear): string[] {
   return warnings;
 }
 
+/**
+ * Paramètres de l'association, INITIALISÉS s'ils n'existent pas encore : devise par défaut
+ * (`DEFAULT_CURRENCY_CODE` = XAF), fuseau `DEFAULT_TIMEZONE` (Africa/Douala), format régional par
+ * défaut. Une devise ou un fuseau absent est complété ;
+ * toute valeur déjà enregistrée est conservée telle quelle (jamais d'écrasement).
+ */
+function ensureOrganizationSettings(tenantId: string): OrganizationSettings {
+  let settings = organizationSettingsList.find((item) => item.tenantId === tenantId);
+  if (!settings) {
+    settings = { tenantId, timezone: DEFAULT_TIMEZONE, currency: DEFAULT_CURRENCY_CODE, dateFormat: 'DD/MM/YYYY', ...DEFAULT_REGIONAL_FORMAT };
+    organizationSettingsList.push(settings);
+  } else if (!settings.currency?.trim()) {
+    settings.currency = DEFAULT_CURRENCY_CODE;
+  }
+  if (!settings.timezone?.trim()) settings.timezone = DEFAULT_TIMEZONE;
+  return settings;
+}
+
 export const settingsService = {
-  getOrganizationSettings: (tenantId: string) => mockRequest(() => organizationSettingsList.find((item) => item.tenantId === tenantId)),
-  updateOrganizationSettings: (tenantId: string, patch: { timezone: string; currency: string }) =>
+  getOrganizationSettings: (tenantId: string) => mockRequest(() => ensureOrganizationSettings(tenantId)),
+  /**
+   * Paramètres de l'association, y compris son FORMAT RÉGIONAL (mandat du 2026-09-26). Refuse
+   * (undefined) une devise inconnue ou un couple de séparateurs ambigu (même caractère pour
+   * les milliers et les décimales) — la validation vit ici, pas seulement dans le formulaire.
+   */
+  updateOrganizationSettings: (tenantId: string, patch: Partial<Omit<OrganizationSettings, 'tenantId'>>) =>
     mockRequest(() => {
-      const settings = organizationSettingsList.find((item) => item.tenantId === tenantId);
-      if (!settings) return undefined;
+      const settings = ensureOrganizationSettings(tenantId);
+      const next = { ...settings, ...patch };
+      if (!currencies.some((currency) => currency.code === next.currency)) return undefined;
+      if (!isRegionalFormatValid({ thousandsSeparator: next.thousandsSeparator, decimalSeparator: next.decimalSeparator })) return undefined;
       Object.assign(settings, patch);
       return settings;
     }),
 
-  getLocalizationSettings: (tenantId: string) => mockRequest(() => localizationSettingsList.find((item) => item.tenantId === tenantId)),
-  updateLocalizationSettings: (tenantId: string, patch: Partial<Omit<(typeof localizationSettingsList)[number], 'tenantId'>>) =>
-    mockRequest(() => {
-      const settings = localizationSettingsList.find((item) => item.tenantId === tenantId);
-      if (!settings) return undefined;
-      Object.assign(settings, patch);
-      return settings;
-    }),
 
   listFiscalYears: (tenantId: string) => mockRequest(() => fiscalYears.filter((year) => year.tenantId === tenantId).sort((a, b) => b.startDate.localeCompare(a.startDate))),
-  getCurrentFiscalYear: (tenantId: string) => mockRequest(() => fiscalYears.find((year) => year.tenantId === tenantId && year.isCurrent)),
+  /** Exercice « En cours » du tenant (règle centrale `findCurrentFiscalYear`), `undefined` si aucun. */
+  getCurrentFiscalYear: (tenantId: string) => mockRequest(() => findCurrentFiscalYear(fiscalYears.filter((year) => year.tenantId === tenantId))),
 
   /**
-   * D-FY-01 (IMPLEMENTATION GO) : crée réellement un nouvel exercice, toujours
-   * `status: 'upcoming'` — cohérent avec le cycle de vie déjà en place
-   * (`openFiscalYear` n'active qu'un exercice `upcoming`, jamais changé ici).
-   * CREATE ≠ CLOSE ≠ OPEN : ne touche à aucun autre exercice du tenant, ne
+   * D-FY-01 (IMPLEMENTATION GO) : crée réellement un nouvel exercice, jamais
+   * clôturé (`isClosed: false`) — son statut métier (À venir / En cours) se
+   * déduit ensuite des dates (`fiscalYearStatus`), sans action d'ouverture.
+   * CREATE ≠ CLOSE : ne touche à aucun autre exercice du tenant, ne
    * copie aucune donnée métier d'un exercice existant (D-FY-01, hors
    * périmètre — cf. mandat §24).
    *
@@ -170,22 +190,22 @@ export const settingsService = {
       // Suffixe aléatoire (même correctif que `workflowService.createRequest`) : `Date.now()` seul
       // colliderait entre deux créations survenant dans la même milliseconde (`VITE_MOCK_API_DELAY=0`
       // en tests rend ce cas réel, pas seulement théorique).
-      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, startDate: input.startDate, endDate: input.endDate, status: 'upcoming', isCurrent: false, createdAt: new Date().toISOString().slice(0, 10), closedAt: null, closedBy: null, sessionSchedule };
+      const year: FiscalYear = { id: `FY-${tenantId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tenantId, startDate: input.startDate, endDate: input.endDate, isClosed: false, createdAt: new Date().toISOString().slice(0, 10), closedAt: null, closedBy: null, sessionSchedule };
       fiscalYears.push(year);
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: year.status }, context: { transferSelections: (input.transferSelections ?? []).join(','), sessionFrequency: sessionSchedule?.frequency ?? '' }, sensitive: false });
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.create', year, after: { status: fiscalYearStatus(year) }, context: { transferSelections: (input.transferSelections ?? []).join(','), sessionFrequency: sessionSchedule?.frequency ?? '' }, sensitive: false });
       return year;
     }),
 
   /**
    * Configure / met à jour la fréquence des séances d'un exercice. Autorisé
-   * tant que l'exercice n'est pas `closed` (un exercice clôturé est verrouillé,
+   * tant que l'exercice n'est pas clôturé (un exercice clôturé est verrouillé,
    * cohérent avec le cycle de vie). `config = null` retire la fréquence.
    * Ne crée jamais de séance — sert uniquement à alimenter `suggestNextSessionDate`.
    */
   updateFiscalYearSessionSchedule: (tenantId: string, fiscalYearId: string, config: SessionScheduleConfig | null) =>
     mockRequest(() => {
       const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
-      if (!year || year.status === 'closed') return undefined;
+      if (!year || year.isClosed) return undefined;
       if (config !== null && !isValidSessionScheduleConfig(config)) return undefined;
       const before = year.sessionSchedule?.frequency ?? '';
       year.sessionSchedule = config ?? undefined;
@@ -195,19 +215,21 @@ export const settingsService = {
 
   /**
    * CLÔTURE VALIDÉE (mandat « Évolution du cycle de vie des exercices fiscaux »
-   * §8/§9) — clôture uniquement l'exercice courant (open, isCurrent), en deux
-   * temps, sans mutation tant que le premier échoue. N'ouvre jamais
+   * §8/§9) — clôture l'exercice désigné, à condition qu'il soit « En cours »
+   * (`fiscalYearStatus` : non clôturé, date de début atteinte — un exercice
+   * « À venir » ne peut pas être clôturé). Deux temps, sans mutation tant que
+   * le premier échoue. N'ouvre jamais
    * automatiquement le suivant (inchangé, aucune règle de succession inventée).
    *
    *   1. CLÔTURE FINANCIÈRE — appelle `financePositionService.closeFiscalYear`
    *      (séquencement déjà recommandé par son propre commentaire) : un
-   *      exercice ne doit jamais passer `status: 'closed'` sans que ses
+   *      exercice ne doit jamais passer `isClosed: true` sans que ses
    *      `ClosingEntry FINAL` existent. `ALREADY_CLOSED` (la clôture
    *      financière a déjà été faite séparément, via l'écran Finance) est
    *      traité comme un précondition déjà satisfaite, PAS un échec —
    *      idempotent, ne bloque jamais une clôture gouvernance qui suit une
    *      clôture financière déjà réalisée.
-   *   2. FLIP DE STATUT — `status: 'closed'`, `isCurrent: false`, pose du
+   *   2. CLÔTURE — `isClosed: true`, pose du
    *      cache d'affichage `closedAt`/`closedBy` (voir le champ sur
    *      `FiscalYear`), puis audit `fiscalYears.close` (inchangé).
    *
@@ -223,9 +245,12 @@ export const settingsService = {
    * décaissement, toujours `status: 'active'`) — un contrôle sur une valeur
    * qui ne peut jamais survenir ne serait pas une validation réelle.
    */
-  closeCurrentFiscalYear: async (tenantId: string): Promise<CloseCurrentFiscalYearOutcome> => {
-    const year = fiscalYears.find((item) => item.tenantId === tenantId && item.isCurrent);
-    if (!year || year.status !== 'open') return { ok: false, reason: 'NO_CURRENT_YEAR' };
+  closeFiscalYear: async (tenantId: string, fiscalYearId: string): Promise<FiscalYearClosureOutcome> => {
+    const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
+    if (!year) return { ok: false, reason: 'NOT_FOUND' };
+    const status = fiscalYearStatus(year);
+    if (status === 'closed') return { ok: false, reason: 'ALREADY_CLOSED' };
+    if (status === 'upcoming') return { ok: false, reason: 'NOT_STARTED' };
 
     const financeOutcome = await financePositionService.closeFiscalYear(tenantId, year.id);
     if (!financeOutcome || (!financeOutcome.ok && financeOutcome.reason !== 'ALREADY_CLOSED')) {
@@ -239,9 +264,7 @@ export const settingsService = {
       transactions: transactions.filter((item) => item.tenantId === tenantId && inPeriod(item.date) && item.status === 'pending').length,
     };
 
-    const fromStatus = year.status;
-    year.status = 'closed';
-    year.isCurrent = false;
+    year.isClosed = true;
     year.closedAt = new Date().toISOString();
     year.closedBy = currentUser.name;
     const hasPending = pendingOperations.applications + pendingOperations.distributions + pendingOperations.transactions > 0;
@@ -249,8 +272,8 @@ export const settingsService = {
       tenantId,
       action: 'fiscalYears.close',
       year,
-      before: { status: fromStatus, isCurrent: 1 },
-      after: { status: year.status, isCurrent: 0 },
+      before: { status },
+      after: { status: fiscalYearStatus(year) },
       context: hasPending ? { pendingApplications: pendingOperations.applications, pendingDistributions: pendingOperations.distributions, pendingTransactions: pendingOperations.transactions } : undefined,
       sensitive: true,
     });
@@ -272,7 +295,7 @@ export const settingsService = {
     mockRequest(() => {
       const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
       if (!year) return { ok: false, reason: 'NOT_FOUND' };
-      if (year.status === 'closed') return { ok: false, reason: 'CLOSED' };
+      if (year.isClosed) return { ok: false, reason: 'CLOSED' };
       if (new Date(newEndDate) <= new Date(year.endDate)) return { ok: false, reason: 'NOT_AN_EXTENSION' };
       const nextYear = fiscalYears
         .filter((item) => item.tenantId === tenantId && item.id !== year.id && item.startDate > year.endDate)
@@ -283,20 +306,6 @@ export const settingsService = {
       recordFiscalYearAudit({ tenantId, action: 'fiscalYears.extend', year, before: { endDate: before }, after: { endDate: year.endDate }, sensitive: false });
       return { ok: true, year };
     }),
-  /** Ouvre un exercice `upcoming` explicitement choisi — l'administrateur décide, jamais une cascade automatique de statut. `isCurrent` reste néanmoins un invariant à un seul exercice par tenant (jamais deux exercices courants simultanés), donc l'ancien exercice courant perd `isCurrent` ici — son `status` n'est pas touché (D-FY-03, VALIDÉE). */
-  openFiscalYear: (tenantId: string, fiscalYearId: string) =>
-    mockRequest(() => {
-      const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
-      if (!year || year.status !== 'upcoming') return undefined;
-      const previousCurrent = fiscalYears.find((item) => item.tenantId === tenantId && item.isCurrent);
-      if (previousCurrent) previousCurrent.isCurrent = false;
-      const fromStatus = year.status;
-      year.status = 'open';
-      year.isCurrent = true;
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.open', year, before: { status: fromStatus, isCurrent: 0 }, after: { status: year.status, isCurrent: 1 }, sensitive: false });
-      return year;
-    }),
-
   /**
    * §24-BIS (évolution de gouvernance) : la réouverture n'est plus une action
    * directe — remplacé par un workflow demande → approbation, réutilisant le
@@ -320,7 +329,7 @@ export const settingsService = {
     const trimmed = justification.trim();
     if (!trimmed) return null;
     const year = fiscalYears.find((item) => item.id === fiscalYearId && item.tenantId === tenantId);
-    if (!year || year.status !== 'closed') return null;
+    if (!year || !year.isClosed) return null;
     const alreadyPending = workflowRequests.some((request) => request.tenantId === tenantId && request.domain === 'settings' && request.entityType === 'fiscalYear' && request.entityId === fiscalYearId && (request.status === 'pending' || request.status === 'inProgress'));
     if (alreadyPending) return null;
     const warnings = computeReopenWarnings(tenantId, year);
@@ -386,21 +395,20 @@ export const settingsService = {
    * pas l'inverse, pour éviter toute dépendance de `workflow.service.ts` vers
    * `settings.service.ts`.
    *
-   * Précision verrouillée (§8 mandat IMPLEMENTATION GO, réaffirmée §10 §24-BIS) :
-   * `isCurrent` n'est JAMAIS modifié ici, dans aucun cas. Devenir `CURRENT`
-   * reste une opération strictement distincte (`openFiscalYear`).
+   * Une réouverture approuvée lève uniquement la clôture (`isClosed: false`) :
+   * le statut métier redevient celui que dictent les dates (`fiscalYearStatus`).
    */
   applyFiscalYearReopenDecision: (tenantId: string, request: WorkflowRequest) => {
     if (request.domain !== 'settings' || request.entityType !== 'fiscalYear') return;
     const year = fiscalYears.find((item) => item.id === request.entityId && item.tenantId === tenantId);
     if (!year) return;
-    if (request.status === 'approved' && year.status === 'closed') {
-      year.status = 'open';
+    if (request.status === 'approved' && year.isClosed) {
+      year.isClosed = false;
       // Cache d'affichage remis à `null` (pas l'audit — cf. le champ sur `FiscalYear` : l'historique
       // de la clôture précédente reste intégralement dans `audit_logs`, mandat §25/§26).
       year.closedAt = null;
       year.closedBy = null;
-      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopened', year, before: { status: 'closed' }, after: { status: 'open' }, context: { requestId: request.id }, sensitive: true });
+      recordFiscalYearAudit({ tenantId, action: 'fiscalYears.reopened', year, before: { status: 'closed' }, after: { status: fiscalYearStatus(year) }, context: { requestId: request.id }, sensitive: true });
     }
     // 'rejected'/'returned'/'cancelled' : FiscalYear reste inchangé (toujours 'closed') — la décision elle-même
     // (qui, quand, commentaire) est déjà tracée génériquement par workflowService.listHistory (déjà réutilisé,

@@ -5,16 +5,17 @@ import type { Permission } from '@/mocks/rbac.mocks';
 type T = (section: 'access', key: string, values?: Record<string, string>) => string;
 
 export const MODULE_KEY: Record<string, string> = {
-  tenants: 'moduleTenants', members: 'moduleMembers', governance: 'moduleGovernance', accounts: 'moduleAccounts', transactions: 'moduleTransactions', contributions: 'moduleContributions', distributions: 'moduleDistributions', applications: 'moduleApplications', loans: 'moduleLoans', repayments: 'moduleRepayments', guarantors: 'moduleGuarantors', tontines: 'moduleTontines', cycles: 'moduleCycles', draws: 'moduleDraws', workflows: 'moduleWorkflows', notifications: 'moduleNotifications', documents: 'moduleDocuments', users: 'moduleUsers', roles: 'moduleRoles', permissions: 'modulePermissions', sessions: 'moduleSessions', mfa: 'moduleMfa',
+  tenants: 'moduleTenants', members: 'moduleMembers', governance: 'moduleGovernance', cashboxes: 'moduleCashboxes', transactions: 'moduleTransactions', contributions: 'moduleContributions', distributions: 'moduleDistributions', applications: 'moduleApplications', loans: 'moduleLoans', repayments: 'moduleRepayments', guarantors: 'moduleGuarantors', tontines: 'moduleTontines', cycles: 'moduleCycles', draws: 'moduleDraws', workflows: 'moduleWorkflows', notifications: 'moduleNotifications', documents: 'moduleDocuments', users: 'moduleUsers', roles: 'moduleRoles', permissions: 'modulePermissions', sessions: 'moduleSessions', mfa: 'moduleMfa',
 };
 
 export const ACTION_KEY: Record<string, string> = {
-  read: 'actionRead', create: 'actionCreate', update: 'actionUpdate', delete: 'actionDelete', approve: 'actionApprove', export: 'actionExport', manage: 'actionManage', revoke: 'actionRevoke', download: 'actionDownload',
+  read: 'actionRead', create: 'actionCreate', update: 'actionUpdate', delete: 'actionDelete', approve: 'actionApprove', 'approve.member': 'actionApproveMember', 'approve.board': 'actionApproveBoard', 'approve.admin': 'actionApproveAdmin', export: 'actionExport', manage: 'actionManage', revoke: 'actionRevoke', download: 'actionDownload',
 };
 
 export function splitPermission(permission: Permission): { module: string; action: string } {
-  const [module, action] = permission.split('.');
-  return { module: module ?? permission, action: action ?? '' };
+  // `loans.approve.admin` → module `loans`, action `approve.admin` (jamais tronquée à `approve`).
+  const [module, ...rest] = permission.split('.');
+  return { module: module ?? permission, action: rest.join('.') };
 }
 
 export function groupByModule(permissions: Permission[]): [string, Permission[]][] {

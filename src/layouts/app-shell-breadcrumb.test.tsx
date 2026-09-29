@@ -24,7 +24,7 @@ async function renderShellAsTenant(tenantId: string, route: string) {
 
 describe('AppShell — le bloc tenant reflète dynamiquement le tenant courant (pas une valeur figée)', () => {
   it('affiche le nom du tenant réellement courant, différent selon l’utilisateur', async () => {
-    await renderShellAsTenant('T-002', '/finance/accounts');
+    await renderShellAsTenant('T-002', '/finance/cashboxes');
 
     expect(await screen.findByText('Tontine Horizon')).toBeInTheDocument();
     expect(screen.queryByText('Coopérative Sutura')).not.toBeInTheDocument();

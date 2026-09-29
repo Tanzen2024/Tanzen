@@ -32,7 +32,7 @@ type T = (section: 'settings' | 'nav' | 'system', key: string, values?: Record<s
  * possède ses propres clés de section, cf. `organization`/`operations`).
  */
 const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'wfDomainCredit', tontines: 'wfDomainTontines', governance: 'wfDomainGovernance', finance: 'wfDomainFinance', settings: 'wfDomainSettings', organization: 'wfDomainOrganization' };
-const ENTITY_KEY: Record<WorkflowDefinition['entityType'], string> = { application: 'wfEntityApplication', loan: 'wfEntityLoan', assembly: 'wfEntityAssembly', distribution: 'wfEntityDistribution', fiscalYear: 'wfEntityFiscalYear', beneficiaryPermutation: 'wfEntityBeneficiaryPermutation', member: 'wfEntityMember' };
+const ENTITY_KEY: Record<WorkflowDefinition['entityType'], string> = { application: 'wfEntityApplication', loan: 'wfEntityLoan', assembly: 'wfEntityAssembly', distribution: 'wfEntityDistribution', fiscalYear: 'wfEntityFiscalYear', beneficiaryPermutation: 'wfEntityBeneficiaryPermutation', member: 'wfEntityMember', creditRule: 'wfEntityCreditRule' };
 const ACTION_KEY: Record<WorkflowActionType, string> = { create: 'wfActionCreate', update: 'wfActionUpdate', close: 'wfActionClose', reopen: 'wfActionReopen', delete: 'wfActionDelete' };
 
 function Page({ title, description, actions, children }: { title: string; description?: string; actions?: ReactNode; children: ReactNode }) {

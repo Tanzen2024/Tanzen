@@ -3,13 +3,13 @@ import { flows } from './flows';
 import { balanceAsOf } from './balance';
 import { makeCashbox, makeCtx, makeMembership, makeTransaction } from './__fixtures__/factories';
 import type { FinanceCtx } from './types';
-import { cashboxes as seedAccounts } from '@/mocks/finance/cashboxes';
+import { cashboxes as seedCashboxes } from '@/mocks/finance/cashboxes';
 import { transactions as seedTransactions } from '@/mocks/finance/transactions';
 import { cashboxMemberships as seedMemberships } from '@/mocks/finance/cashbox-memberships';
 
 function seedCtx(tenantId: string): FinanceCtx {
   return {
-    cashboxes: seedAccounts.filter((a) => a.tenantId === tenantId),
+    cashboxes: seedCashboxes.filter((a) => a.tenantId === tenantId),
     transactions: seedTransactions.filter((t) => t.tenantId === tenantId),
     memberships: seedMemberships.filter((m) => m.tenantId === tenantId),
   };
@@ -23,13 +23,13 @@ describe('flows — période inclusive, completed only', () => {
   const ctx = makeCtx({
     cashboxes: [caisse],
     transactions: [
-      makeTransaction({ id: 'A', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 100_000, date: '2026-05-01' }),
-      makeTransaction({ id: 'B', tenantId: 'T-1', fromAccount: 'CX-1', toAccount: 'T', type: 'debit', amount: 30_000, date: '2026-05-15' }),
-      makeTransaction({ id: 'C', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 40_000, date: '2026-05-31' }),
-      makeTransaction({ id: 'D', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-01' }),
-      makeTransaction({ id: 'P', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 12_000, date: '2026-05-10', status: 'pending' }),
-      makeTransaction({ id: 'X', tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 7_000, date: '2026-05-10', status: 'cancelled' }),
-      makeTransaction({ id: 'OT', tenantId: 'T-2', toAccount: 'CX-1', type: 'credit', amount: 5_000, date: '2026-05-10' }),
+      makeTransaction({ id: 'A', tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 100_000, date: '2026-05-01' }),
+      makeTransaction({ id: 'B', tenantId: 'T-1', source: 'CX-1', destination: 'T', type: 'debit', amount: 30_000, date: '2026-05-15' }),
+      makeTransaction({ id: 'C', tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 40_000, date: '2026-05-31' }),
+      makeTransaction({ id: 'D', tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 999_000, date: '2026-06-01' }),
+      makeTransaction({ id: 'P', tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 12_000, date: '2026-05-10', status: 'pending' }),
+      makeTransaction({ id: 'X', tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 7_000, date: '2026-05-10', status: 'cancelled' }),
+      makeTransaction({ id: 'OT', tenantId: 'T-2', destination: 'CX-1', type: 'credit', amount: 5_000, date: '2026-05-10' }),
     ],
   });
 
@@ -65,10 +65,10 @@ describe('flows — SOLDE ≠ FLUX', () => {
     const ctx = makeCtx({
       cashboxes: [caisse],
       transactions: [
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 300_000, date: '2026-05-10' }),
-        makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-1', toAccount: 'T', type: 'debit', amount: 150_000, date: '2026-05-20' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 300_000, date: '2026-05-10' }),
+        makeTransaction({ tenantId: 'T-1', source: 'CX-1', destination: 'T', type: 'debit', amount: 150_000, date: '2026-05-20' }),
         // transaction d'avril — dans le solde d'ouverture de mai, PAS dans le flux de mai
-        makeTransaction({ tenantId: 'T-1', toAccount: 'CX-1', type: 'credit', amount: 500_000, date: '2026-04-15' }),
+        makeTransaction({ tenantId: 'T-1', destination: 'CX-1', type: 'credit', amount: 500_000, date: '2026-04-15' }),
       ],
     });
     const fluxMai = flows(ACCOUNT('AC-1'), ctx, '2026-05-01', '2026-05-31');
@@ -89,7 +89,7 @@ describe('flows — virement inter-caisses (comportement actuel, sans marqueur I
     const dst = makeCashbox({ id: 'AC-DST', cashboxNumber: 'CX-DST' });
     const ctx = makeCtx({
       cashboxes: [src, dst],
-      transactions: [makeTransaction({ tenantId: 'T-1', fromAccount: 'CX-SRC', toAccount: 'CX-DST', type: 'debit', amount: 500_000, date: '2026-05-10' })],
+      transactions: [makeTransaction({ tenantId: 'T-1', source: 'CX-SRC', destination: 'CX-DST', type: 'debit', amount: 500_000, date: '2026-05-10' })],
     });
     const result = flows(TENANT, ctx, '2026-05-01', '2026-05-31');
     expect(result.totalDebit).toBe(500_000); // connu : sera exclu à l'étape 10
@@ -112,12 +112,12 @@ describe('flows — scope membre (rattachement temporel explicite)', () => {
       makeMembership({ id: 'AM-P', cashboxId: 'AC-P', memberId: 'M-J', startDate: '2026-06-01', endDate: null }),
     ],
     transactions: [
-      makeTransaction({ id: 'T-avril', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'CX-T', toAccount: 'M-J', type: 'debit', amount: 100_000, date: '2026-04-10' }),
-      makeTransaction({ id: 'T-mai', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'CX-T', toAccount: 'M-J', type: 'debit', amount: 200_000, date: '2026-05-10' }),
-      makeTransaction({ id: 'E-mai', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'M-J', toAccount: 'CX-E', type: 'credit', amount: 60_000, date: '2026-05-12' }),
-      makeTransaction({ id: 'P-mai', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'M-J', toAccount: 'CX-P', type: 'credit', amount: 30_000, date: '2026-05-15' }),
-      makeTransaction({ id: 'P-juin', tenantId: 'T-1', memberId: 'M-J', fromAccount: 'M-J', toAccount: 'CX-P', type: 'credit', amount: 40_000, date: '2026-06-15' }),
-      makeTransaction({ id: 'other', tenantId: 'T-1', memberId: 'M-OTHER', fromAccount: 'M-OTHER', toAccount: 'CX-E', type: 'credit', amount: 999_000, date: '2026-05-20' }),
+      makeTransaction({ id: 'T-avril', tenantId: 'T-1', memberId: 'M-J', source: 'CX-T', destination: 'M-J', type: 'debit', amount: 100_000, date: '2026-04-10' }),
+      makeTransaction({ id: 'T-mai', tenantId: 'T-1', memberId: 'M-J', source: 'CX-T', destination: 'M-J', type: 'debit', amount: 200_000, date: '2026-05-10' }),
+      makeTransaction({ id: 'E-mai', tenantId: 'T-1', memberId: 'M-J', source: 'M-J', destination: 'CX-E', type: 'credit', amount: 60_000, date: '2026-05-12' }),
+      makeTransaction({ id: 'P-mai', tenantId: 'T-1', memberId: 'M-J', source: 'M-J', destination: 'CX-P', type: 'credit', amount: 30_000, date: '2026-05-15' }),
+      makeTransaction({ id: 'P-juin', tenantId: 'T-1', memberId: 'M-J', source: 'M-J', destination: 'CX-P', type: 'credit', amount: 40_000, date: '2026-06-15' }),
+      makeTransaction({ id: 'other', tenantId: 'T-1', memberId: 'M-OTHER', source: 'M-OTHER', destination: 'CX-E', type: 'credit', amount: 999_000, date: '2026-05-20' }),
     ],
   });
   const M_ALL = { kind: 'MEMBER_ALL_CASHBOXES' as const, memberId: 'M-J' };
@@ -153,15 +153,15 @@ describe('flows — scope membre (rattachement temporel explicite)', () => {
 });
 
 describe('flows — seed réel T-001', () => {
-  it('TENANT_ALL_CASHBOXES sur 2026 : totalDebit 1 375 000 / totalCredit 220 000 / 6 transactions (cohérent avec l’écran)', () => {
+  it('TENANT_ALL_CASHBOXES sur 2026 : totalDebit 882 000 / totalCredit 337 000 / 16 transactions (cohérent avec l’écran)', () => {
     const result = flows(TENANT, seedCtx('T-001'), '2026-01-01', '2026-12-31');
-    expect(result.totalDebit).toBe(1_375_000);
-    expect(result.totalCredit).toBe(220_000);
-    expect(result.count).toBe(6);
+    expect(result.totalDebit).toBe(882_000);
+    expect(result.totalCredit).toBe(337_000);
+    expect(result.count).toBe(16);
   });
 
-  it('ACCOUNT Trésorerie (AC-001) sur 2026 : 3 transactions (TR-002, TR-004, TR-010)', () => {
-    const result = flows(ACCOUNT('AC-001'), seedCtx('T-001'), '2026-01-01', '2026-12-31');
-    expect(result.transactionIds.sort()).toEqual(['TR-002', 'TR-004', 'TR-010']);
+  it('ACCOUNT Transport (AC-012) sur 2026 : 4 transactions (TR-006, TR-010, TR-018, TR-019)', () => {
+    const result = flows(ACCOUNT('AC-012'), seedCtx('T-001'), '2026-01-01', '2026-12-31');
+    expect(result.transactionIds.sort()).toEqual(['TR-006', 'TR-010', 'TR-018', 'TR-019']);
   });
 });

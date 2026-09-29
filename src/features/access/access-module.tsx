@@ -16,7 +16,6 @@ import { userService, type UserInput } from '@/services/user.service';
 import { roleService, type RoleInput } from '@/services/role.service';
 import { sessionService } from '@/services/session.service';
 import { workflowService } from '@/services/workflow.service';
-import { organizationService } from '@/services/organization.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
@@ -55,15 +54,13 @@ function UsersList({ t }: { t: T }) {
   /** D1 (cf. docs/P0_USERS_DECISIONS_A_VALIDER.md, docs/FIX_TENANT_APP_SINGLE_TENANT.md) : toujours 'tenant', jamais la portée RBAC résolue de l'utilisateur — l'Application Tenant reste isolée à un seul tenant quel que soit le scope. */
   const { data: users = [], isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.access.users, currentTenant.id], queryFn: () => userService.list(currentTenant.id, 'tenant') });
   const { data: roles = [] } = useRoles();
-  const [search, setSearch] = useState(''); const [tenant, setTenant] = useState('all'); const [status, setStatus] = useState('all'); const [role, setRole] = useState('all'); const [mfa, setMfa] = useState('all');
+  const [search, setSearch] = useState(''); const [status, setStatus] = useState('all'); const [role, setRole] = useState('all'); const [mfa, setMfa] = useState('all');
 
   if (isLoading) return <Page title={t('access', 'usersTitle')} description={t('access', 'usersDescription')}><TableSkeleton /></Page>;
   if (isError) return <Page title={t('access', 'usersTitle')} description={t('access', 'usersDescription')}><ErrorState onRetry={refetch} /></Page>;
 
-  const tenants = [...new Map(users.map((user) => [user.tenantId, user.tenantName])).entries()];
   const filtered = users.filter((user) =>
     `${user.name} ${user.email}`.toLowerCase().includes(search.toLowerCase()) &&
-    (tenant === 'all' || user.tenantId === tenant) &&
     (status === 'all' || (status === 'active') === user.isActive) &&
     (role === 'all' || user.roleIds.includes(role)) &&
     (mfa === 'all' || user.mfaStatus === mfa),
@@ -72,7 +69,6 @@ function UsersList({ t }: { t: T }) {
   const columns: TableColumn<SystemUser>[] = [
     { key: 'name', header: t('access', 'name'), render: (row) => <button type="button" onClick={() => navigate(`/access-security/users/${row.id}`)} className="flex items-center gap-3 text-left"><Avatar name={row.name} /><span className="font-semibold">{row.name}</span></button> },
     { key: 'email', header: t('access', 'email'), render: (row) => <span className="text-sm text-muted-foreground">{row.email}</span> },
-    { key: 'tenant', header: t('access', 'tenant'), render: (row) => row.tenantName },
     { key: 'status', header: t('access', 'status'), render: (row) => <StatusBadge label={t('access', userStatusKey(row.isActive))} tone={userStatusTone(row.isActive)} /> },
     { key: 'roles', header: t('access', 'roles'), render: (row) => <div className="flex flex-wrap gap-1">{roleNames(row.roleIds, roles).map((name) => <span key={name} className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium">{name}</span>)}</div> },
     { key: 'mfa', header: t('access', 'mfa'), render: (row) => <StatusBadge label={t('access', MFA_KEY[row.mfaStatus])} tone={MFA_TONE[row.mfaStatus]} /> },
@@ -86,7 +82,6 @@ function UsersList({ t }: { t: T }) {
       <StatCard label={t('access', 'mfaDisabled')} value={formatNumber(users.filter((u) => u.mfaStatus === 'disabled').length)} icon={ShieldOff} tone="warning" />
     </div>
     <FilterBar search={search} onSearchChange={setSearch} placeholder={t('access', 'searchUser')} filters={<>
-      <select value={tenant} onChange={(e) => setTenant(e.target.value)} aria-label={t('access', 'tenant')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('access', 'allTenants')}</option>{tenants.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select>
       <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label={t('access', 'status')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('access', 'allStatuses')}</option>{(['active', 'inactive'] as const).map((s) => <option key={s} value={s}>{t('access', userStatusKey(s === 'active'))}</option>)}</select>
       <select value={role} onChange={(e) => setRole(e.target.value)} aria-label={t('access', 'roles')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('access', 'allRoles')}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select>
       <select value={mfa} onChange={(e) => setMfa(e.target.value)} aria-label={t('access', 'mfa')} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('access', 'allMfaStatuses')}</option>{(['enabled', 'disabled', 'pending'] as MfaStatus[]).map((m) => <option key={m} value={m}>{t('access', MFA_KEY[m])}</option>)}</select>
@@ -128,7 +123,8 @@ function RoleFormFields({ t, values, onChange, errors, permissionCatalog }: { t:
   </>;
 }
 
-type UserFormValues = { name: string; email: string; tenantId: string; roleIds: string[] };
+/** Pas de champ tenant : le tenant d'un utilisateur est toujours le tenant courant (contexte applicatif), jamais choisi à l'écran. */
+type UserFormValues = { name: string; email: string; roleIds: string[] };
 type UserFormErrors = Partial<Record<'name' | 'email', string>>;
 
 function validateUserForm(values: UserFormValues, t: T): UserFormErrors {
@@ -139,16 +135,15 @@ function validateUserForm(values: UserFormValues, t: T): UserFormErrors {
   return errors;
 }
 
-function UserFormFields({ t, values, onChange, errors, tenants, roles, currentUserScope }: { t: T; values: UserFormValues; onChange: (patch: Partial<UserFormValues>) => void; errors: UserFormErrors; tenants: { id: string; name: string }[]; roles: SystemRole[]; currentUserScope: 'tenant' | 'platform' }) {
-  return <><FormSection title={t('access', 'general')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="user-name">{t('access', 'name')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="user-name" value={values.name} onChange={(event) => onChange({ name: event.target.value })} aria-required="true" aria-invalid={Boolean(errors.name)} /><FieldError message={errors.name} /></div><div className="space-y-2"><Label htmlFor="user-email">{t('access', 'email')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="user-email" type="email" value={values.email} onChange={(event) => onChange({ email: event.target.value })} aria-required="true" aria-invalid={Boolean(errors.email)} /><FieldError message={errors.email} /></div><div className="space-y-2 sm:col-span-2"><Label htmlFor="user-tenant">{t('access', 'tenant')}</Label><select id="user-tenant" value={values.tenantId} onChange={(event) => onChange({ tenantId: event.target.value })} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></div></div></FormSection><FormSection title={t('access', 'roles')}><RolePicker roles={roles} currentUserScope={currentUserScope} selected={values.roleIds} onChange={(ids) => onChange({ roleIds: ids })} /></FormSection></>;
+function UserFormFields({ t, values, onChange, errors, roles, currentUserScope }: { t: T; values: UserFormValues; onChange: (patch: Partial<UserFormValues>) => void; errors: UserFormErrors; roles: SystemRole[]; currentUserScope: 'tenant' | 'platform' }) {
+  return <><FormSection title={t('access', 'general')}><div className="grid gap-4 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor="user-name">{t('access', 'name')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="user-name" value={values.name} onChange={(event) => onChange({ name: event.target.value })} aria-required="true" aria-invalid={Boolean(errors.name)} /><FieldError message={errors.name} /></div><div className="space-y-2"><Label htmlFor="user-email">{t('access', 'email')} <span className="text-destructive" aria-hidden="true">*</span></Label><Input id="user-email" type="email" value={values.email} onChange={(event) => onChange({ email: event.target.value })} aria-required="true" aria-invalid={Boolean(errors.email)} /><FieldError message={errors.email} /></div></div></FormSection><FormSection title={t('access', 'roles')}><RolePicker roles={roles} currentUserScope={currentUserScope} selected={values.roleIds} onChange={(ids) => onChange({ roleIds: ids })} /></FormSection></>;
 }
 
 function UserCreate({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
   /** Application Tenant : toujours 'tenant' pour le registre, jamais la portée RBAC résolue de l'utilisateur (cf. docs/FIX_TENANT_APP_SINGLE_TENANT.md, docs/P0_TENANTS_AUDIT.md E1) — `user.scope` reste utilisé ci-dessous pour `currentUserScope` (RolePicker) ET, depuis le correctif sécurité (docs/P0_RBAC_SCOPE_SECURITY_FIX_REPORT.md), comme `actorScope` transmis à `userService.create` — le service applique désormais la même garde anti-élévation que `RolePicker`, pas seulement l'UI. */
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const { data: roles = [] } = useRoles();
-  const [values, setValues] = useState<UserFormValues>({ name: '', email: '', tenantId: currentTenant.id, roleIds: [] });
+  const [values, setValues] = useState<UserFormValues>({ name: '', email: '', roleIds: [] });
   const [errors, setErrors] = useState<UserFormErrors>({});
   const mutation = useMockMutation<SystemUser | undefined, UserInput>({
     mutationFn: (input) => userService.create(input, user.scope),
@@ -163,17 +158,15 @@ function UserCreate({ t }: { t: T }) {
     const nextErrors = validateUserForm(values, t);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    const tenant = tenants.find((item) => item.id === values.tenantId);
-    mutation.mutate({ name: values.name, email: values.email, tenantId: values.tenantId, tenantName: tenant?.name ?? currentTenant.name, roleIds: values.roleIds });
+    mutation.mutate({ name: values.name, email: values.email, tenantId: currentTenant.id, tenantName: currentTenant.name, roleIds: values.roleIds });
   };
-  return <Page title={t('access', 'createUser')} description={t('access', 'usersDescription')} actions={<Back label={t('access', 'backToUsers')} />}><div className="grid gap-5 lg:grid-cols-2"><UserFormFields t={t} values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} tenants={tenants} roles={roles} currentUserScope={user.scope} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/access-security/users')}>{t('access', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('access', 'saving') : t('access', 'save')}</Button></div></div></Page>;
+  return <Page title={t('access', 'createUser')} description={t('access', 'usersDescription')} actions={<Back label={t('access', 'backToUsers')} />}><div className="grid gap-5 lg:grid-cols-2"><UserFormFields t={t} values={values} onChange={(patch) => setValues((current) => ({ ...current, ...patch }))} errors={errors} roles={roles} currentUserScope={user.scope} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate('/access-security/users')}>{t('access', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('access', 'saving') : t('access', 'save')}</Button></div></div></Page>;
 }
 
 function UserEdit({ t }: { t: T }) {
   const { id: userId = '' } = useParams(); const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user: currentUser } = usePermissions();
   /** D1 : toujours 'tenant' pour get()/update() (4ᵉ paramètre) — jamais la portée RBAC résolue de l'utilisateur. `currentUser.scope` reste utilisé ci-dessous pour `currentUserScope` (RolePicker) ET comme `actorScope` (5ᵉ paramètre d'`update()`, correctif sécurité, cf. docs/P0_RBAC_SCOPE_SECURITY_FIX_REPORT.md) — deux usages RBAC distincts du même scope résolu, aucun rapport avec l'isolation tenant (4ᵉ paramètre), jamais fusionnés. */
   const { data: existing, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.access.user(userId), currentTenant.id], queryFn: () => userService.get(currentTenant.id, userId, 'tenant') });
-  const { data: tenants = [] } = useQuery({ queryKey: queryKeys.tenants.list(currentTenant.id, 'tenant'), queryFn: () => organizationService.listTenants(currentTenant.id, 'tenant') });
   const { data: roles = [] } = useRoles();
   const [values, setValues] = useState<UserFormValues | null>(null);
   const [errors, setErrors] = useState<UserFormErrors>({});
@@ -185,15 +178,14 @@ function UserEdit({ t }: { t: T }) {
   if (isLoading) return <Page title={t('access', 'editUser')}><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('access', 'editUser')}><ErrorState onRetry={refetch} /></Page>;
   if (!existing) return <NotFoundPage />;
-  const current = values ?? { name: existing.name, email: existing.email, tenantId: existing.tenantId, roleIds: existing.roleIds };
+  const current = values ?? { name: existing.name, email: existing.email, roleIds: existing.roleIds };
   const handleSave = () => {
     const nextErrors = validateUserForm(current, t);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    const tenant = tenants.find((item) => item.id === current.tenantId);
-    mutation.mutate({ name: current.name, email: current.email, tenantId: current.tenantId, tenantName: tenant?.name ?? existing.tenantName, roleIds: current.roleIds });
+    mutation.mutate({ name: current.name, email: current.email, tenantId: currentTenant.id, tenantName: currentTenant.name, roleIds: current.roleIds });
   };
-  return <Page title={t('access', 'editUser')} description={existing.name} actions={<Back label={t('access', 'backToUsers')} />}><div className="grid gap-5 lg:grid-cols-2"><UserFormFields t={t} values={current} onChange={(patch) => setValues({ ...current, ...patch })} errors={errors} tenants={tenants} roles={roles} currentUserScope={currentUser.scope} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/access-security/users/${userId}`)}>{t('access', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('access', 'saving') : t('access', 'save')}</Button></div></div></Page>;
+  return <Page title={t('access', 'editUser')} description={existing.name} actions={<Back label={t('access', 'backToUsers')} />}><div className="grid gap-5 lg:grid-cols-2"><UserFormFields t={t} values={current} onChange={(patch) => setValues({ ...current, ...patch })} errors={errors} roles={roles} currentUserScope={currentUser.scope} /><div className="flex justify-end gap-2 lg:col-span-2"><Button variant="outline" disabled={mutation.isPending} onClick={() => navigate(`/access-security/users/${userId}`)}>{t('access', 'cancel')}</Button><Button disabled={mutation.isPending} onClick={handleSave}>{mutation.isPending ? t('access', 'saving') : t('access', 'save')}</Button></div></div></Page>;
 }
 
 function ProfileTab({ t, user }: { t: T; user: SystemUser }) {
@@ -480,7 +472,6 @@ function MfaPage({ t }: { t: T }) {
 
   const columns: TableColumn<SystemUser>[] = [
     { key: 'name', header: t('access', 'name'), render: (row) => <span className="flex items-center gap-2"><Avatar name={row.name} />{row.name}</span> },
-    { key: 'tenant', header: t('access', 'tenant'), render: (row) => row.tenantName },
     { key: 'mfa', header: t('access', 'mfaStatus'), render: (row) => <StatusBadge label={t('access', MFA_KEY[row.mfaStatus])} tone={MFA_TONE[row.mfaStatus]} /> },
     { key: 'method', header: t('access', 'authenticator'), render: (row) => t('access', METHOD_KEY[row.mfaMethod]) },
     { key: 'devices', header: t('access', 'registeredDevices'), render: (row) => formatNumber(row.mfaDevices.length) },

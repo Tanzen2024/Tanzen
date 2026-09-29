@@ -20,18 +20,18 @@ function isMemberScope(
  *     par le bas les transactions comptées ensuite (`referenceDate(tx) >=
  *     floorDate`) — sinon on compterait deux fois ce qui est déjà inclus dans
  *     l'`OpeningEntry`.
- *   - Sinon → comportement LEGACY strictement inchangé : `account.openingBalance`,
+ *   - Sinon → comportement LEGACY strictement inchangé : `cashbox.openingBalance`,
  *     réputé valable à toute date (comme `resolveCashbox`), aucune borne basse.
  *     C'est le cas de TOUTES les caisses seedées tant que `closeFiscalYear`/
  *     `carryForward` (`closing.ts`/`carry-forward.ts`) n'ont pas tourné pour
  *     elles — non-régression garantie pour les tests des étapes 1-5.
  */
-export function resolveBaseline(account: CashboxRecord, ctx: FinanceCtx, asOfDate: string): BaselineResolution {
-  const opening = latestFinalOpeningEntryAsOf(ctx.openingEntries ?? [], account.id, asOfDate);
+export function resolveBaseline(cashbox: CashboxRecord, ctx: FinanceCtx, asOfDate: string): BaselineResolution {
+  const opening = latestFinalOpeningEntryAsOf(ctx.openingEntries ?? [], cashbox.id, asOfDate);
   if (opening) {
     return { amount: opening.amount, floorDate: opening.date, openingEntryId: opening.id };
   }
-  return { amount: account.openingBalance };
+  return { amount: cashbox.openingBalance };
 }
 
 /**
@@ -43,7 +43,7 @@ export function resolveBaseline(account: CashboxRecord, ctx: FinanceCtx, asOfDat
  *     + Σ effet(caisse, tx)
  *         | tx.status == 'completed'
  *         | referenceDate(tx) <= asOfDate       (borne inclusive)
- *         | caisse ∈ { tx.fromAccount, tx.toAccount }
+ *         | caisse ∈ { tx.source, tx.destination }
  *         | scope membre ⇒ tx.memberId == memberId
  *                        ET adhésion à la caisse active le jour de tx
  *
@@ -55,7 +55,7 @@ export function resolveBaseline(account: CashboxRecord, ctx: FinanceCtx, asOfDat
  * caisses / transactions / adhésions du tenant courant.
  */
 export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: string): BalanceResult {
-  const { cashboxes: accounts, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
+  const { cashboxes: cashboxes, outOfScope } = cashboxesOfAsOf(scope, ctx, asOfDate);
   const memberScope = isMemberScope(scope);
   const memberId = memberScope ? scope.memberId : undefined;
 
@@ -63,8 +63,8 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
     (tx) => tx.status === 'completed' && referenceDate(tx) <= asOfDate,
   );
 
-  const byCashbox: BalanceLine[] = accounts.map((account) => {
-    let entries = cashboxLedgerEntries(account, upToDate);
+  const byCashbox: BalanceLine[] = cashboxes.map((cashbox) => {
+    let entries = cashboxLedgerEntries(cashbox, upToDate);
     let opening: number;
     if (memberId) {
       // Scope membre : uniquement SES écritures, et seulement sur les jours où
@@ -77,11 +77,11 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
       entries = entries.filter(
         (tx) =>
           tx.memberId === memberId &&
-          isMemberOfCashboxAsOf(ctx.memberships, memberId, account.id, referenceDate(tx)),
+          isMemberOfCashboxAsOf(ctx.memberships, memberId, cashbox.id, referenceDate(tx)),
       );
       opening = 0;
     } else {
-      const base = resolveBaseline(account, ctx, asOfDate);
+      const base = resolveBaseline(cashbox, ctx, asOfDate);
       opening = base.amount;
       if (base.floorDate) {
         entries = entries.filter((tx) => referenceDate(tx) >= base.floorDate!);
@@ -91,15 +91,15 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
     let credits = 0;
     let debits = 0;
     for (const tx of entries) {
-      const effect = cashboxEntryEffect(account.cashboxNumber, tx);
+      const effect = cashboxEntryEffect(cashbox.cashboxNumber, tx);
       if (effect >= 0) credits += effect;
       else debits += -effect;
     }
 
     const line: BalanceLine = {
-      cashboxId: account.id,
-      cashboxNumber: account.cashboxNumber,
-      cashboxTitle: account.title,
+      cashboxId: cashbox.id,
+      cashboxNumber: cashbox.cashboxNumber,
+      cashboxTitle: cashbox.title,
       opening,
       credits,
       debits,
@@ -109,7 +109,7 @@ export function balanceAsOf(scope: FinancialScope, ctx: FinanceCtx, asOfDate: st
       const active = ctx.memberships.find(
         (m) =>
           m.memberId === memberId &&
-          m.cashboxId === account.id &&
+          m.cashboxId === cashbox.id &&
           m.startDate <= asOfDate &&
           (m.endDate === null || asOfDate <= m.endDate),
       );

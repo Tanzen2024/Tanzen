@@ -10,7 +10,7 @@ import { financeService } from './finance.service';
  * dashboard s'appuient toutes dessus.
  */
 
-const baseAccount: CashboxRecord = {
+const baseCashbox: CashboxRecord = {
   id: 'AC-TEST', tenantId: 'T-001', cashboxNumber: 'CS-001-TEST', title: 'Caisse test', type: 'LIBRE',
   amount: null, description: '', openingBalance: 0, memberIds: [], tenantName: 'Coopérative Sutura',
   status: 'active', openedOn: '2026-01-01',
@@ -19,26 +19,26 @@ const baseAccount: CashboxRecord = {
 type Entry = Parameters<typeof cashboxLedgerEntries>[1][number];
 const entry = (over: Partial<Entry>): Entry => ({
   type: 'credit', amount: 0, status: 'completed', tenantId: 'T-001',
-  fromAccount: 'Adhérent', toAccount: 'CS-001-TEST', date: '2026-06-01', ...over,
+  source: 'Adhérent', destination: 'CS-001-TEST', date: '2026-06-01', ...over,
 });
 
 describe('resolveCashbox — calcul du solde depuis le journal', () => {
   it('CAS 1 : aucune transaction → solde = report d\'ouverture', () => {
-    expect(resolveCashbox({ ...baseAccount, openingBalance: 1_450_000 }, []).balance).toBe(1_450_000);
+    expect(resolveCashbox({ ...baseCashbox, openingBalance: 1_450_000 }, []).balance).toBe(1_450_000);
   });
 
   it('CAS 2 : un crédit de 50 000 → solde = report + 50 000', () => {
-    const resolved = resolveCashbox({ ...baseAccount, openingBalance: 100_000 }, [entry({ type: 'credit', amount: 50_000 })]);
+    const resolved = resolveCashbox({ ...baseCashbox, openingBalance: 100_000 }, [entry({ type: 'credit', amount: 50_000 })]);
     expect(resolved.balance).toBe(150_000);
   });
 
   it('CAS 3 : un débit de 20 000 → solde = report − 20 000', () => {
-    const resolved = resolveCashbox({ ...baseAccount, openingBalance: 100_000 }, [entry({ type: 'debit', amount: 20_000, fromAccount: 'CS-001-TEST', toAccount: 'Tiers' })]);
+    const resolved = resolveCashbox({ ...baseCashbox, openingBalance: 100_000 }, [entry({ type: 'debit', amount: 20_000, source: 'CS-001-TEST', destination: 'Tiers' })]);
     expect(resolved.balance).toBe(80_000);
   });
 
   it('CAS 4 : deux crédits de 50 000 → solde = report + 100 000', () => {
-    const resolved = resolveCashbox({ ...baseAccount, openingBalance: 0 }, [
+    const resolved = resolveCashbox({ ...baseCashbox, openingBalance: 0 }, [
       entry({ type: 'credit', amount: 50_000, date: '2026-06-01' }),
       entry({ type: 'credit', amount: 50_000, date: '2026-06-02' }),
     ]);
@@ -46,13 +46,13 @@ describe('resolveCashbox — calcul du solde depuis le journal', () => {
   });
 
   it('CAS 5 : une transaction d\'une AUTRE caisse n\'influence pas le solde', () => {
-    const resolved = resolveCashbox(baseAccount, [entry({ amount: 999_000, toAccount: 'CS-001-AUTRE' })]);
+    const resolved = resolveCashbox(baseCashbox, [entry({ amount: 999_000, destination: 'CS-001-AUTRE' })]);
     expect(resolved.balance).toBe(0);
-    expect(cashboxLedgerEntries(baseAccount, [entry({ amount: 999_000, toAccount: 'CS-001-AUTRE' })])).toHaveLength(0);
+    expect(cashboxLedgerEntries(baseCashbox, [entry({ amount: 999_000, destination: 'CS-001-AUTRE' })])).toHaveLength(0);
   });
 
   it('CAS 6 : une transaction d\'un AUTRE tenant n\'influence pas le solde', () => {
-    const resolved = resolveCashbox(baseAccount, [entry({ amount: 999_000, tenantId: 'T-002' })]);
+    const resolved = resolveCashbox(baseCashbox, [entry({ amount: 999_000, tenantId: 'T-002' })]);
     expect(resolved.balance).toBe(0);
   });
 
@@ -61,13 +61,13 @@ describe('resolveCashbox — calcul du solde depuis le journal', () => {
       entry({ type: 'credit', amount: 50_000, status: 'completed' }),
       entry({ type: 'credit', amount: 30_000, status: 'cancelled' }),
       entry({ type: 'credit', amount: 20_000, status: 'pending' }),
-      entry({ type: 'debit', amount: 10_000, status: 'failed', fromAccount: 'CS-001-TEST', toAccount: 'Tiers' }),
+      entry({ type: 'debit', amount: 10_000, status: 'failed', source: 'CS-001-TEST', destination: 'Tiers' }),
     ];
-    expect(resolveCashbox(baseAccount, ledger).balance).toBe(50_000);
+    expect(resolveCashbox(baseCashbox, ledger).balance).toBe(50_000);
   });
 
   it('CAS 8 : dernier mouvement = date (transaction_at) de la dernière transaction comptabilisée, jamais la date de réunion', () => {
-    const resolved = resolveCashbox(baseAccount, [
+    const resolved = resolveCashbox(baseCashbox, [
       entry({ type: 'credit', amount: 50_000, date: '2026-08-01', recordedAt: '2026-08-01T10:12:00' }),
       entry({ type: 'credit', amount: 50_000, date: '2026-08-11' }),
     ]);
@@ -75,86 +75,86 @@ describe('resolveCashbox — calcul du solde depuis le journal', () => {
   });
 
   it('dernier mouvement = openedOn tant qu\'aucune transaction n\'est comptabilisée', () => {
-    expect(resolveCashbox({ ...baseAccount, openedOn: '2026-05-15' }, []).lastMovement).toBe('2026-05-15');
+    expect(resolveCashbox({ ...baseCashbox, openedOn: '2026-05-15' }, []).lastMovement).toBe('2026-05-15');
   });
 
-  it('un débit interne (fromAccount = la caisse) sur transaction non comptabilisée reste exclu', () => {
-    const resolved = resolveCashbox(baseAccount, [entry({ type: 'debit', amount: 500_000, status: 'cancelled', fromAccount: 'CS-001-TEST', toAccount: 'CS-001-COUR' })]);
+  it('un débit interne (source = la caisse) sur transaction non comptabilisée reste exclu', () => {
+    const resolved = resolveCashbox(baseCashbox, [entry({ type: 'debit', amount: 500_000, status: 'cancelled', source: 'CS-001-TEST', destination: 'CS-001-COUR' })]);
     expect(resolved.balance).toBe(0);
   });
 });
 
-describe('financeService — solde de la caisse Épargne (AC-002, Coopérative Sutura)', () => {
-  it('le solde affiché est cohérent avec le journal : report 8 650 000 + 2 crédits de 50 000 = 8 750 000', async () => {
-    const account = await financeService.getCashbox('T-001', 'AC-002');
-    expect(account?.openingBalance).toBe(8_650_000);
-    expect(account?.balance).toBe(8_750_000);
+describe('financeService — solde de la caisse Épargne (système SAVINGS AC-009, Coopérative Sutura)', () => {
+  it('Épargne SAVINGS porte le report 8 650 000 ; l’ancienne caisse AC-002 n’existe plus dans le jeu de démonstration', async () => {
+    expect(await financeService.getCashbox('T-001', 'AC-002')).toBeNull();
+    const savings = await financeService.getCashbox('T-001', 'AC-009');
+    expect(savings).toMatchObject({ openingBalance: 8_650_000, systemCode: 'SAVINGS', status: 'active' });
   });
 
-  it('le dernier mouvement suit la transaction la plus récente (11 août 2026), pas une valeur figée', async () => {
-    const account = await financeService.getCashbox('T-001', 'AC-002');
-    expect(account?.lastMovement).toBe('2026-08-11');
+  it('le dernier mouvement suit la transaction la plus récente (12 août 2026), pas une valeur figée', async () => {
+    const cashbox = await financeService.getCashbox('T-001', 'AC-009');
+    expect(cashbox?.lastMovement).toBe('2026-08-12');
   });
 
   it('après un nouveau crédit de 50 000 le solde augmente de 50 000 et le dernier mouvement se met à jour', async () => {
-    const before = await financeService.getCashbox('T-001', 'AC-002');
+    const before = await financeService.getCashbox('T-001', 'AC-009');
     await financeService.createTransaction('T-001', {
-      cashboxNumber: 'CS-001-ÉPG', memberId: 'M-001', memberName: 'Fatou Ndiaye',
+      cashboxNumber: 'CS-001-CX-001', memberId: 'M-001', memberName: 'Fatou Ndiaye',
       category: 'EPARGNE', type: 'credit', amount: 50_000, description: 'Épargne test solde',
     });
-    const after = await financeService.getCashbox('T-001', 'AC-002');
+    const after = await financeService.getCashbox('T-001', 'AC-009');
     expect(after!.balance).toBe(before!.balance + 50_000);
     expect(after!.lastMovement).toBe(new Date().toISOString().slice(0, 10));
   });
 
   it('après un débit de 20 000 le solde diminue de 20 000', async () => {
-    const before = await financeService.getCashbox('T-001', 'AC-002');
+    const before = await financeService.getCashbox('T-001', 'AC-009');
     await financeService.createTransaction('T-001', {
-      cashboxNumber: 'CS-001-ÉPG', category: 'AUTRES', subcategory: 'FRAIS',
+      cashboxNumber: 'CS-001-CX-001', category: 'AUTRES', subcategory: 'FRAIS',
       type: 'debit', amount: 20_000, description: 'Frais test solde',
     });
-    const after = await financeService.getCashbox('T-001', 'AC-002');
+    const after = await financeService.getCashbox('T-001', 'AC-009');
     expect(after!.balance).toBe(before!.balance - 20_000);
   });
 
   it('une transaction annulée ne modifie pas le solde', async () => {
-    const before = await financeService.getCashbox('T-001', 'AC-002');
+    const before = await financeService.getCashbox('T-001', 'AC-009');
     const created = await financeService.createTransaction('T-001', {
-      cashboxNumber: 'CS-001-ÉPG', category: 'EPARGNE', type: 'credit', amount: 77_000, description: 'À annuler',
+      cashboxNumber: 'CS-001-CX-001', category: 'EPARGNE', type: 'credit', amount: 77_000, description: 'À annuler',
     });
     await financeService.cancelTransaction('T-001', created!.id);
-    const after = await financeService.getCashbox('T-001', 'AC-002');
+    const after = await financeService.getCashbox('T-001', 'AC-009');
     expect(after!.balance).toBe(before!.balance);
   });
 });
 
 describe('resolveCashbox — cohérence panneau ↔ solde (mandat « corriger le calcul du solde »)', () => {
   it('VALIDATION 2 : crédit 100 000 + crédit 50 000 − débit 20 000 = 130 000', () => {
-    const resolved = resolveCashbox({ ...baseAccount, openingBalance: 0 }, [
+    const resolved = resolveCashbox({ ...baseCashbox, openingBalance: 0 }, [
       entry({ type: 'credit', amount: 100_000 }),
       entry({ type: 'credit', amount: 50_000 }),
-      entry({ type: 'debit', amount: 20_000, fromAccount: 'CS-001-TEST', toAccount: 'Tiers' }),
+      entry({ type: 'debit', amount: 20_000, source: 'CS-001-TEST', destination: 'Tiers' }),
     ]);
     expect(resolved.balance).toBe(130_000);
   });
 
   it('VALIDATION 3 : deux caisses — le solde de A n’inclut jamais les transactions de B', () => {
-    const accountA: CashboxRecord = { ...baseAccount, cashboxNumber: 'CS-001-A', openingBalance: 0 };
-    const accountB: CashboxRecord = { ...baseAccount, id: 'AC-B', cashboxNumber: 'CS-001-B', openingBalance: 0 };
+    const cashboxA: CashboxRecord = { ...baseCashbox, cashboxNumber: 'CS-001-A', openingBalance: 0 };
+    const cashboxB: CashboxRecord = { ...baseCashbox, id: 'AC-B', cashboxNumber: 'CS-001-B', openingBalance: 0 };
     const journal = [
-      entry({ type: 'credit', amount: 300_000, toAccount: 'CS-001-A' }),
-      entry({ type: 'credit', amount: 999_000, toAccount: 'CS-001-B' }),
-      entry({ type: 'debit', amount: 40_000, fromAccount: 'CS-001-B', toAccount: 'Tiers' }),
+      entry({ type: 'credit', amount: 300_000, destination: 'CS-001-A' }),
+      entry({ type: 'credit', amount: 999_000, destination: 'CS-001-B' }),
+      entry({ type: 'debit', amount: 40_000, source: 'CS-001-B', destination: 'Tiers' }),
     ];
-    expect(resolveCashbox(accountA, journal).balance).toBe(300_000);
-    expect(resolveCashbox(accountB, journal).balance).toBe(959_000);
+    expect(resolveCashbox(cashboxA, journal).balance).toBe(300_000);
+    expect(resolveCashbox(cashboxB, journal).balance).toBe(959_000);
   });
 
   it('un virement inter-caisses est compté DES DEUX CÔTÉS : −montant pour l’émettrice, +montant pour la réceptrice (bug corrigé)', () => {
-    const source: CashboxRecord = { ...baseAccount, cashboxNumber: 'CS-001-SRC', openingBalance: 1_000_000 };
-    const dest: CashboxRecord = { ...baseAccount, id: 'AC-DEST', cashboxNumber: 'CS-001-DST', openingBalance: 1_000_000 };
+    const source: CashboxRecord = { ...baseCashbox, cashboxNumber: 'CS-001-SRC', openingBalance: 1_000_000 };
+    const dest: CashboxRecord = { ...baseCashbox, id: 'AC-DEST', cashboxNumber: 'CS-001-DST', openingBalance: 1_000_000 };
     // Écriture unique : dans le journal du tenant c'est un DÉBIT (perspective émettrice).
-    const transfer = entry({ type: 'debit', amount: 500_000, fromAccount: 'CS-001-SRC', toAccount: 'CS-001-DST' });
+    const transfer = entry({ type: 'debit', amount: 500_000, source: 'CS-001-SRC', destination: 'CS-001-DST' });
     expect(resolveCashbox(source, [transfer]).balance).toBe(500_000);
     expect(resolveCashbox(dest, [transfer]).balance).toBe(1_500_000);
     // Les deux fiches voient bien la ligne (prédicat identique au panneau).
@@ -164,7 +164,7 @@ describe('resolveCashbox — cohérence panneau ↔ solde (mandat « corriger le
 
   it('VALIDATION 4 : le solde agrège TOUTES les transactions de la caisse, pas seulement une page', () => {
     const many = Array.from({ length: 50 }, (_, i) => entry({ type: 'credit', amount: 1_000, date: `2026-06-${String((i % 28) + 1).padStart(2, '0')}` }));
-    expect(resolveCashbox({ ...baseAccount, openingBalance: 0 }, many).balance).toBe(50_000);
+    expect(resolveCashbox({ ...baseCashbox, openingBalance: 0 }, many).balance).toBe(50_000);
   });
 
   it('VALIDATION 6 : aucune valeur de solde n’est stockée dans le seed — `balance`/`lastMovement` sont absents des enregistrements', () => {
@@ -174,34 +174,30 @@ describe('resolveCashbox — cohérence panneau ↔ solde (mandat « corriger le
     }
   });
 
-  it('AC-001 « Trésorerie » : solde 12 500 000 = report 13 730 000 − prêt 850 000 (TR-002) + remboursement 120 000 (TR-004) − virement émis 500 000 (TR-010), démontré transaction par transaction', async () => {
-    const record = cashboxes.find((a) => a.id === 'AC-001')!;
-    // Périmètre : uniquement les écritures completed de T-001 où CS-001-TRÉS est source OU destination.
+  it('AC-012 « Transport » : solde 3 000 = report 0 + 3 cotisations de 5 000 (TR-006, TR-010, TR-018) − frais 12 000 (TR-019), démontré transaction par transaction', async () => {
+    const record = cashboxes.find((a) => a.id === 'AC-012')!;
+    // Périmètre : uniquement les écritures completed de T-001 où CS-001-CX-004 est source OU destination.
     const ledger = cashboxLedgerEntries(record, transactions);
-    expect(ledger.map((tr) => tr.id).sort()).toEqual(['TR-002', 'TR-004', 'TR-010']);
-    // Effet signé de chaque écriture DU POINT DE VUE de la trésorerie.
-    expect(cashboxEntryEffect('CS-001-TRÉS', transactions.find((tr) => tr.id === 'TR-002')!)).toBe(-850_000); // décaissement prêt L-001
-    expect(cashboxEntryEffect('CS-001-TRÉS', transactions.find((tr) => tr.id === 'TR-004')!)).toBe(120_000); // remboursement L-004
-    expect(cashboxEntryEffect('CS-001-TRÉS', transactions.find((tr) => tr.id === 'TR-010')!)).toBe(-500_000); // virement interne émis
-    const variationNette = ledger.reduce((sum, tr) => sum + cashboxEntryEffect('CS-001-TRÉS', tr), 0);
-    expect(variationNette).toBe(-1_230_000);
-    expect(record.openingBalance).toBe(13_730_000);
-    expect(resolveCashbox(record, transactions).balance).toBe(12_500_000);
-    const account = await financeService.getCashbox('T-001', 'AC-001');
-    expect(account?.balance).toBe(12_500_000);
-    // Le virement TR-010 n'est PAS compté deux fois côté trésorerie (émettrice uniquement) ; il crédite l'autre côté (AC-003).
-    expect(ledger.filter((tr) => tr.id === 'TR-010')).toHaveLength(1);
-    expect(cashboxEntryEffect('CS-001-COUR', transactions.find((tr) => tr.id === 'TR-010')!)).toBe(500_000);
+    expect(ledger.map((tr) => tr.id).sort()).toEqual(['TR-006', 'TR-010', 'TR-018', 'TR-019']);
+    // Effet signé de chaque écriture DU POINT DE VUE de la caisse Transport.
+    expect(cashboxEntryEffect('CS-001-CX-004', transactions.find((tr) => tr.id === 'TR-006')!)).toBe(5_000); // cotisation Fatou
+    expect(cashboxEntryEffect('CS-001-CX-004', transactions.find((tr) => tr.id === 'TR-019')!)).toBe(-12_000); // frais de transport
+    const variationNette = ledger.reduce((sum, tr) => sum + cashboxEntryEffect('CS-001-CX-004', tr), 0);
+    expect(variationNette).toBe(3_000);
+    expect(record.openingBalance).toBe(0);
+    expect(resolveCashbox(record, transactions).balance).toBe(3_000);
+    const cashbox = await financeService.getCashbox('T-001', 'AC-012');
+    expect(cashbox?.balance).toBe(3_000);
   });
 
-  it('AC-003 « Compte courant » : solde = report + son propre journal (dont le virement reçu TR-010 de 500 000), pas une constante figée', async () => {
-    const account = await financeService.getCashbox('T-001', 'AC-003');
-    expect(account?.openingBalance).toBe(2_725_000);
-    // report 2 725 000 − frais 25 000 (TR-006) + virement reçu 500 000 (TR-010) = 3 200 000
-    expect(account?.balance).toBe(3_200_000);
-    const ledger = cashboxLedgerEntries(cashboxes.find((a) => a.id === 'AC-003')!, [
-      { type: 'debit', amount: 500_000, status: 'completed', tenantId: 'T-001', fromAccount: 'CS-001-TRÉS', toAccount: 'CS-001-COUR', date: '2026-08-03' },
+  it('AC-011 « Secours » : solde = report + son propre journal (3 cotisations de 12 000 − aide 20 000), pas une constante figée', async () => {
+    const cashbox = await financeService.getCashbox('T-001', 'AC-011');
+    expect(cashbox?.openingBalance).toBe(0);
+    // 12 000 × 3 (TR-020, TR-021, TR-022) − aide secours 20 000 (TR-023) = 16 000
+    expect(cashbox?.balance).toBe(16_000);
+    const ledger = cashboxLedgerEntries(cashboxes.find((a) => a.id === 'AC-011')!, [
+      { type: 'debit', amount: 500_000, status: 'completed', tenantId: 'T-001', source: 'CS-001-CX-001', destination: 'CS-001-CX-003', date: '2026-08-03' },
     ]);
-    expect(ledger).toHaveLength(1); // le virement inter-caisses reçu est bien rattaché à AC-003
+    expect(ledger).toHaveLength(1); // un virement inter-caisses reçu est bien rattaché à la caisse réceptrice
   });
 });

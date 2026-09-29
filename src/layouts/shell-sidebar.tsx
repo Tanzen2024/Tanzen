@@ -1,18 +1,17 @@
 import { useState, type Dispatch, type SetStateAction } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Menu, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getNavigationLabelKey, navigationTree, type NavigationNode } from '@/config/navigation';
+import { getNavigationLabelKey, isNavigationNodeActive, navigationTree, type NavigationNode } from '@/config/navigation';
 import { useUiStore } from '@/stores/ui-store';
 import { useLocale } from '@/contexts/locale-context';
-
-function isActive(pathname: string, currentPath: string) { return currentPath === pathname || (pathname !== '/dashboard' && currentPath.startsWith(`${pathname}/`)); }
 
 function NavigationBranch({ node, currentPath, collapsed, expanded, setExpanded, level = 0, onNavigate, onExpandSidebar }: { node: NavigationNode; currentPath: string; collapsed: boolean; expanded: string[]; setExpanded: Dispatch<SetStateAction<string[]>>; level?: number; onNavigate: () => void; onExpandSidebar: () => void }) {
   const navigate = useNavigate();
   const { t } = useLocale();
   const hasChildren = Boolean(node.children?.length);
-  const open = expanded.includes(node.path) || isActive(node.path, currentPath);
-  const active = currentPath === node.path;
+  const open = expanded.includes(node.path) || isNavigationNodeActive(node, currentPath);
+  // Une feuille reste surlignée sur ses sous-pages (détail d'une caisse, d'une transaction via `matchPaths`…).
+  const active = currentPath === node.path || (!hasChildren && isNavigationNodeActive(node, currentPath));
   const Icon = node.icon;
   const toggle = () => setExpanded((items) => items.includes(node.path) ? items.filter((item) => item !== node.path) : [...items, node.path]);
   return <div><button type="button" title={collapsed ? t('nav', getNavigationLabelKey(node.path)) : undefined} onClick={() => { if (hasChildren) { if (collapsed) { onExpandSidebar(); setExpanded((items) => items.includes(node.path) ? items : [...items, node.path]); } else toggle(); } else { navigate(node.path); onNavigate(); } }} className={`group flex min-h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[12px] transition-colors ${active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-[hsl(var(--sidebar-foreground))] hover:bg-[hsl(var(--sidebar-accent))] hover:text-white'} ${level > 0 ? 'pl-8' : ''}`}><Icon size={17} className="shrink-0" /><span className={`min-w-0 flex-1 truncate ${collapsed ? 'sr-only' : ''}`}>{t('nav', getNavigationLabelKey(node.path))}</span>{!collapsed && node.badge && <span className="min-w-5 rounded-full bg-amber-500 px-1.5 py-0.5 text-center text-[10px] font-bold text-white">{node.badge}</span>}{!collapsed && hasChildren && <ChevronDown size={14} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />}</button>{hasChildren && open && !collapsed && <div className="space-y-0.5 pt-0.5">{node.children?.map((child) => <NavigationBranch key={child.path} node={child} currentPath={currentPath} collapsed={collapsed} expanded={expanded} setExpanded={setExpanded} level={level + 1} onNavigate={onNavigate} onExpandSidebar={onExpandSidebar} />)}</div>}</div>;

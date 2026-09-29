@@ -195,8 +195,8 @@ export type MemberCashboxLine = {
  * caisse (`Loan` n'a pas d'`cashboxId` : rattacher un prêt à une caisse
  * précise serait une donnée inventée, explicitement exclue).
  *
- * `outstanding` est RECALCULÉ à une date (`Loan.totalRepayable − Σ
- * Repayment.amount complétés ≤ asOfDate`), jamais lu directement depuis
+ * `outstanding` est RECALCULÉ à une date (`loanDebtAt` : capital + intérêts
+ * générés − Σ Repayment.amount complétés ≤ asOfDate, règles de référence), jamais lu directement depuis
  * `Loan.outstanding` (ce champ est un instantané courant, pas une valeur
  * datée — voir `member-position.ts`, `memberLoanSummary`).
  */

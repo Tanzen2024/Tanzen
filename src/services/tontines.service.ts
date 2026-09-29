@@ -1,6 +1,6 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { tontines, tontineAdhesions, tontineCycles, type Tontine, type TontineAdhesion, type TontineCycle } from '@/mocks/tontines/tontines';
+import { tontines, tontineAdhesions, tontineCycles, tontineOccurrences, isTontineOperational, type Tontine, type TontineAdhesion, type TontineCycle } from '@/mocks/tontines/tontines';
 import { isValidFrequencyConfig } from '@/mocks/tontines/tontine-frequency';
 import { cashboxes } from '@/mocks/finance/cashboxes';
 import { organizationSettingsList } from '@/mocks/settings/organization-settings';
@@ -50,9 +50,9 @@ function keepOnlyFieldsForValueType(tontine: Tontine): void {
   delete tontine.cashboxId;
 }
 
-function isValidAccountLink(tenantId: string, cashboxId: string | undefined): boolean {
+function isValidCashboxLink(tenantId: string, cashboxId: string | undefined): boolean {
   if (!cashboxId) return true;
-  return cashboxes.some((account) => account.id === cashboxId && account.tenantId === tenantId);
+  return cashboxes.some((cashbox) => cashbox.id === cashboxId && cashbox.tenantId === tenantId);
 }
 
 /** Source unique de la devise d'une tontine MONEY : Paramètres > Organisation, jamais le formulaire (aucun repli XAF/défaut silencieux). */
@@ -104,6 +104,9 @@ function createAdhesionIfEligible(tenantId: string, tontineId: string, memberId:
 /** Résultat structuré d'un ajout groupé — jamais un simple compteur déduit de `memberIds.length` côté UI : `created.length`/`skipped` reflètent EXACTEMENT ce que le service a réellement fait (mandat §12-§17, « ne jamais afficher un succès trompeur »). */
 export type AddAdhesionsResult = { created: TontineAdhesion[]; skipped: number };
 
+/** Résultat d'une transition de cycle de vie — un refus porte TOUJOURS sa raison métier réelle. */
+export type TontineLifecycleOutcome = { ok: true; tontine: Tontine } | { ok: false; reason: 'invalidStatus' | 'occurrenceInProgress' };
+
 export const tontinesService = {
   listTontines: (tenantId: string) => mockRequest(() => tontines.filter((tontine) => tontine.tenantId === tenantId)),
   getTontine: (tenantId: string, tontineId: string) => mockRequest(() => getTenantScoped(tontines, (tontine) => tontine.id === tontineId, tenantId)),
@@ -119,7 +122,7 @@ export const tontinesService = {
     mockRequest(() => {
       if (!isValidTontineConfiguration(input)) return undefined;
       if (!isValidFrequencyConfig(input)) return undefined;
-      if (!isValidAccountLink(input.tenantId, input.cashboxId)) return undefined;
+      if (!isValidCashboxLink(input.tenantId, input.cashboxId)) return undefined;
       const organizationCurrency = getOrganizationCurrency(input.tenantId);
       if (input.valueType === 'MONEY' && !organizationCurrency) return undefined;
       const tontine: Tontine = { id: `TON-${String(tontines.length + 1).padStart(3, '0')}`, status: 'statusActive', createdAt: new Date().toISOString().slice(0, 10), ...input, currency: input.valueType === 'MONEY' ? organizationCurrency : undefined };
@@ -151,7 +154,8 @@ export const tontinesService = {
   updateTontine: (tenantId: string, tontineId: string, patch: TontineUpdateInput) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
-      if (!tontine) return undefined;
+      // Archivée = consultation seule (mandat « cycle de vie » §27) : désarchiver d'abord.
+      if (!tontine || tontine.status === 'statusArchived') return undefined;
       const nextValueType = patch.valueType ?? tontine.valueType;
       const nextConfiguration = {
         name: patch.name ?? tontine.name,
@@ -162,7 +166,7 @@ export const tontinesService = {
         unit: patch.unit ?? tontine.unit,
       };
       if (!isValidTontineConfiguration(nextConfiguration)) return undefined;
-      if ('cashboxId' in patch && !isValidAccountLink(tenantId, patch.cashboxId)) return undefined;
+      if ('cashboxId' in patch && !isValidCashboxLink(tenantId, patch.cashboxId)) return undefined;
       if (patchTouchesFrequency(patch)) {
         const nextFrequencyConfig = {
           frequency: 'frequency' in patch ? patch.frequency : tontine.frequency,
@@ -197,6 +201,67 @@ export const tontinesService = {
       return tontine;
     }),
 
+  /**
+   * SUPPRESSION = DÉSACTIVATION LOGIQUE (mandat « Supprimer = désactiver », 2026-09-27) — même
+   * règle que `financeService.deleteCashbox` : « Supprimer » ne retire JAMAIS l'enregistrement,
+   * la Tontine passe `statusActive → statusInactive`. Aucune suppression en cascade : cycles,
+   * adhésions, tours, plans de passage, achats, bénéficiaires, cotisations, distributions,
+   * reliquats et historique restent intacts et consultables. Aucun prérequis : un Tour ouvert
+   * reste ouvert, figé, et reprend tel quel à la réactivation. Seule une Tontine active peut
+   * être supprimée (`invalidStatus` sinon). `undefined` = introuvable/hors tenant.
+   */
+  deleteTontine: (tenantId: string, tontineId: string) =>
+    mockRequest((): TontineLifecycleOutcome | undefined => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      if (tontine.status !== 'statusActive') return { ok: false, reason: 'invalidStatus' };
+      tontine.status = 'statusInactive';
+      return { ok: true, tontine };
+    }),
+
+  /**
+   * CYCLE DE VIE (mandat « Évolution globale du module Finance » §33-§37) —
+   * simples changements de `status`, jamais une suppression ni une modification
+   * de l'historique (tours, participations, bénéficiaires, cotisations,
+   * paiements, distributions, reliquats restent intacts et consultables).
+   * Les opérations métier sont ensuite refusées par les services tant que la
+   * Tontine n'est pas active (`isTontineOperational`). En plus de `deleteTontine`
+   * (active → inactive, ci-dessus) :
+   *   - `reactivateTontine` : inactive → active ;
+   *   - `archiveTontine`    : active | inactive → archived. REFUSÉ tant qu'un Tour
+   *     n'est pas clôturé (`occurrenceInProgress`) : archiver ne doit jamais
+   *     laisser en suspens un Tour dont la clôture relève de `closeOccurrence`
+   *     et de ses règles (cotisations complètes, bénéficiaire payé) ;
+   *   - `unarchiveTontine`  : archived → inactive (réactivation explicite ensuite).
+   */
+  reactivateTontine: (tenantId: string, tontineId: string) =>
+    mockRequest((): TontineLifecycleOutcome | undefined => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      if (tontine.status !== 'statusInactive') return { ok: false, reason: 'invalidStatus' };
+      tontine.status = 'statusActive';
+      return { ok: true, tontine };
+    }),
+
+  archiveTontine: (tenantId: string, tontineId: string) =>
+    mockRequest((): TontineLifecycleOutcome | undefined => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      if (tontine.status === 'statusArchived') return { ok: false, reason: 'invalidStatus' };
+      if (tontineOccurrences.some((item) => item.tenantId === tenantId && item.tontineId === tontineId && item.status !== 'REALIZED')) return { ok: false, reason: 'occurrenceInProgress' };
+      tontine.status = 'statusArchived';
+      return { ok: true, tontine };
+    }),
+
+  unarchiveTontine: (tenantId: string, tontineId: string) =>
+    mockRequest((): TontineLifecycleOutcome | undefined => {
+      const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
+      if (!tontine) return undefined;
+      if (tontine.status !== 'statusArchived') return { ok: false, reason: 'invalidStatus' };
+      tontine.status = 'statusInactive';
+      return { ok: true, tontine };
+    }),
+
   // --- Adhésions (rattachées DIRECTEMENT à la Tontine, mandat reconstruction §2) ---
 
   listAdhesions: (tenantId: string, tontineId: string) =>
@@ -217,7 +282,8 @@ export const tontinesService = {
   addAdhesion: (tenantId: string, tontineId: string, memberId: string, joinedAt: string) =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
-      if (!tontine) return undefined;
+      // Cycle de vie : aucune nouvelle participation sur une Tontine désactivée / archivée.
+      if (!tontine || !isTontineOperational(tontine)) return undefined;
       return createAdhesionIfEligible(tenantId, tontineId, memberId, joinedAt);
     }),
 
@@ -237,7 +303,7 @@ export const tontinesService = {
   addAdhesions: (tenantId: string, tontineId: string, memberIds: string[], joinedAt: string): Promise<AddAdhesionsResult> =>
     mockRequest(() => {
       const tontine = getTenantScoped(tontines, (item) => item.id === tontineId, tenantId);
-      if (!tontine) return { created: [], skipped: memberIds.length };
+      if (!tontine || !isTontineOperational(tontine)) return { created: [], skipped: memberIds.length };
       const created: TontineAdhesion[] = [];
       let skipped = 0;
       for (const memberId of memberIds) {
@@ -252,6 +318,7 @@ export const tontinesService = {
     mockRequest(() => {
       const adhesion = getTenantScoped(tontineAdhesions, (item) => item.id === adhesionId, tenantId);
       if (!adhesion || adhesion.status === 'exited') return undefined;
+      if (!isTontineOperational(getTenantScoped(tontines, (item) => item.id === adhesion.tontineId, tenantId))) return undefined;
       adhesion.status = 'exited';
       adhesion.leftAt = leftAt;
       return adhesion;

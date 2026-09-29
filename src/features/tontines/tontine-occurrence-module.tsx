@@ -2,11 +2,10 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, CalendarDays, CheckCircle2, Download, HandCoins, Lock, MoreVertical, ShoppingCart, Trash2, UsersRound, Wallet } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { DataTable, StatusBadge, EmptyState, MoneyDisplay, PermissionGate, DetailSkeleton, ErrorState, MemberAvatar, FilterBar, ConfirmDialog } from '@/components';
+import { DataTable, StatusBadge, EmptyState, MoneyDisplay, PermissionGate, DetailSkeleton, ErrorState, MemberAvatar, FilterBar, ConfirmDialog, AmountInput } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
@@ -170,11 +169,11 @@ function SettleBeneficiaryDialog({ t, open, memberName, remaining, withPurchase,
     <div className="mt-4 space-y-3 text-left">
       <div className="space-y-1.5">
         <Label htmlFor="settlement-amount">{t('tontines', 'settlementAmountLabel')}</Label>
-        <Input id="settlement-amount" type="number" min={1} max={remaining} value={amount} onChange={(event) => setAmount(event.target.value)} />
+        <AmountInput id="settlement-amount" value={amount} onValueChange={setAmount} />
       </div>
       {withPurchase && <div className="space-y-1.5">
         <Label htmlFor="settlement-purchase-amount">{t('tontines', 'purchaseAmount')}</Label>
-        <Input id="settlement-purchase-amount" type="number" min={0} value={purchaseAmount} onChange={(event) => setPurchaseAmount(event.target.value)} />
+        <AmountInput id="settlement-purchase-amount" value={purchaseAmount} onValueChange={setPurchaseAmount} />
       </div>}
     </div>
   </ConfirmDialog>;
@@ -361,7 +360,9 @@ export function OccurrenceDetail({ t }: { t: T }) {
 
   const settleMutation = useMockMutation<Awaited<ReturnType<typeof tontineOperationsService.recordReception>>, { beneficiaryId: string; amount: number; purchaseAmount?: number }>({
     mutationFn: ({ beneficiaryId, amount, purchaseAmount }) => tontineOperationsService.recordReception(currentTenant.id, beneficiaryId, amount, purchaseAmount),
-    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId), queryKeys.tontines.remainders(tontineId)],
+    // L'encaissement écrit au journal (transaction « Achat tontine » + débit DISTRIBUTION) : sans invalider les requêtes
+    // Finance, Trésorerie → Transactions déjà ouverte restait sur sa liste en cache (staleTime 30 s) sans la transaction.
+    invalidateKeys: [queryKeys.tontines.beneficiaries(occurrenceId), queryKeys.tontines.remainders(tontineId), ['finance', 'transactions'], ['finance', 'cashboxes'], ['finance', 'position'], ['dashboard']],
     onSuccess: (result) => { if (!result) { notify.error(t('tontines', 'settlementFailed')); return; } notify.success(t('tontines', 'settlementRecorded')); },
   });
   const settlePendingId = settleMutation.isPending ? settleMutation.variables?.beneficiaryId ?? null : null;

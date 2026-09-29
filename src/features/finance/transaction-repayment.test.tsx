@@ -34,7 +34,7 @@ function renderFinance(route: string) {
 
 function makeLoan(partial: Partial<Loan>): Loan {
   return {
-    id: 'L-TEST', tenantId: 'T-001', memberId: 'M-001', borrower: 'Fatou Ndiaye', principal: 300_000, interestRate: 10,
+    id: 'L-TEST', tenantId: 'T-001', memberId: 'M-001', borrower: 'Fatou Ndiaye', principal: 300_000, loanMode: 'COMPOUND', interestRate: 10, interestPeriod: 'MONTHLY',
     interestAmount: 30_000, totalRepayable: 330_000, paidAmount: 0, outstanding: 330_000, disbursementDate: '2026-06-01',
     maturityDate: '2027-06-01', monthlyPayment: 30_000, nextPaymentDate: '2026-09-01', lastPaymentDate: '2026-08-01',
     status: 'active', progress: 0, applicationId: '', tenantName: 'Coopérative Sutura', penalties: [], documents: [], activities: [],
@@ -44,9 +44,9 @@ function makeLoan(partial: Partial<Loan>): Loan {
 
 async function openRepaymentForm(user: ReturnType<typeof userEvent.setup>) {
   renderFinance('/finance/transactions/create');
-  await screen.findByRole('option', { name: /CS-001-TRÉS/ });
-  await user.selectOptions(screen.getByLabelText(/Caisse \/ Compte/), 'CS-001-TRÉS');
-  await user.selectOptions(screen.getByLabelText(/Catégorie/), 'REMBOURSEMENT');
+  await waitFor(() => expect(document.querySelector('option[value="CS-001-CX-004"]')).not.toBeNull());
+  await user.selectOptions(screen.getByLabelText(/^Caisse/), 'CS-001-CX-004');
+  await user.selectOptions(screen.getByLabelText(/^Action \*/), 'REMBOURSEMENT');
   const memberSelect = screen.getByLabelText(/Adhérent/);
   await waitFor(() => expect(within(memberSelect).getAllByRole('option').length).toBeGreaterThan(1));
   await user.selectOptions(memberSelect, 'M-001');
@@ -72,8 +72,10 @@ beforeEach(() => {
     if (!transaction) return undefined;
     return {
       loan: makeLoan({ id: input.loanId }),
-      repayment: { id: 'RP-TEST', tenantId, loanId: input.loanId, borrower: 'Fatou Ndiaye', amount: input.principalPart + input.interestPart, paymentDate: input.paymentDate, principalPart: input.principalPart, interestPart: input.interestPart, status: 'completed' as const },
+      // Mandat « Séparation Caisses / Crédit » : le formulaire transmet le MONTANT ; la répartition capital / intérêts est faite par le métier Crédit (hors de ce mock).
+      repayment: { id: 'RP-TEST', tenantId, loanId: input.loanId, borrower: 'Fatou Ndiaye', amount: input.amount ?? 0, paymentDate: input.paymentDate, principalPart: input.amount ?? 0, interestPart: 0, status: 'completed' as const },
       transaction,
+      transactions: [transaction],
     };
   });
 });
@@ -123,7 +125,9 @@ describe('Finance → Transactions — REMBOURSEMENT (détermination automatique
     await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
     expect(await screen.findByText(/Remboursement test AGO/)).toBeInTheDocument();
-    expect(createRepaymentTransactionSpy).toHaveBeenCalledWith('T-001', expect.objectContaining({ loanId: 'L-904', principalPart: 120_000, interestPart: 0 }));
+    expect(createRepaymentTransactionSpy).toHaveBeenCalledWith('T-001', expect.objectContaining({ loanId: 'L-904', amount: 120_000 }));
+    // Le formulaire ne fixe plus lui-même la répartition (autrefois « tout en capital ») : c'est le métier Crédit qui la calcule.
+    expect(createRepaymentTransactionSpy.mock.calls[0][1]).not.toHaveProperty('principalPart');
   });
 
   it('adhérent sans dette active → « Aucune dette en cours » et enregistrement bloqué', async () => {

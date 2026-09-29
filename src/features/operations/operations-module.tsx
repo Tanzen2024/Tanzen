@@ -1,7 +1,7 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Ban, BellRing, Check, CheckCircle2, ClipboardList, CreditCard, Download, Eye, FileText, Filter, Image, Inbox, Landmark, Megaphone, Paperclip, Plus, Repeat, RotateCcw, Scale, Settings as SettingsIcon, Sparkles, Trash2, Upload, UserCog, Users2, Workflow, X, XCircle } from 'lucide-react';
-import { Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageHeader, DataTable, FilterBar, StatusBadge, EmptyState, FormSection, StatCard, MoneyDisplay, DateDisplay, PermissionGate, DetailPanel, ConfirmDialog, TableSkeleton, DetailSkeleton, ErrorState, MemberAvatar } from '@/components';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,17 +13,21 @@ import { useTenant } from '@/contexts/tenant-context';
 import { usePermissions } from '@/contexts/permission-context';
 import { NotFoundPage } from '@/routes';
 import { workflowService, type ApprovalAction } from '@/services/workflow.service';
-import { settingsService } from '@/services/settings.service';
 import { notificationService } from '@/services/notification.service';
 import { documentService, type DocumentInput } from '@/services/document.service';
 import { organizationService } from '@/services/organization.service';
 import { creditService } from '@/services/credit.service';
+import { financeService } from '@/services/finance.service';
+import { loanRuleService } from '@/services/loan-rule.service';
+import { fiscalSessionService } from '@/services/fiscal-session.service';
 import { tontinesService } from '@/services/tontines.service';
 import { tontineOperationsService } from '@/services/tontine-operations.service';
 import { queryKeys } from '@/services/query-keys';
 import { useMockMutation } from '@/hooks/use-mock-mutation';
 import { notify } from '@/lib/notify';
 import { ApprovalTimeline } from './components/approval-timeline';
+import { useWorkflowDecision } from './use-workflow-decision';
+import { sortRequestsNewestFirst } from './sort-workflow-requests';
 import type { WorkflowDefinition, WorkflowDomain } from '@/mocks/operations/workflow-definitions';
 import type { WorkflowRequest, WorkflowStatus } from '@/mocks/operations/workflow-requests';
 import type { WorkflowDelegation } from '@/mocks/operations/delegations';
@@ -34,15 +38,17 @@ import { formatDate, formatNumber } from '@/lib/utils';
 import { formatCurrency } from '@/constants/currencies';
 import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 
-type T = (section: 'operations' | 'nav', key: string, values?: Record<string, string>) => string;
+type T = (section: 'operations' | 'nav' | 'finance', key: string, values?: Record<string, string>) => string;
 
 const REQUEST_STATUS_TONE: Record<WorkflowStatus, StatusTone> = { pending: 'warning', inProgress: 'info', approved: 'success', rejected: 'error', returned: 'warning', cancelled: 'default' };
 const REQUEST_STATUS_KEY: Record<WorkflowStatus, string> = { pending: 'statusPending', inProgress: 'statusInProgress', approved: 'statusApproved', rejected: 'statusRejected', returned: 'statusReturned', cancelled: 'statusCancelled' };
 const DOMAIN_KEY: Record<WorkflowDomain, string> = { credit: 'domainCredit', tontines: 'domainTontines', governance: 'domainGovernance', finance: 'domainFinance', settings: 'domainSettings', organization: 'domainOrganization' };
 const DOMAIN_ICON: Record<WorkflowDomain, typeof CreditCard> = { credit: CreditCard, tontines: Sparkles, governance: Scale, finance: Landmark, settings: SettingsIcon, organization: UserCog };
-const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', beneficiaryPermutation: 'entityBeneficiaryPermutation', member: 'entityMember' };
+const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application: 'entityApplication', loan: 'entityLoan', assembly: 'entityAssembly', distribution: 'entityDistribution', fiscalYear: 'entityFiscalYear', beneficiaryPermutation: 'entityBeneficiaryPermutation', member: 'entityMember', creditRule: 'entityCreditRule' };
 /** Libellés des champs d'un ChangeSet Membre (besoin §20, tableau avant/après) — réutilise le vocabulaire déjà établi par `organization-module.tsx` (`PersonalTab`) plutôt que d'en inventer un second, sous forme de clés `operations` locales (le `T` de ce module reste borné à `'operations' | 'nav'`, pas d'accès direct à la section `organization`). */
 const MEMBER_CHANGE_FIELD_KEY: Record<string, string> = { firstName: 'changeFieldFirstName', lastName: 'changeFieldLastName', gender: 'changeFieldGender', email: 'changeFieldEmail', phone: 'changeFieldPhone', occupation: 'changeFieldOccupation', nationality: 'changeFieldNationality', address: 'changeFieldAddress', status: 'changeFieldStatus', matricule: 'changeFieldMatricule' };
+/** Libellés des champs d'un ChangeSet de RÈGLE DE CRÉDIT (double approbation WD-009). */
+const CREDIT_RULE_CHANGE_FIELD_KEY: Record<string, string> = { name: 'ruleFieldName', allowLoans: 'ruleFieldAllowLoans', loanMode: 'ruleFieldLoanMode', minAmount: 'ruleFieldMinAmount', maxAmount: 'ruleFieldMaxAmount', interestRate: 'ruleFieldInterestRate', interestPeriod: 'ruleFieldInterestPeriod', durationMonths: 'ruleFieldDurationMonths', maxActiveLoans: 'ruleFieldMaxActiveLoans', maxLoanExposure: 'ruleFieldMaxLoanExposure', requiresGuarantor: 'ruleFieldRequiresGuarantor', minGuarantors: 'ruleFieldMinGuarantors', maxGuarantors: 'ruleFieldMaxGuarantors', guaranteeTypeRequired: 'ruleFieldGuaranteeType', guaranteeRatio: 'ruleFieldGuaranteeRatio', allowSelfGuarantee: 'ruleFieldAllowSelfGuarantee', requiresApproval: 'ruleFieldRequiresApproval', approvalLevel: 'ruleFieldApprovalLevel' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
@@ -68,7 +74,16 @@ function DefinitionsTab({ t, definitions }: { t: T; definitions: WorkflowDefinit
   return <DataTable columns={columns} rows={definitions} empty={<EmptyState icon={Workflow} title={t('operations', 'noDefinitions')} />} />;
 }
 
-function RequestsTable({ t, rows, onRowClick, empty }: { t: T; rows: WorkflowRequest[]; onRowClick: (id: string) => void; empty: ReactNode }) {
+type MyApprovalAction = 'reject' | 'return' | 'approve';
+const MY_APPROVAL_CONFIRM: Record<MyApprovalAction, { title: string; message: string; confirm: string }> = {
+  approve: { title: 'confirmApproveTitle', message: 'confirmApproveMessage', confirm: 'myApprovalApprove' },
+  return: { title: 'confirmReturnTitle', message: 'confirmReturnMessage', confirm: 'myApprovalReturn' },
+  reject: { title: 'confirmRejectTitle', message: 'confirmRejectMessage', confirm: 'myApprovalReject' },
+};
+const isLoanApplicationRequest = (request: WorkflowRequest) => request.domain === 'credit' && request.entityType === 'application';
+
+/** `onDecide` (onglet « Mes approbations ») : Rejeter / Renvoyer / Approuver — chacun ouvre UNE confirmation simple, puis la décision est exécutée sur place (aucune page intermédiaire, aucun commentaire). */
+function RequestsTable({ t, rows, onRowClick, empty, onDecide }: { t: T; rows: WorkflowRequest[]; onRowClick: (id: string) => void; empty: ReactNode; onDecide?: (request: WorkflowRequest, action: MyApprovalAction) => void }) {
   const columns: TableColumn<WorkflowRequest>[] = [
     { key: 'entity', header: t('operations', 'entity'), render: (row) => <button type="button" onClick={() => onRowClick(row.id)} className="text-left"><span className="block font-medium">{row.entityLabel}</span><span className="block text-xs text-muted-foreground">{t('operations', ENTITY_KEY[row.entityType])}</span></button> },
     { key: 'domain', header: t('operations', 'domain'), render: (row) => { const Icon = DOMAIN_ICON[row.domain]; return <span className="flex items-center gap-1.5 text-sm text-muted-foreground"><Icon size={13} />{t('operations', DOMAIN_KEY[row.domain])}</span>; } },
@@ -76,6 +91,13 @@ function RequestsTable({ t, rows, onRowClick, empty }: { t: T; rows: WorkflowReq
     { key: 'amount', header: t('operations', 'amount'), render: (row) => row.amount ? <MoneyDisplay amount={row.amount} /> : '—' },
     { key: 'currentStep', header: t('operations', 'currentStep'), render: (row) => { const step = row.steps.find((s) => s.order === row.currentStepOrder); return step ? step.name : '—'; } },
     { key: 'status', header: t('operations', 'status'), render: (row) => <StatusBadge label={t('operations', REQUEST_STATUS_KEY[row.status])} tone={REQUEST_STATUS_TONE[row.status]} /> },
+    { key: 'requestedAt', header: t('operations', 'requestedAt'), render: (row) => <DateDisplay value={row.requestedAt} /> },
+    ...(onDecide ? [{ key: 'decide', header: '', render: (row: WorkflowRequest) => <span className="flex justify-end gap-2">
+      <Button size="sm" variant="outline" onClick={() => onDecide(row, 'reject')} aria-label={t('operations', 'rejectRequestOf', { entity: row.entityLabel })}><XCircle size={14} />{t('operations', 'myApprovalReject')}</Button>
+      {/* Demande de prêt : jamais renvoyée (règle existante, contrôlée aussi par le service) — bouton présent mais inactif. */}
+      <Button size="sm" variant="secondary" disabled={isLoanApplicationRequest(row)} title={isLoanApplicationRequest(row) ? t('operations', 'loanRequestCannotBeReturned') : undefined} onClick={() => onDecide(row, 'return')} aria-label={t('operations', 'returnRequestOf', { entity: row.entityLabel })}><RotateCcw size={14} />{t('operations', 'myApprovalReturn')}</Button>
+      <Button size="sm" onClick={() => onDecide(row, 'approve')} aria-label={t('operations', 'approveRequestOf', { entity: row.entityLabel })}><Check size={14} />{t('operations', 'myApprovalApprove')}</Button>
+    </span> } satisfies TableColumn<WorkflowRequest>] : []),
   ];
   return <DataTable columns={columns} rows={rows} empty={empty} />;
 }
@@ -107,17 +129,25 @@ function HistoryTab({ t, actions }: { t: T; actions: ApprovalAction[] }) {
 function WorkflowsHub({ t }: { t: T }) {
   const navigate = useNavigate(); const { currentTenant } = useTenant(); const { user } = usePermissions();
   const [search, setSearch] = useState(''); const [domain, setDomain] = useState('all'); const [status, setStatus] = useState('all');
+  /** « Mes approbations » : clic → confirmation simple → exécution (aucun commentaire, aucune page intermédiaire). */
+  const [decision, setDecision] = useState<{ request: WorkflowRequest; action: MyApprovalAction } | null>(null);
+  const submitting = useRef(false);
+  const decide = useWorkflowDecision(t, () => { submitting.current = false; setDecision(null); });
+  // Verrou synchrone : un double clic avant le re-rendu (`isPending`) ne déclenche qu'UNE action métier.
+  const confirmDecision = () => { if (!decision || submitting.current) return; submitting.current = true; decide.mutate({ request: decision.request, action: decision.action }); };
 
   const definitionsQuery = useQuery({ queryKey: queryKeys.operations.workflowDefinitions(currentTenant.id), queryFn: () => workflowService.listDefinitions(currentTenant.id) });
   const requestsQuery = useQuery({ queryKey: queryKeys.operations.workflowRequests(currentTenant.id), queryFn: () => workflowService.listRequests(currentTenant.id) });
-  const myApprovalsQuery = useQuery({ queryKey: queryKeys.operations.myApprovals(currentTenant.id), queryFn: () => workflowService.listMyApprovals(currentTenant.id, user.permissions) });
+  const myApprovalsQuery = useQuery({ queryKey: queryKeys.operations.myApprovals(currentTenant.id, user.id), queryFn: () => workflowService.listMyApprovals(currentTenant.id, user.permissions, user.id) });
   const delegationsQuery = useQuery({ queryKey: queryKeys.operations.delegations(currentTenant.id), queryFn: () => workflowService.listDelegations(currentTenant.id) });
   const historyQuery = useQuery({ queryKey: queryKeys.operations.history(currentTenant.id), queryFn: () => workflowService.listHistory(currentTenant.id) });
   const definitions = definitionsQuery.data ?? []; const requests = requestsQuery.data ?? []; const myApprovals = myApprovalsQuery.data ?? []; const delegations = delegationsQuery.data ?? []; const history = historyQuery.data ?? [];
 
-  const filteredRequests = requests.filter((request) => `${request.entityLabel} ${request.id} ${request.requestedBy}`.toLowerCase().includes(search.toLowerCase()) && (domain === 'all' || request.domain === domain) && (status === 'all' || request.status === status));
+  // Tri global (plus récente en premier) puis filtres ; pas de pagination dans cet onglet.
+  const filteredRequests = sortRequestsNewestFirst(requests).filter((request) => `${request.entityLabel} ${request.id} ${request.requestedBy}`.toLowerCase().includes(search.toLowerCase()) && (domain === 'all' || request.domain === domain) && (status === 'all' || request.status === status));
 
-  if (definitionsQuery.isLoading || requestsQuery.isLoading || myApprovalsQuery.isLoading || delegationsQuery.isLoading || historyQuery.isLoading) return <Page title={t('operations', 'workflowsTitle')} description={t('operations', 'workflowsDescription')}><TableSkeleton /></Page>;
+  // « Mes approbations » exclue : clé propre à l'utilisateur, son 1er chargement (changement d'identité) remplacerait toute la page et ramènerait l'onglet sur « Demandes » — squelette dans son onglet.
+  if (definitionsQuery.isLoading || requestsQuery.isLoading || delegationsQuery.isLoading || historyQuery.isLoading) return <Page title={t('operations', 'workflowsTitle')} description={t('operations', 'workflowsDescription')}><TableSkeleton /></Page>;
   if (definitionsQuery.isError || requestsQuery.isError || myApprovalsQuery.isError || delegationsQuery.isError || historyQuery.isError) return <Page title={t('operations', 'workflowsTitle')} description={t('operations', 'workflowsDescription')}><ErrorState onRetry={() => { definitionsQuery.refetch(); requestsQuery.refetch(); myApprovalsQuery.refetch(); delegationsQuery.refetch(); historyQuery.refetch(); }} /></Page>;
 
   return <Page title={t('operations', 'workflowsTitle')} description={t('operations', 'workflowsDescription')}>
@@ -139,18 +169,59 @@ function WorkflowsHub({ t }: { t: T }) {
         <FilterBar search={search} onSearchChange={setSearch} placeholder={t('operations', 'requestId')} filters={<><select aria-label={t('operations', 'filterByDomain')} value={domain} onChange={(e) => setDomain(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'domain')}</option><option value="credit">{t('operations', 'domainCredit')}</option><option value="tontines">{t('operations', 'domainTontines')}</option><option value="governance">{t('operations', 'domainGovernance')}</option><option value="finance">{t('operations', 'domainFinance')}</option><option value="settings">{t('operations', 'domainSettings')}</option><option value="organization">{t('operations', 'domainOrganization')}</option></select><select aria-label={t('operations', 'filterByStatus')} value={status} onChange={(e) => setStatus(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-xs"><option value="all">{t('operations', 'status')}</option><option value="pending">{t('operations', 'statusPending')}</option><option value="inProgress">{t('operations', 'statusInProgress')}</option><option value="approved">{t('operations', 'statusApproved')}</option><option value="rejected">{t('operations', 'statusRejected')}</option><option value="returned">{t('operations', 'statusReturned')}</option></select></>} />
         <RequestsTable t={t} rows={filteredRequests} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={ClipboardList} title={t('operations', 'noRequests')} />} />
       </TabsContent>
-      <TabsContent value="myApprovals"><RequestsTable t={t} rows={myApprovals} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} empty={<EmptyState icon={CheckCircle2} title={t('operations', 'noApprovals')} />} /></TabsContent>
+      <TabsContent value="myApprovals">{myApprovalsQuery.isLoading ? <TableSkeleton /> : <RequestsTable t={t} rows={myApprovals} onRowClick={(id) => navigate(`/operations/workflows/${id}`)} onDecide={(request, action) => setDecision({ request, action })} empty={<EmptyState icon={CheckCircle2} title={t('operations', 'noApprovals')} />} />}</TabsContent>
       <TabsContent value="delegations"><DelegationsTab t={t} delegations={delegations} /></TabsContent>
       <TabsContent value="history"><HistoryTab t={t} actions={history} /></TabsContent>
     </Tabs>
+    {decision && <ConfirmDialog open title={t('operations', MY_APPROVAL_CONFIRM[decision.action].title)} description={t('operations', MY_APPROVAL_CONFIRM[decision.action].message)} confirmLabel={t('operations', MY_APPROVAL_CONFIRM[decision.action].confirm)} cancelLabel={t('operations', 'cancel')} confirmDisabled={decide.isPending} onConfirm={confirmDecision} onCancel={() => { if (!decide.isPending) setDecision(null); }} />}
   </Page>;
+}
+
+/**
+ * Détail d'une DEMANDE DE PRÊT soumise au workflow (mandat « Workflow d'approbation des prêts »,
+ * 2026-09-27) : ce que l'approbateur doit voir pour décider — membre, montant, financement,
+ * conditions de la règle de crédit, garanties, séance. Aucune donnée technique interne.
+ */
+function LoanRequestDetails({ t, tenantId, applicationId, money }: { t: T; tenantId: string; applicationId: string; money: (value: number) => string }) {
+  const { data: application } = useQuery({ queryKey: [...queryKeys.credit.application(applicationId), tenantId], queryFn: () => creditService.getApplication(tenantId, applicationId) });
+  const { data: cashboxes = [] } = useQuery({ queryKey: queryKeys.finance.cashboxes(tenantId), queryFn: () => financeService.listCashboxes(tenantId) });
+  const { data: rule } = useQuery({ queryKey: queryKeys.credit.loanRules(tenantId), queryFn: () => loanRuleService.getCreditRule(tenantId) });
+  const { data: sessions = [] } = useQuery({ queryKey: queryKeys.finance.sessions.all(tenantId), queryFn: () => fiscalSessionService.listAllSessions(tenantId) });
+  // Pièces justificatives : documents rattachés à l'adhérent demandeur (le modèle n'en rattache aucun à la demande elle-même).
+  const { data: memberDocuments = [] } = useQuery({ queryKey: [...queryKeys.operations.documents(tenantId), 'member', application?.memberId ?? ''], queryFn: () => documentService.listByEntity(tenantId, 'member', application!.memberId!), enabled: Boolean(application?.memberId) });
+  if (!application) return null;
+  const titleOf = (cashboxId: string) => cashboxes.find((cashbox) => cashbox.id === cashboxId)?.title ?? cashboxId;
+  const session = application.sessionId ? sessions.find((item) => item.id === application.sessionId) : undefined;
+  const guarantors = application.pendingGuarantors ?? [];
+  const rows: [string, ReactNode][] = [
+    [t('operations', 'loanMember'), application.applicant],
+    [t('operations', 'amount'), money(application.requestedAmount)],
+    [t('operations', 'loanFundingCashbox'), application.cashboxId ? titleOf(application.cashboxId) : '—'],
+    ...(application.complementaryFunding && application.complementaryFunding.length > 0 ? [[t('operations', 'loanComplementaryFunding'), application.complementaryFunding.map((part) => `${titleOf(part.cashboxId)} ${money(part.amount)}`).join(' · ')] as [string, ReactNode]] : []),
+    ...(rule ? [
+      [t('operations', 'loanTerms'), `${rule.interestRate} % · ${t('finance', 'loanMode' + rule.loanMode)} · ${t('finance', 'interestPeriod' + rule.interestPeriod)}`] as [string, ReactNode],
+      [t('operations', 'loanDuration'), t('operations', 'loanDurationMonths', { count: String(rule.durationMonths) })] as [string, ReactNode],
+      [t('operations', 'loanGuarantorRequired'), t('operations', rule.requiresGuarantor ? 'yes' : 'no')] as [string, ReactNode],
+    ] : []),
+    ...(guarantors.length > 0 ? [[t('operations', 'loanGuarantors'), guarantors.map((item) => `${item.guarantorName} (${money(item.guaranteedAmount)})`).join(' · ')] as [string, ReactNode]] : []),
+    ...(session ? [[t('operations', 'loanSession'), `#${session.sessionNumber} — ${formatDate(session.date)}`] as [string, ReactNode]] : []),
+    ...(application.description ? [[t('operations', 'comment'), application.description] as [string, ReactNode]] : []),
+    [t('operations', 'loanSupportingDocuments'), memberDocuments.length > 0 ? memberDocuments.map((document) => document.name).join(' · ') : t('operations', 'loanNoSupportingDocument')],
+  ];
+  return <Card data-testid="loan-request-details"><CardHeader><CardTitle className="text-sm">{t('operations', 'loanRequestTitle')}</CardTitle></CardHeader><CardContent className="p-5">
+    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+      {rows.map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="font-medium">{value}</dd></div>)}
+    </dl>
+  </CardContent></Card>;
 }
 
 function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const { id: requestId = '' } = useParams(); const { currentTenant } = useTenant(); const { user } = usePermissions(); const queryClient = useQueryClient(); const navigate = useNavigate();
   const currency = useOrganizationCurrency();
   const { data: request, isLoading, isError, refetch } = useQuery({ queryKey: [...queryKeys.operations.workflowRequest(requestId), currentTenant.id], queryFn: () => workflowService.getRequest(currentTenant.id, requestId) });
-  const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'return' | 'cancel' | null>(null);
+  const [searchParams] = useSearchParams();
+  const presetAction = searchParams.get('action');
+  const [pendingAction, setPendingAction] = useState<'approve' | 'reject' | 'return' | 'cancel' | null>(presetAction === 'approve' || presetAction === 'reject' ? presetAction : null);
   const [comment, setComment] = useState('');
 
   const isFiscalYearReopen = Boolean(request && request.domain === 'settings' && request.entityType === 'fiscalYear');
@@ -158,12 +229,33 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const isMemberUpdate = Boolean(request && request.domain === 'organization' && request.entityType === 'member');
   /** Mandat « Finalisation Finance/Tontines » — une demande de crédit intégralement approuvée (WD-001, 2 étapes) peut être décaissée : action distincte, jamais automatique (§12 « le décaissement doit devenir une vraie opération métier »). */
   const isApprovedCreditApplication = Boolean(request && request.domain === 'credit' && request.entityType === 'application' && request.status === 'approved');
+  /** Mandat « Workflow d'approbation des prêts » (2026-09-27) : Approuver / Refuser passent par `creditService.decideLoanApplication` (droits du niveau, auto-approbation interdite), jamais directement par le moteur. */
+  const isCreditApplication = Boolean(request && request.domain === 'credit' && request.entityType === 'application');
+  const { data: creditApplication } = useQuery({ queryKey: [...queryKeys.credit.application(request?.entityId ?? ''), currentTenant.id], queryFn: () => creditService.getApplication(currentTenant.id, request!.entityId), enabled: isCreditApplication });
+  const { data: tenantLoans = [] } = useQuery({ queryKey: queryKeys.credit.loans(currentTenant.id), queryFn: () => creditService.listLoans(currentTenant.id), enabled: isCreditApplication && creditApplication?.stage === 'stageDisbursed' });
+  const disbursedLoan = creditApplication?.stage === 'stageDisbursed' ? tenantLoans.find((loan) => loan.applicationId === creditApplication.id) : undefined;
+  /** Modification de la règle de crédit (double approbation) : `loanRuleService.decideLoanRuleUpdate`. */
+  const isCreditRuleChange = Boolean(request && request.domain === 'credit' && request.entityType === 'creditRule');
+  const openedStep = request?.steps.find((step) => step.order === request.currentStepOrder);
+  const canTakeCharge = Boolean(isCreditApplication && request?.status === 'pending' && openedStep && user.permissions.includes(openedStep.approverPermission) && request.requestedByUserId !== user.id);
+  // Prise en charge : un approbateur habilité qui ouvre une demande EN ATTENTE la fait passer EN COURS (statut issu d'une action, jamais choisi à la main).
+  useEffect(() => {
+    if (!canTakeCharge) return;
+    void workflowService.openRequest(currentTenant.id, requestId, user.permissions).then((opened) => {
+      if (opened?.status !== 'inProgress') return;
+      creditService.applyLoanApplicationDecision(currentTenant.id, opened);
+      queryClient.invalidateQueries({ queryKey: ['operations'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
+    });
+  }, [canTakeCharge]); // eslint-disable-line react-hooks/exhaustive-deps
   const disburseMutation = useMutation({
     mutationFn: () => creditService.disburseLoan(currentTenant.id, request!.entityId),
     onSuccess: (result) => {
       if (!result) { notify.error(t('operations', 'disbursementFailed')); return; }
       notify.success(t('operations', 'loanDisbursed'));
-      queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
+      // Préfixes larges : liste ET fiche de la demande, module Workflow, suivi des prêts, transactions et soldes de caisse.
+      queryClient.invalidateQueries({ queryKey: ['credit', 'applications'] });
+      queryClient.invalidateQueries({ queryKey: ['operations'] });
       queryClient.invalidateQueries({ queryKey: queryKeys.credit.loans(currentTenant.id) });
       queryClient.invalidateQueries({ queryKey: ['finance', 'transactions'] });
       queryClient.invalidateQueries({ queryKey: ['finance', 'cashboxes'] });
@@ -173,85 +265,11 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
   const isBeneficiaryPermutation = Boolean(request && request.domain === 'tontines' && request.entityType === 'beneficiaryPermutation');
   const { data: permutationPreview } = useQuery({ queryKey: ['tontines', 'permutation-preview', requestId, currentTenant.id], queryFn: () => tontineOperationsService.getPlanPermutationPreview(currentTenant.id, requestId), enabled: isBeneficiaryPermutation });
 
-  const mutation = useMutation({
-    mutationFn: async (action: 'approve' | 'reject' | 'return' | 'cancel') => {
-      /**
-       * D-FY-08 (VALIDÉE, Option B) : pour approve/reject d'une demande de
-       * réouverture d'exercice fiscal, on ne passe JAMAIS par
-       * `workflowService.submitAction` directement — `decideFiscalYearReopen`
-       * applique le contrôle d'auto-approbation (`requestedByUserId !==
-       * actorId`) AVANT toute mutation, contrôle que le RBAC seul ne peut pas
-       * garantir puisque role-admin détient à la fois `fiscalYears.manage` et
-       * `fiscalYears.approve`. `null` en retour signifie « bloqué ».
-       */
-      if (isFiscalYearReopen && (action === 'approve' || action === 'reject')) {
-        return settingsService.decideFiscalYearReopen(currentTenant.id, requestId, action, user.id, user.name, comment || undefined);
-      }
-      /** Même principe que la branche Fiscal Year ci-dessus — `decideMemberUpdate` bloque l'auto-approbation avant toute mutation (§22 du besoin), le moteur générique reste agnostique. */
-      if (isMemberUpdate && (action === 'approve' || action === 'reject')) {
-        return organizationService.decideMemberUpdate(currentTenant.id, requestId, action, user.id, user.name, comment || undefined);
-      }
-      const result = action === 'cancel' ? await workflowService.cancelRequest(currentTenant.id, requestId, user.name, comment || undefined) : await workflowService.submitAction(currentTenant.id, requestId, action, user.name, comment || undefined, user.id);
-      /**
-       * §24-BIS : le moteur workflow reste agnostique du domaine — c'est ici,
-       * au seul point d'appel générique d'action (return/cancel, quel que soit
-       * le domaine — approve/reject de Fiscal Year passent par la branche
-       * ci-dessus), qu'un effet de bord propre à Fiscal Year est déclenché.
-       * `applyFiscalYearReopenDecision` est un no-op pour tout autre domaine
-       * (`credit`/`tontines`/`governance`/`finance`) et pour toute action qui
-       * ne fait pas passer le statut à `approved`.
-       */
-      if (result) await settingsService.applyFiscalYearReopenDecision(currentTenant.id, result);
-      /**
-       * Même point d'intégration générique, second domaine (mandat planification/
-       * permutation) — `applyBeneficiaryPermutationDecision` est également un no-op pour
-       * tout autre domaine/entityType et pour toute action qui ne fait pas passer le
-       * statut à `approved`. Auto-approbation volontairement non bloquée ici (décision
-       * du mandat), contrairement à la branche Fiscal Year ci-dessus.
-       */
-      if (result) tontineOperationsService.applyPlanPermutationDecision(currentTenant.id, result);
-      /**
-       * Même point d'intégration générique, troisième domaine (mandat « Finalisation
-       * Finance/Tontines » — prêts) — `applyLoanApplicationDecision` fait progresser
-       * `Application.stage` en miroir de l'avancement des 2 étapes de WD-001 ; no-op
-       * pour tout autre domaine/entityType. Le décaissement lui-même reste une action
-       * explicite séparée (bouton « Décaisser » ci-dessous), jamais automatique ici.
-       */
-      if (result) creditService.applyLoanApplicationDecision(currentTenant.id, result);
-      /** Même point d'intégration générique, quatrième domaine (mandat « Moteur générique de workflow de validation ») — no-op pour tout autre domaine/entityType et pour toute action qui ne fait pas passer le statut à `approved`. */
-      if (result) await organizationService.applyMemberUpdateDecision(currentTenant.id, result);
-      return result;
-    },
-    onSuccess: (result, action) => {
-      if (!result && (isFiscalYearReopen || isMemberUpdate) && (action === 'approve' || action === 'reject')) {
-        notify.error(t('operations', 'cannotActOwnRequest'));
-        setPendingAction(null); setComment('');
-        return;
-      }
-      queryClient.invalidateQueries({ queryKey: queryKeys.operations.workflowRequest(requestId) });
-      queryClient.invalidateQueries({ queryKey: ['operations'] });
-      if (result?.domain === 'settings' && result.entityType === 'fiscalYear') queryClient.invalidateQueries({ queryKey: queryKeys.settings.fiscalYears(currentTenant.id) });
-      if (result?.domain === 'credit' && result.entityType === 'application') queryClient.invalidateQueries({ queryKey: queryKeys.credit.applications(currentTenant.id) });
-      if (result?.domain === 'organization' && result.entityType === 'member') {
-        queryClient.invalidateQueries({ queryKey: queryKeys.members.list(currentTenant.id) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.members.detail(result.entityId) });
-        queryClient.invalidateQueries({ queryKey: ['operations', 'member-pending-approval', result.entityId, currentTenant.id] });
-      }
-      /**
-       * Bug réel trouvé à l'audit (relecture fraîche) : `allBeneficiaries` (agrégat) était
-       * bien invalidé, mais jamais les clés `['tontines','occurrence-beneficiaries',
-       * occurrenceId, tenantId]` que le panneau Opérations lit réellement — avec
-       * `staleTime: 30_000` (`app/providers.tsx`), un gestionnaire ayant déjà consulté l'une
-       * des deux Occurrences juste avant d'approuver pouvait y revoir l'ancien bénéficiaire
-       * jusqu'à 30s après validation. `permutationPreview` est déjà chargé (photos) et porte
-       * `occurrenceId` des deux côtés — réutilisé ici, aucune requête supplémentaire.
-       */
-      if (result?.domain === 'tontines' && result.entityType === 'beneficiaryPermutation' && permutationPreview) {
-        queryClient.invalidateQueries({ queryKey: ['tontines', 'plans'] });
-      }
-      setPendingAction(null); setComment('');
-    },
-  });
+  /** Qui peut traiter l'étape en cours (permission de l'étape + séparation des tâches) : rend visible à qui la demande est affectée, y compris au demandeur qui ne la voit pas dans « Mes approbations ». */
+  const { data: eligibleApprovers } = useQuery({ queryKey: ['operations', 'workflow-requests', 'eligible-approvers', requestId, currentTenant.id, request?.currentStepOrder, request?.status], queryFn: () => workflowService.listEligibleApprovers(currentTenant.id, requestId), enabled: Boolean(request) });
+
+  /** Exécution d'une décision : hook partagé avec « Mes approbations » (services métier par domaine). */
+  const mutation = useWorkflowDecision(t, () => { setPendingAction(null); setComment(''); });
 
   if (isLoading) return <Page title={t('operations', 'requestDetail')} description=""><DetailSkeleton /></Page>;
   if (isError) return <Page title={t('operations', 'requestDetail')} description=""><ErrorState onRetry={refetch} /></Page>;
@@ -280,10 +298,12 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
             <div className="space-y-2 text-center"><MemberAvatar member={{ firstName: permutationPreview.b.memberName, lastName: '', photoUrl: permutationPreview.b.photoUrl }} size="lg" className="mx-auto" /><p className="text-sm font-semibold">{permutationPreview.b.memberName}</p><p className="text-xs text-muted-foreground">{t('operations', 'entityBeneficiaryPermutation')} · #{permutationPreview.b.position}</p></div>
           </CardContent></Card>
         )}
+        {isCreditApplication && <LoanRequestDetails t={t} tenantId={currentTenant.id} applicationId={request.entityId} money={(value) => formatCurrency(value, currency, locale)} />}
         <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'requestDetail')}</CardTitle></CardHeader><CardContent className="space-y-4 p-5">
           <Info label={t('operations', 'entity')} value={`${request.entityLabel} (${t('operations', ENTITY_KEY[request.entityType])})`} icon={DomainIcon} />
           <Info label={t('operations', 'requestedBy')} value={request.requestedBy} icon={Users2} />
           <Info label={t('operations', 'requestedAt')} value={formatDate(request.requestedAt)} icon={ClipboardList} />
+          {currentStep && <Info label={t('operations', 'currentStep')} value={currentStep.name} icon={Workflow} />}
           {request.amount !== undefined && <Info label={t('operations', 'amount')} value={formatCurrency(request.amount, currency, locale)} icon={Landmark} />}
           {request.justification && <Info label={t('operations', 'justification')} value={request.justification} icon={FileText} />}
           {request.warnings && request.warnings.length > 0 && <div className="rounded-lg border border-dashed border-amber-400/60 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
@@ -299,7 +319,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         {request.changeSet && request.changeSet.length > 0 && (
           <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'proposedChanges')}</CardTitle></CardHeader><CardContent className="p-5">
             <table className="w-full text-sm"><thead><tr className="border-b border-border text-left text-xs text-muted-foreground"><th className="pb-2 font-medium">{t('operations', 'changeField')}</th><th className="pb-2 font-medium">{t('operations', 'changeBefore')}</th><th className="pb-2 font-medium">{t('operations', 'changeAfter')}</th></tr></thead>
-              <tbody>{request.changeSet.map((item) => <tr key={item.field} className="border-b border-border/50 last:border-0"><td className="py-2 pr-3 font-medium">{t('operations', MEMBER_CHANGE_FIELD_KEY[item.field] ?? item.field)}</td><td className="py-2 pr-3 text-muted-foreground">{String(item.before ?? '—') || '—'}</td><td className="py-2 font-medium text-foreground">{String(item.after ?? '—') || '—'}</td></tr>)}</tbody>
+              <tbody>{request.changeSet.map((item) => <tr key={item.field} className="border-b border-border/50 last:border-0"><td className="py-2 pr-3 font-medium">{t('operations', (isCreditRuleChange ? CREDIT_RULE_CHANGE_FIELD_KEY : MEMBER_CHANGE_FIELD_KEY)[item.field] ?? item.field)}</td><td className="py-2 pr-3 text-muted-foreground">{String(item.before ?? '—') || '—'}</td><td className="py-2 font-medium text-foreground">{String(item.after ?? '—') || '—'}</td></tr>)}</tbody>
             </table>
           </CardContent></Card>
         )}
@@ -312,23 +332,35 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
            * (`settingsService.decideFiscalYearReopen`) — masquer les boutons
            * ici n'est qu'un confort, jamais la seule protection.
            */
-          const isSelfRequest = (isFiscalYearReopen || isMemberUpdate) && Boolean(request.requestedByUserId) && request.requestedByUserId === user.id;
+          const isSelfRequest = (isFiscalYearReopen || isMemberUpdate || isCreditApplication || isCreditRuleChange) && Boolean(request.requestedByUserId) && request.requestedByUserId === user.id;
+          // Double approbation : le 2e approbateur doit être différent du 1er (contrôle réel côté service).
+          const alreadyApproved = isCreditRuleChange && request.steps.some((step) => step.order < currentStep.order && step.actedBy === user.id);
+          const blocked = isSelfRequest || alreadyApproved;
           return (
           <Card><CardHeader><CardTitle className="text-sm">{currentStep.name}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
             <p className="text-xs text-muted-foreground">{t('operations', 'requiredPermission')}: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">{currentStep.approverPermission}</code></p>
+            {eligibleApprovers && <div data-testid="eligible-approvers" className="text-xs">{eligibleApprovers.length > 0 ? <><p className="text-muted-foreground">{t('operations', 'eligibleApprovers')}</p><ul className="mt-1 flex flex-wrap gap-1.5">{eligibleApprovers.map((approver) => <li key={approver.id} className="rounded-full bg-muted px-2 py-0.5 font-medium">{approver.name}</li>)}</ul></> : <p className="rounded-lg border border-dashed border-amber-300 p-2 text-amber-700 dark:text-amber-300">{t('operations', 'noEligibleApprover')}</p>}</div>}
             <PermissionGate permission={currentStep.approverPermission} entityType={request.entityType} fallback={<p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'noPermission')}</p>}>
               {isSelfRequest && <p data-testid="self-approval-notice" className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'cannotActOwnRequest')}</p>}
+              {alreadyApproved && <p data-testid="second-approver-notice" className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'cannotApproveTwice')}</p>}
               <div className="flex flex-wrap gap-2">
-                {!isSelfRequest && <Button onClick={() => setPendingAction('approve')}><Check size={15} />{t('operations', 'approve')}</Button>}
-                <Button variant="outline" onClick={() => setPendingAction('return')}><RotateCcw size={15} />{t('operations', 'returnAction')}</Button>
-                {!isSelfRequest && <Button variant="destructive" onClick={() => setPendingAction('reject')}><XCircle size={15} />{t('operations', 'reject')}</Button>}
-                <Button variant="outline" onClick={() => setPendingAction('cancel')}><Ban size={15} />{t('operations', 'cancelRequest')}</Button>
+                {!blocked && <Button onClick={() => setPendingAction('approve')}><Check size={15} />{t('operations', 'approve')}</Button>}
+                {/* Demande de prêt : seules Refuser / Approuver (une demande renvoyée ou annulée laisserait le prêt sans issue). */}
+                {!isCreditApplication && <Button variant="outline" onClick={() => setPendingAction('return')}><RotateCcw size={15} />{t('operations', 'returnAction')}</Button>}
+                {!blocked && <Button variant="destructive" onClick={() => setPendingAction('reject')}><XCircle size={15} />{t('operations', 'reject')}</Button>}
+                {!isCreditApplication && <Button variant="outline" onClick={() => setPendingAction('cancel')}><Ban size={15} />{t('operations', 'cancelRequest')}</Button>}
               </div>
             </PermissionGate>
           </CardContent></Card>
           );
         })()}
-        {isApprovedCreditApplication && (
+        {isApprovedCreditApplication && creditApplication?.stage === 'stageDisbursed' && (
+          <Card data-testid="loan-disbursed"><CardHeader><CardTitle className="text-sm">{t('operations', 'disbursement')}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
+            <p className="text-sm">{t('operations', 'loanAlreadyDisbursed', { loan: disbursedLoan?.id ?? '—' })}</p>
+            {disbursedLoan && <Button variant="outline" onClick={() => navigate(`/finance/credit/loans/${disbursedLoan.id}`)}><CreditCard size={15} />{t('operations', 'viewLoan')}</Button>}
+          </CardContent></Card>
+        )}
+        {isApprovedCreditApplication && creditApplication?.stage === 'stageApproved' && (
           <Card><CardHeader><CardTitle className="text-sm">{t('operations', 'disbursement')}</CardTitle></CardHeader><CardContent className="space-y-3 p-5">
             <p className="text-xs text-muted-foreground">{t('operations', 'requiredPermission')}: <code className="rounded bg-muted px-1.5 py-0.5 font-mono">loans.create</code></p>
             <PermissionGate permission="loans.create" fallback={<p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">{t('operations', 'noPermission')}</p>}>
@@ -338,7 +370,7 @@ function WorkflowDetail({ t, locale }: { t: T; locale: 'fr' | 'en' }) {
         )}
       </div>
     </div>
-    {pendingAction && <ConfirmDialog open title={confirmLabels[pendingAction].title} description={t('operations', 'commentPlaceholder')} confirmLabel={confirmLabels[pendingAction].confirm} cancelLabel={t('operations', 'cancel')} onConfirm={() => mutation.mutate(pendingAction)} onCancel={() => { setPendingAction(null); setComment(''); }}>
+    {pendingAction && canAct && <ConfirmDialog open title={confirmLabels[pendingAction].title} description={t('operations', 'commentPlaceholder')} confirmLabel={confirmLabels[pendingAction].confirm} cancelLabel={t('operations', 'cancel')} confirmDisabled={mutation.isPending} onConfirm={() => { if (!mutation.isPending) mutation.mutate({ request, action: pendingAction, comment }); }} onCancel={() => { setPendingAction(null); setComment(''); }}>
       <Textarea className="mt-4" aria-label={t('operations', 'comment')} value={comment} onChange={(event) => setComment(event.target.value)} placeholder={t('operations', 'commentPlaceholder')} />
     </ConfirmDialog>}
   </Page>;

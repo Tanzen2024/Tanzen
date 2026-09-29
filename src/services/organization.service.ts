@@ -9,6 +9,7 @@ import { workflowService } from './workflow.service';
 import { auditService } from './audit.service';
 import { notificationService } from './notification.service';
 import { computeChangeSet } from '@/lib/workflow/change-set';
+import { DEFAULT_COUNTRY } from '@/constants/countries';
 import type { WorkflowRequest } from '@/mocks/operations/workflow-requests';
 
 /**
@@ -57,7 +58,10 @@ export const organizationService = {
     mockRequest(() => {
       const tenant = tenants.find((item) => item.id === resourceId);
       if (!tenant) return undefined;
-      return scope === 'platform' || tenant.id === tenantId ? tenant : undefined;
+      if (scope !== 'platform' && tenant.id !== tenantId) return undefined;
+      // Pays absent → pays par défaut enregistré sur le tenant (valeur du modèle) ; un pays déjà renseigné n'est jamais écrasé.
+      if (!tenant.country?.trim()) tenant.country = DEFAULT_COUNTRY;
+      return tenant;
     }),
 
   listMembers: (tenantId: string) => mockRequest(() => members.filter((member) => member.tenantId === tenantId)),
@@ -99,7 +103,7 @@ export const organizationService = {
         uuid: crypto.randomUUID(),
         joinedAt,
         birthDate: '', idNumber: '',
-        positions: [], accounts: [], documents: [], activities: [], governanceParticipation: [],
+        positions: [], cashboxes: [], documents: [], activities: [], governanceParticipation: [],
         statusHistory: [{ status: input.status, since: joinedAt }],
         syncStatus: 'synced', version: 1,
         createdAt: now, updatedAt: now, deletedAt: null,

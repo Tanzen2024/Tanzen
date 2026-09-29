@@ -12,17 +12,19 @@ import type { LoanRule } from '@/mocks/finance/loan-rules';
  *     (MONTHLY → durationMonths tel quel ; YEARLY → /12 ; WEEKLY → ×4.345 ;
  *     DAILY → ×30, mois normalisé à 30 jours, cohérent avec l'absence de
  *     calendrier réel dans les autres modules financiers du projet).
- *   - FIXED et FLAT : intérêt simple sur le capital initial, jamais recalculé
- *     sur un solde restant — `interestAmount = principal × (taux/100) ×
- *     periodsInDuration`. Les deux types sont mathématiquement identiques dans
- *     ce modèle (« taux fixe » = « taux à plat » = pas de dégressivité) ; le
- *     projet ne distingue les deux qu'à l'affichage, aucune règle sourcée ne
- *     les différencie autrement.
- *   - REDUCING (dégressif/amortissable) : formule d'amortissement standard à
- *     mensualité constante, `r` = taux périodique (taux/100, déjà exprimé
- *     « par periode » par `LoanRule.interestPeriod`) :
+ *   - Le calcul est piloté par le MODE DE PRÊT (`LoanRule.loanMode`) :
+ *   - SIMPLE : intérêt sur le capital INITIAL, à chaque période, jamais
+ *     recalculé sur un solde restant — `interestAmount = principal × (taux/100) ×
+ *     periodsInDuration`.
+ *   - COMPOUND (« Composé ») : intérêt sur le montant NET de la dette — formule
+ *     d'amortissement standard à mensualité constante, `r` = taux périodique
+ *     (taux/100, déjà exprimé « par période » par `LoanRule.interestPeriod`) :
  *       mensualité = principal × r / (1 − (1 + r)⁻ⁿ), n = durée en périodes.
  *     Cas particulier `r = 0` : mensualité = principal / n (aucun intérêt).
+ *   - GLOBAL : intérêt calculé UNE SEULE FOIS sur la période définie —
+ *     `interestAmount = principal × (taux/100)`, quelle que soit la durée, déterminé à l'origine
+ *     (RÈGLES DE RÉFÉRENCE du 2026-09-28 : 100 000 à 25 % → 125 000 à rembourser ; aucun intérêt
+ *     périodique ensuite) : `totalRepayable = principal + interestAmount`.
  *   - Tous les montants sont arrondis à l'entier le plus proche (FCFA, pas de
  *     sous-unité utilisée ailleurs dans les mocks existants).
  */
@@ -64,14 +66,14 @@ function addMonths(isoDate: string, months: number): string {
  */
 export function computeLoanTerms(
   principal: number,
-  rule: Pick<LoanRule, 'interestRate' | 'interestType' | 'interestPeriod' | 'durationMonths'>,
+  rule: Pick<LoanRule, 'interestRate' | 'loanMode' | 'interestPeriod' | 'durationMonths'>,
   disbursementDate: string,
 ): LoanTerms {
   const n = Math.max(rule.durationMonths, 1);
   let interestAmount: number;
   let monthlyPayment: number;
 
-  if (rule.interestType === 'REDUCING') {
+  if (rule.loanMode === 'COMPOUND') {
     const periods = periodsInDuration(n, rule.interestPeriod);
     const r = rule.interestRate / 100 / (n / Math.max(periods, 1)); // taux ramené « par mois » pour une mensualité constante
     if (r === 0) {
@@ -81,8 +83,12 @@ export function computeLoanTerms(
     }
     const totalRepayableRaw = monthlyPayment * n;
     interestAmount = totalRepayableRaw - principal;
+  } else if (rule.loanMode === 'GLOBAL') {
+    // GLOBAL — intérêt calculé une seule fois sur la période définie.
+    interestAmount = principal * (rule.interestRate / 100);
+    monthlyPayment = (principal + interestAmount) / n;
   } else {
-    // FIXED / FLAT — intérêt simple sur le capital initial.
+    // SIMPLE — intérêt sur le capital initial, à chaque période.
     const periods = periodsInDuration(n, rule.interestPeriod);
     interestAmount = principal * (rule.interestRate / 100) * periods;
     monthlyPayment = (principal + interestAmount) / n;

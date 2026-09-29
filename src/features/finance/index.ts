@@ -1,1 +1,1 @@
-export { FinanceModule } from './finance-module';
+export { FinanceModule, LoanRulesRoutes } from './finance-module';

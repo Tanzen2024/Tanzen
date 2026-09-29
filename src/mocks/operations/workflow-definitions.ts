@@ -42,7 +42,7 @@ export type WorkflowDefinition = {
   name: string;
   domain: WorkflowDomain;
   description: string;
-  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation' | 'member';
+  entityType: 'application' | 'loan' | 'assembly' | 'distribution' | 'fiscalYear' | 'beneficiaryPermutation' | 'member' | 'creditRule';
   action: WorkflowActionType;
   steps: WorkflowStepDefinition[];
   active: boolean;
@@ -79,12 +79,12 @@ export type WorkflowDefinition = {
 };
 
 /** Valeurs réellement supportées par le moteur (besoin §8) — dérivées des unions de types ci-dessus, aucune valeur inventée pour l'UI. */
-export const WORKFLOW_ENTITY_TYPES: WorkflowDefinition['entityType'][] = ['application', 'loan', 'assembly', 'distribution', 'fiscalYear', 'beneficiaryPermutation', 'member'];
+export const WORKFLOW_ENTITY_TYPES: WorkflowDefinition['entityType'][] = ['application', 'loan', 'assembly', 'distribution', 'fiscalYear', 'beneficiaryPermutation', 'member', 'creditRule'];
 export const WORKFLOW_ACTION_TYPES: WorkflowActionType[] = ['create', 'update', 'close', 'reopen', 'delete'];
 export const WORKFLOW_DOMAINS: WorkflowDomain[] = ['credit', 'tontines', 'governance', 'finance', 'settings', 'organization'];
 
 export const workflowDefinitions: WorkflowDefinition[] = [
-  { id: 'WD-001', tenantId: 'T-001', code: 'CREDIT_APPLICATION_APPROVAL', name: 'Approbation de demande de crédit', domain: 'credit', description: 'Instruction puis décision finale sur une demande de prêt.', entityType: 'application', action: 'create', version: 1, steps: [{ order: 1, name: 'Vérification du dossier', approverPermission: 'applications.approve' }, { order: 2, name: 'Décision finale', approverPermission: 'loans.approve' }], active: true },
+  { id: 'WD-001', tenantId: 'T-001', code: 'CREDIT_APPLICATION_APPROVAL', name: 'Approbation de demande de crédit', domain: 'credit', description: 'Instruction puis décision finale sur une demande de prêt.', entityType: 'application', action: 'create', version: 2, steps: [{ order: 1, name: 'Approbation administrateur', approverPermission: 'loans.approve.admin' }], active: true }, // Mandat « Workflow d'approbation des prêts » (2026-09-27) : UNE étape, dont le nom et la permission suivent le niveau de la règle de crédit (`loanApprovalStep`) — valeur par défaut ici (niveau Administrateur).
   { id: 'WD-003', tenantId: 'T-001', code: 'GOVERNANCE_ASSEMBLY_CONVOCATION', name: 'Convocation d’assemblée', domain: 'governance', description: 'Préparation de l’ordre du jour puis validation par le bureau.', entityType: 'assembly', action: 'create', version: 1, steps: [{ order: 1, name: 'Préparation ordre du jour', approverPermission: 'governance.create' }, { order: 2, name: 'Validation du bureau', approverPermission: 'governance.approve' }], active: true },
   { id: 'WD-004', tenantId: 'T-001', code: 'FINANCE_DISTRIBUTION_APPROVAL', name: 'Distribution de fonds', domain: 'finance', description: 'Contrôle comptable puis approbation finale d’une distribution.', entityType: 'distribution', action: 'create', version: 1, steps: [{ order: 1, name: 'Contrôle comptable', approverPermission: 'distributions.create' }, { order: 2, name: 'Approbation finale', approverPermission: 'distributions.approve' }], active: true },
   /**
@@ -136,5 +136,15 @@ export const workflowDefinitions: WorkflowDefinition[] = [
    * explicitement l'auto-approbation (même pattern que
    * `settingsService.decideFiscalYearReopen`), pas seulement le RBAC.
    */
+  /**
+   * MODIFICATION DE LA RÈGLE DE CRÉDIT — DOUBLE APPROBATION OBLIGATOIRE (mandat « Finalisation du
+   * bilan », 2026-09-28). Toujours active : `loanRuleService.requestLoanRuleUpdate` est le SEUL
+   * chemin de modification d'une règle existante (plus aucune écriture directe). Deux étapes de la
+   * même permission `loanRules.approve` (distincte de `loanRules.manage`, qui permet de DEMANDER) ;
+   * `loanRuleService.decideLoanRuleUpdate` impose la séparation des responsabilités : le demandeur
+   * n'approuve jamais (convention TANZEN, comme exercice / membre / prêt) et la 2e approbation
+   * exige un autre utilisateur que la 1re. La règle n'est modifiée qu'après la 2e approbation.
+   */
+  { id: 'WD-009', tenantId: 'T-001', code: 'CREDIT_RULE_UPDATE', name: 'Modification de la règle de crédit', domain: 'credit', description: 'Toute modification de la règle de crédit est soumise à une double approbation avant de devenir active.', entityType: 'creditRule', action: 'update', version: 1, steps: [{ order: 1, name: 'Première approbation', approverPermission: 'loanRules.approve' }, { order: 2, name: 'Deuxième approbation', approverPermission: 'loanRules.approve' }], active: true },
   { id: 'WD-007', tenantId: 'T-001', code: 'MEMBER_UPDATE', name: 'Modification d’un membre', domain: 'organization', description: 'Toute modification d’un membre déjà enregistré passe par une demande de validation avant application effective.', entityType: 'member', action: 'update', version: 1, steps: [{ order: 1, name: 'Validation de la modification', approverPermission: 'members.approve' }], active: false },
 ];

@@ -11,10 +11,10 @@ import { transactions } from '@/mocks/finance/transactions';
  */
 describe('financePositionService — câblage & isolation tenant', () => {
   it('balanceAsOf(ACCOUNT) est cohérent avec resolveCashbox pour une date lointaine', async () => {
-    const result = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-001' }, '2099-12-31');
-    const expected = resolveCashbox(cashboxes.find((a) => a.id === 'AC-001')!, transactions).balance;
+    const result = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-012' }, '2099-12-31');
+    const expected = resolveCashbox(cashboxes.find((a) => a.id === 'AC-012')!, transactions).balance;
     expect(result.total).toBe(expected);
-    expect(result.total).toBe(12_500_000);
+    expect(result.total).toBe(3_000);
   });
 
   it('balanceAsOf(TENANT_ALL_CASHBOXES) ne voit que les caisses du tenant demandé', async () => {
@@ -35,15 +35,16 @@ describe('financePositionService — câblage & isolation tenant', () => {
   it('MEMBER_ALL_CASHBOXES — périmètre = adhésions du membre à la date (seed Fatou)', async () => {
     const jul = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-07-31');
     const aug = await financePositionService.balanceAsOf('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-08-05');
-    expect(jul.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-001', 'AC-002']);
-    expect(aug.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-001', 'AC-002', 'AC-011']);
+    // Adhésions de démonstration de Fatou : Épargne, Transport, Secours — toutes à partir du 01/08/2026.
+    expect(jul.byCashbox.map((l) => l.cashboxId)).toEqual([]);
+    expect(aug.byCashbox.map((l) => l.cashboxId).sort()).toEqual(['AC-009', 'AC-011', 'AC-012']);
   });
 
-  it('flows(TENANT_ALL_CASHBOXES) 2026 — T-001 : 1 375 000 / 220 000 / 6', async () => {
+  it('flows(TENANT_ALL_CASHBOXES) 2026 — T-001 : 882 000 / 337 000 / 16 (jeu de démonstration, total 1 219 000)', async () => {
     const result = await financePositionService.flows('T-001', { kind: 'TENANT_ALL_CASHBOXES' }, '2026-01-01', '2026-12-31');
-    expect(result.totalDebit).toBe(1_375_000);
-    expect(result.totalCredit).toBe(220_000);
-    expect(result.count).toBe(6);
+    expect(result.totalDebit).toBe(882_000);
+    expect(result.totalCredit).toBe(337_000);
+    expect(result.count).toBe(16);
   });
 
   it('flows d’un autre tenant n’inclut aucune transaction de T-001', async () => {
@@ -112,23 +113,23 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
   it('carryForward(T-001, 2026 → 2027) après clôture gouvernance — closing(N) copié tel quel vers opening(N+1), non-régression du total 2099', async () => {
     // Séquencement recommandé (mandat §3) : clôture financière déjà faite ci-dessus, PUIS clôture gouvernance.
     // La clôture financière déjà faite (ALREADY_CLOSED) est traitée comme une précondition satisfaite,
-    // pas un échec — closeCurrentFiscalYear reste idempotent sur ce point (mandat cycle de vie §8/§9).
-    const closed = await settingsService.closeCurrentFiscalYear('T-001');
+    // pas un échec — closeFiscalYear reste idempotent sur ce point (mandat cycle de vie §8/§9).
+    const closed = await settingsService.closeFiscalYear('T-001', 'FY-T001-2026');
     expect(closed.ok).toBe(true);
-    if (closed.ok) expect(closed.year.status).toBe('closed');
+    if (closed.ok) expect(closed.year.isClosed).toBe(true);
 
     const carried = await financePositionService.carryForward('T-001', 'FY-T001-2026', 'FY-T001-2027');
     expect(carried?.ok).toBe(true);
     if (carried?.ok) {
-      const opening2027 = carried.entries.find((e) => e.cashboxId === 'AC-001')!;
+      const opening2027 = carried.entries.find((e) => e.cashboxId === 'AC-012')!;
       expect(opening2027.origin).toBe('CARRY_FORWARD');
       expect(opening2027.date).toBe('2027-01-01');
     }
 
     // Aucune transaction seedée après 2026 → le total à '2099-12-31' doit rester EXACTEMENT
     // celui d'avant l'étape 6 (invariant non-régression), même si le mécanisme sous-jacent a changé.
-    const total2099 = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-001' }, '2099-12-31');
-    expect(total2099.total).toBe(12_500_000);
+    const total2099 = await financePositionService.balanceAsOf('T-001', { kind: 'CASHBOX', cashboxId: 'AC-012' }, '2099-12-31');
+    expect(total2099.total).toBe(3_000);
 
     const mismatches = await financePositionService.verifyCarryForwardIntegrity('T-001', 'FY-T001-2026', 'FY-T001-2027');
     expect(mismatches).toEqual([]);
@@ -145,7 +146,7 @@ describe('financePositionService — closeFiscalYear / carryForward (étape 6)',
     expect(t002?.ok).toBe(true);
     if (t002?.ok) {
       expect(t002.entries.every((e) => e.tenantId === 'T-002')).toBe(true);
-      expect(t002.entries.some((e) => e.cashboxId.startsWith('AC-001'))).toBe(false); // aucune caisse T-001
+      expect(t002.entries.some((e) => e.cashboxId.startsWith('AC-012'))).toBe(false); // aucune caisse T-001
     }
   });
 });
@@ -165,10 +166,10 @@ describe('financePositionService — recomputeClosingEntry (étape 6)', () => {
     const notFound = await financePositionService.recomputeClosingEntry('T-002', 'FY-T002-2026', 'AC-NOPE', 'x');
     expect(notFound).toEqual({ ok: false, reason: 'CASHBOX_NOT_FOUND' });
 
-    // AC-001 appartient à T-001 : ctxForTenant('T-002') ne le contient jamais, donc CASHBOX_NOT_FOUND ici —
+    // AC-012 appartient à T-001 : ctxForTenant('T-002') ne le contient jamais, donc CASHBOX_NOT_FOUND ici —
     // FISCAL_YEAR_TENANT_MISMATCH n'est atteignable qu'au niveau du moteur pur (défense en profondeur,
     // cf. `closing.test.ts`), jamais via ce service déjà tenant-scopé par construction.
-    const crossTenant = await financePositionService.recomputeClosingEntry('T-002', 'FY-T002-2026', 'AC-001', 'x');
+    const crossTenant = await financePositionService.recomputeClosingEntry('T-002', 'FY-T002-2026', 'AC-012', 'x');
     expect(crossTenant).toEqual({ ok: false, reason: 'CASHBOX_NOT_FOUND' });
   });
 });
@@ -185,7 +186,7 @@ describe('financePositionService — createInitialOpeningEntry (étape 6, origin
   });
 
   it('refuse une caisse/un exercice d’un autre tenant', async () => {
-    const wrongTenant = await financePositionService.createInitialOpeningEntry('T-003', 'AC-001', 'FY-T003-2026', 100);
+    const wrongTenant = await financePositionService.createInitialOpeningEntry('T-003', 'AC-012', 'FY-T003-2026', 100);
     expect(wrongTenant).toBeNull();
   });
 });
@@ -194,11 +195,11 @@ describe('financePositionService — memberFinancialPosition / memberFinancialPo
   it('MEMBER_ALL_CASHBOXES — Fatou (T-001) : savings + credit corrects, cohérent avec le moteur pur', async () => {
     const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-001' }, '2026-08-31');
     expect(result.savings).toBe(100_000);
-    expect(result.credit).toEqual({ loansReceived: 850_000, repayments: 158_667, outstanding: 793_333, loanCount: 1 });
+    expect(result.credit).toEqual({ loansReceived: 850_000, repayments: 158_667, outstanding: 774_293, loanCount: 1 }); // dette courante (règles de référence), cf. member-position.test
   });
 
   it('MEMBER_CASHBOX — pas de credit/distributions exposés', async () => {
-    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_CASHBOX', memberId: 'M-001', cashboxId: 'AC-002' }, '2026-08-31');
+    const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_CASHBOX', memberId: 'M-001', cashboxId: 'AC-009' }, '2026-08-31');
     expect(result.credit).toBeUndefined();
     expect(result.distributions).toBeUndefined();
   });
@@ -211,7 +212,7 @@ describe('financePositionService — memberFinancialPosition / memberFinancialPo
 
   it('POINT CRITIQUE (câblage service) — Cheikh (T-001) : Loan L-004 sans Transaction PRET, loansReceived/outstanding corrects', async () => {
     const result = await financePositionService.memberFinancialPosition('T-001', { kind: 'MEMBER_ALL_CASHBOXES', memberId: 'M-006' }, '2026-08-31');
-    expect(result.credit).toEqual({ loansReceived: 2_100_000, repayments: 194_250, outstanding: 2_136_750, loanCount: 1 });
+    expect(result.credit).toEqual({ loansReceived: 2_100_000, repayments: 194_250, outstanding: 2_115_383, loanCount: 1 }); // dette courante (règles de référence), cf. member-position.test
   });
 
   it('memberFinancialPositions — un résultat par membre, isolation identique', async () => {

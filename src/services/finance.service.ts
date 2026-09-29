@@ -1,16 +1,23 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { cashboxes, hasCashboxLabelConflict, isSystemCashbox, normalizeCashboxLabel, resolveCashbox, type Cashbox, type CashboxRecord, type CashboxType, type SystemCashboxCode } from '@/mocks/finance/cashboxes';
+import { cashboxes, hasCashboxLabelConflict, isCashboxOperational, isSystemCashbox, normalizeCashboxLabel, resolveCashbox, type Cashbox, type CashboxRecord, type CashboxType, type SystemCashboxCode } from '@/mocks/finance/cashboxes';
 import { cashboxMemberships } from '@/mocks/finance/cashbox-memberships';
 import { transactions, type Transaction, type TransactionType } from '@/mocks/finance/transactions';
-import { isClassificationValid, isTransactionCategory, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
+import { isClassificationValid, isTransactionCategory, isTransactionTypeAllowed, type TransactionCategory, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { contributions, contributionsByMonth } from '@/mocks/finance/contributions';
 import { distributions, type Distribution } from '@/mocks/finance/distributions';
 import { members } from '@/mocks/organization/members';
 import { tenants } from '@/mocks/organization/tenants';
 import { validateSessionBelongsToExercise } from './fiscal-session.service';
+import { fiscalYears, fiscalYearContaining, type FiscalYear } from '@/mocks/settings/fiscal-years';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
+import { loans } from '@/mocks/finance/loans';
+import { repayments as loanRepayments } from '@/mocks/finance/repayments';
+import { loanDebtAt } from '@/lib/finance/interest-distribution';
+import { loanFundingAllocations } from '@/mocks/finance/loan-funding-allocations';
+import { tontines } from '@/mocks/tontines/tontines';
+import { sortTransactionsNewestFirst } from '@/lib/finance/transaction-order';
 
 /**
  * Formulaire simplifié « Nouvelle caisse » (mandat CAISSE §2/§3) : ni tenant
@@ -28,7 +35,7 @@ export type DistributionInput = Pick<Distribution, 'beneficiary' | 'source' | 'a
  * journal financier central » §4). `tenantId` reste le seul paramètre de
  * sécurité (toujours `currentTenant.id`, jamais l'input). `cashboxNumber` et
  * `memberName` sont résolus côté appelant (déjà chargés pour peupler les
- * `<select>`), passés ici pour composer `fromAccount`/`toAccount` selon le sens,
+ * `<select>`), passés ici pour composer `source`/`destination` selon le sens,
  * sans réinventer une résolution de caisse/adhérent.
  *
  * PAS de champ `date` : la « Date transaction » (`Transaction.recordedAt`, dite
@@ -44,7 +51,7 @@ export type TransactionInput = {
   category: TransactionCategory;
   /**
    * Sous-catégorie — attendue UNIQUEMENT si `category === 'AUTRES'` (mandat
-   * « MODÈLE DE DONNÉES »). `null`/absente pour EPARGNE/PRET/REMBOURSEMENT ;
+   * « MODÈLE DE DONNÉES »). `null`/absente pour EPARGNE ;
    * toute combinaison incohérente est rejetée par `createTransaction`.
    */
   subcategory?: TransactionSubcategory | null;
@@ -52,9 +59,7 @@ export type TransactionInput = {
   amount: number;
   description: string;
   /**
-   * Séance à laquelle l'opération se rapporte (reconstruction complète du
-   * sous-module Exercices fiscaux / Séances — remplace l'ancien `meetingId`/
-   * `meetingDate` virtuels). `sessionId` = `FiscalSession.id`, une entité
+   * Séance à laquelle l'opération se rapporte. `sessionId` = `FiscalSession.id`, une entité
    * RÉELLEMENT PERSISTÉE (jamais un identifiant synthétique dérivé). `fiscalYearId`
    * porte l'isolation : `createTransaction` rejette la transaction si `sessionId`
    * n'appartient pas à cet exercice / ce tenant. La date affichée se lit depuis
@@ -207,6 +212,28 @@ function withComputedBalance(cashbox: CashboxRecord): Cashbox {
 }
 
 /**
+ * DISPONIBLE d'une caisse pour financer un prêt (mandat « financement multi-caisses », 2026-09-26) :
+ * exactement le solde que le projet calcule déjà (`resolveCashbox`, même source que la liste et la
+ * fiche caisse) — aucune notion de fonds réservés n'existant, aucune seconde formule. `undefined`
+ * si la caisse n'appartient pas au tenant.
+ */
+export function cashboxAvailableBalance(tenantId: string, cashboxId: string): number | undefined {
+  const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+  return cashbox ? resolveCashbox(cashbox, transactions).balance : undefined;
+}
+
+/**
+ * Rattachement d'une transaction à un exercice — SEULE règle : son
+ * `fiscalYearId` explicite (posé par `insertTransaction`), à défaut (seed
+ * historique antérieur à la règle) la période de l'exercice qui contient sa date.
+ */
+export function transactionBelongsToFiscalYear(transaction: Pick<Transaction, 'tenantId' | 'date' | 'fiscalYearId'>, fiscalYear: Pick<FiscalYear, 'id' | 'tenantId' | 'startDate' | 'endDate'>): boolean {
+  if (transaction.tenantId !== fiscalYear.tenantId) return false;
+  if (transaction.fiscalYearId) return transaction.fiscalYearId === fiscalYear.id;
+  return transaction.date >= fiscalYear.startDate && transaction.date <= fiscalYear.endDate;
+}
+
+/**
  * Logique PURE (aucun `mockRequest`, aucun délai) de `createTransaction` —
  * extraite pour être réutilisable de façon strictement SYNCHRONE par d'autres
  * services dont les propres fonctions sont elles-mêmes des factories
@@ -227,26 +254,43 @@ export function insertTransaction(tenantId: string, input: TransactionInput): Tr
   if (!input.cashboxNumber || !Number.isFinite(amount) || amount <= 0) return undefined;
   // Validations de classification (mandat §22) : catégorie officielle, et
   // combinaison catégorie/sous-catégorie cohérente (AUTRES ⇔ sous-catégorie
-  // valide ; EPARGNE/PRET/REMBOURSEMENT ⇒ aucune sous-catégorie). Empêche
+  // valide ; EPARGNE ⇒ aucune sous-catégorie). Empêche
   // aussi qu'un client force une sous-catégorie appartenant à une autre
   // catégorie (ex. `EPARGNE` + `FRAIS`).
   if (!isTransactionCategory(input.category)) return undefined;
   if (!isClassificationValid(input.category, input.subcategory ?? null)) return undefined;
+  // TYPE IMPOSÉ PAR L'OPÉRATION (mandat « Type des transactions ») : Épargne / Remboursement / Autres-Inscription·Achat tontine·Secours = crédit, Prêt = débit ; seul « Autres » libre accepte les deux. Refus (jamais un type forcé en silence, qui inverserait le sens de l'argent).
+  if (!isTransactionTypeAllowed(input.category, input.category === 'AUTRES' ? input.subcategory ?? null : null, input.type)) return undefined;
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  // Cohérence tenant / caisse / membre (mandat « Caisse + exercice fiscal
+  // contexte global » §22) : la caisse et l'éventuel adhérent appartiennent au
+  // tenant de l'opération — jamais une écriture sur la caisse d'un autre tenant.
+  // Cycle de vie (mandat « Évolution globale du module Finance » §31) : une caisse désactivée ou archivée ne reçoit plus aucune écriture — contrôle SERVICE, jamais seulement l'UI.
+  if (!cashboxes.some((cashbox) => cashbox.tenantId === tenantId && cashbox.cashboxNumber === input.cashboxNumber && isCashboxOperational(cashbox))) return undefined;
+  if (input.memberId && !members.some((member) => member.id === input.memberId && member.tenantId === tenantId)) return undefined;
+  // Cohérence exercice : la transaction est TOUJOURS rattachée à l'exercice du
+  // tenant qui contient sa date (fourni par l'appelant ou déduit). Un exercice
+  // d'un autre tenant, clôturé, ou ne contenant pas la date est refusé.
+  const fiscalYear = input.fiscalYearId
+    ? fiscalYears.find((year) => year.id === input.fiscalYearId && year.tenantId === tenantId)
+    : fiscalYearContaining(fiscalYears, tenantId, date);
+  if (input.fiscalYearId && !fiscalYear) return undefined;
+  if (fiscalYear && (fiscalYear.isClosed || date < fiscalYear.startDate || date > fiscalYear.endDate)) return undefined;
   // Isolation : une séance sélectionnée DOIT appartenir à l'exercice fiscal ET
   // au tenant de l'opération — jamais une séance d'un autre exercice/tenant.
   if (input.sessionId) {
-    if (!input.fiscalYearId) return undefined;
-    if (!validateSessionBelongsToExercise(input.sessionId, input.fiscalYearId, tenantId)) return undefined;
+    if (!fiscalYear) return undefined;
+    if (!validateSessionBelongsToExercise(input.sessionId, fiscalYear.id, tenantId)) return undefined;
   }
   const subcategory = input.category === 'AUTRES' ? input.subcategory ?? undefined : undefined;
-  const now = new Date();
   const seq = transactions.length + 1;
   const memberName = input.memberId ? input.memberName?.trim() || undefined : undefined;
   const transaction: Transaction = {
     id: `TR-${String(seq).padStart(3, '0')}`,
     tenantId,
     reference: `REF-${now.getFullYear()}-${String(seq).padStart(4, '0')}`,
-    date: now.toISOString().slice(0, 10),
+    date,
     amount,
     type: input.type,
     category: input.category,
@@ -254,16 +298,64 @@ export function insertTransaction(tenantId: string, input: TransactionInput): Tr
     status: 'completed',
     // Même convention que le seed / `transactionCashboxLabel` : pour un crédit
     // les fonds vont vers la caisse, pour un débit ils en sortent.
-    fromAccount: input.type === 'credit' ? (memberName ?? input.cashboxNumber) : input.cashboxNumber,
-    toAccount: input.type === 'credit' ? input.cashboxNumber : (memberName ?? input.cashboxNumber),
+    source: input.type === 'credit' ? (memberName ?? input.cashboxNumber) : input.cashboxNumber,
+    destination: input.type === 'credit' ? input.cashboxNumber : (memberName ?? input.cashboxNumber),
     description: input.description.trim(),
     memberId: input.memberId || undefined,
     sessionId: input.sessionId || undefined,
-    fiscalYearId: input.fiscalYearId || undefined,
+    fiscalYearId: fiscalYear?.id,
     recordedAt: now.toISOString(),
   };
   transactions.push(transaction);
   return transaction;
+}
+
+/**
+ * Raison métier qui interdit de sortir une caisse de l'état opérationnel
+ * (désactivation ou archivage) — uniquement des règles DÉJÀ établies ailleurs,
+ * que la transition casserait sinon :
+ *   - `systemProtected` : caisse système (`systemCode`), déjà protégée contre la
+ *     suppression / désactivation (`deleteCashbox`) ;
+ *   - `fundsActiveLoan` : la caisse finance un prêt encore actif
+ *     (`LoanFundingAllocation`) — ses remboursements y sont répartis pro rata et
+ *     seraient refusés par `insertTransaction` ;
+ *   - `linkedToActiveTontine` : caisse de cotisation d'une tontine active
+ *     (`Tontine.cashboxId`) — ses cotisations / réceptions y sont écrites.
+ */
+export type CashboxLifecycleBlocker = 'systemProtected' | 'fundsActiveLoan' | 'linkedToActiveTontine';
+export type CashboxLifecycleOutcome = { ok: true; cashbox: Cashbox } | { ok: false; reason: CashboxLifecycleBlocker | 'invalidStatus' };
+
+export function cashboxLifecycleBlocker(tenantId: string, cashbox: CashboxRecord): CashboxLifecycleBlocker | undefined {
+  if (isSystemCashbox(cashbox)) return 'systemProtected';
+  // Prêt actif = dette courante > 0 (règles de référence du 2026-09-28), jamais l'encours contractuel stocké.
+  const today = new Date().toISOString().slice(0, 10);
+  const activeLoanIds = new Set(loans.filter((loan) => loan.tenantId === tenantId && loan.status === 'active' && loanDebtAt(loan, loanRepayments.filter((repayment) => repayment.loanId === loan.id), today) > 0).map((loan) => loan.id));
+  if (loanFundingAllocations.some((allocation) => allocation.cashboxId === cashbox.id && activeLoanIds.has(allocation.loanId))) return 'fundsActiveLoan';
+  if (tontines.some((tontine) => tontine.tenantId === tenantId && tontine.cashboxId === cashbox.id && tontine.status === 'statusActive')) return 'linkedToActiveTontine';
+  return undefined;
+}
+
+/** Audit d'une transition de cycle de vie — tableau canonique `auditEvents`, aucun second système d'audit. */
+function recordCashboxLifecycleAudit(tenantId: string, cashbox: CashboxRecord, action: string, before: CashboxRecord['status']) {
+  const event: AuditEvent = {
+    id: `AUD-FIN-${Date.now()}-${auditEvents.length}`,
+    tenantId,
+    timestamp: new Date().toISOString(),
+    actorId: currentUser.id,
+    actorName: currentUser.name,
+    module: 'finance',
+    action,
+    eventType: 'action',
+    resourceType: 'cashbox',
+    resourceId: cashbox.id,
+    resourceLabel: cashbox.title,
+    status: 'success',
+    sensitive: false,
+    correlationId: cashbox.id,
+    before: { status: before },
+    after: { status: cashbox.status },
+  };
+  auditEvents.push(event);
 }
 
 export const financeService = {
@@ -281,11 +373,13 @@ export const financeService = {
       const amount = normalizeAmount(input.type, input.amount);
       if (amount === undefined) return undefined;
       if (isDuplicateTitle(tenantId, title)) return undefined;
+      // Plus grand numéro `AC-nnn` existant + 1 (et non `length + 1`) : le seed a des trous, un id ne doit jamais être réattribué.
+      const seq = Math.max(cashboxes.length, ...cashboxes.map((cashbox) => Number(/^AC-(\d+)$/.exec(cashbox.id)?.[1] ?? 0))) + 1;
       const cashbox: CashboxRecord = {
-        id: `AC-${String(cashboxes.length + 1).padStart(3, '0')}`,
+        id: `AC-${String(seq).padStart(3, '0')}`,
         tenantId,
         tenantName,
-        cashboxNumber: `CX-${tenantId}-${String(cashboxes.length + 1).padStart(3, '0')}`,
+        cashboxNumber: `CX-${tenantId}-${String(seq).padStart(3, '0')}`,
         title,
         type: input.type,
         amount,
@@ -304,7 +398,8 @@ export const financeService = {
   updateCashbox: (tenantId: string, cashboxId: string, patch: CashboxUpdateInput) =>
     mockRequest(() => {
       const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
-      if (!cashbox) return undefined;
+      // Archivée = consultation seule (mandat « cycle de vie » §27) : désarchiver d'abord.
+      if (!cashbox || cashbox.status === 'archived') return undefined;
       const nextType = patch.type ?? cashbox.type;
       if (!isValidCashboxType(nextType)) return undefined;
       const nextTitle = (patch.title ?? cashbox.title).trim();
@@ -346,38 +441,33 @@ export const financeService = {
     }),
 
   /**
-   * Ne supprime jamais une caisse ayant déjà des mouvements (§8) : bascule sur
-   * une désactivation logique à la place. `deleted: true` uniquement si la
-   * suppression physique a réellement eu lieu.
-   *
-   * PROTECTION CAISSE SYSTÈME (mandat « robustifier Achat tontine » §11/§12) —
-   * refusée EXPLICITEMENT avant toute autre logique, qu'elle aurait sinon
-   * supprimé physiquement OU désactivé : une Tontine « avec achat » ne doit
-   * jamais se retrouver avec une caisse système absente/inactive suite à une
-   * action utilisateur ordinaire. `systemProtected: true` distingue ce refus
-   * du cas générique (caisse introuvable → `undefined`).
+   * SUPPRESSION = DÉSACTIVATION LOGIQUE (mandat « Supprimer = désactiver », 2026-09-27) —
+   * « Supprimer » ne retire JAMAIS l'enregistrement : la caisse passe `active → inactive`,
+   * et ses transactions, adhésions, allocations de prêt et son historique restent intacts
+   * et consultables. Mêmes garde-fous que l'ancienne désactivation (`cashboxLifecycleBlocker`) :
+   * caisse système (PROTECTION « robustifier Achat tontine » §11/§12), caisse finançant un
+   * prêt actif, caisse d'une tontine active. Seule une caisse `active` peut être supprimée
+   * (`invalidStatus` sinon — jamais de no-op silencieux). `undefined` = introuvable ou hors
+   * tenant. Auditée dans `auditEvents` (canonique).
    */
   deleteCashbox: (tenantId: string, cashboxId: string) =>
-    mockRequest(() => {
+    mockRequest((): CashboxLifecycleOutcome | undefined => {
       const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
       if (!cashbox) return undefined;
-      if (isSystemCashbox(cashbox)) return { deleted: false, deactivated: false, systemProtected: true } as const;
-      const hasMovements = transactions.some((transaction) => transaction.fromAccount === cashbox.cashboxNumber || transaction.toAccount === cashbox.cashboxNumber);
-      if (hasMovements) {
-        cashbox.status = 'inactive';
-        return { deleted: false, deactivated: true } as const;
-      }
-      const index = cashboxes.findIndex((item) => item.id === cashboxId);
-      cashboxes.splice(index, 1);
-      return { deleted: true, deactivated: false } as const;
+      if (cashbox.status !== 'active') return { ok: false, reason: 'invalidStatus' };
+      const blocker = cashboxLifecycleBlocker(tenantId, cashbox);
+      if (blocker) return { ok: false, reason: blocker };
+      cashbox.status = 'inactive';
+      recordCashboxLifecycleAudit(tenantId, cashbox, 'finance.cashbox.deleted', 'active');
+      return { ok: true, cashbox: withComputedBalance(cashbox) };
     }),
 
   /**
    * RÉACTIVATION (mandat « Évolution du cycle de vie des exercices fiscaux »
    * §33/§36 — audit des objets clôturables) : seul objet, hors exercice
    * fiscal, où la réouverture transverse a été jugée justifiée — une caisse
-   * `inactive` (désactivée par `deleteCashbox` faute de pouvoir la supprimer,
-   * cf. ci-dessus) ne perd aucune donnée financière, réactiver n'est qu'un
+   * `inactive` (supprimée logiquement par `deleteCashbox`, cf. ci-dessus)
+   * ne perd aucune donnée financière, réactiver n'est qu'un
    * flip de statut sans risque d'incohérence comptable. Refuse si la caisse
    * n'existe pas ou n'est pas `inactive` (pas de no-op silencieux sur une
    * caisse déjà `active`). Auditée directement dans `auditEvents` (canonique,
@@ -388,26 +478,41 @@ export const financeService = {
       const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
       if (!cashbox || cashbox.status !== 'inactive') return undefined;
       cashbox.status = 'active';
-      const event: AuditEvent = {
-        id: `AUD-FIN-${Date.now()}-${auditEvents.length}`,
-        tenantId,
-        timestamp: new Date().toISOString(),
-        actorId: currentUser.id,
-        actorName: currentUser.name,
-        module: 'finance',
-        action: 'finance.cashbox.reactivated',
-        eventType: 'action',
-        resourceType: 'cashbox',
-        resourceId: cashbox.id,
-        resourceLabel: cashbox.title,
-        status: 'success',
-        sensitive: false,
-        correlationId: cashbox.id,
-        before: { status: 'inactive' },
-        after: { status: 'active' },
-      };
-      auditEvents.push(event);
+      recordCashboxLifecycleAudit(tenantId, cashbox, 'finance.cashbox.reactivated', 'inactive');
       return withComputedBalance(cashbox);
+    }),
+
+  /**
+   * CYCLE DE VIE (mandat « Évolution globale du module Finance » §27-§31) —
+   * deux transitions en plus de `deleteCashbox` (active → inactive) et de
+   * `reactivateCashbox`, toutes RÉVERSIBLES et sans aucune suppression :
+   * l'historique (transactions, séances, montants) reste intact et consultable.
+   * Chaque refus porte la raison métier réelle (`cashboxLifecycleBlocker`) :
+   * l'UI ne fait que l'expliquer.
+   *   - `archiveCashbox`    : active | inactive → archived ;
+   *   - `unarchiveCashbox`  : archived → inactive (réactivation explicite ensuite).
+   */
+  archiveCashbox: (tenantId: string, cashboxId: string) =>
+    mockRequest((): CashboxLifecycleOutcome | undefined => {
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
+      if (cashbox.status === 'archived') return { ok: false, reason: 'invalidStatus' };
+      const blocker = cashboxLifecycleBlocker(tenantId, cashbox);
+      if (blocker) return { ok: false, reason: blocker };
+      const before = cashbox.status;
+      cashbox.status = 'archived';
+      recordCashboxLifecycleAudit(tenantId, cashbox, 'finance.cashbox.archived', before);
+      return { ok: true, cashbox: withComputedBalance(cashbox) };
+    }),
+
+  unarchiveCashbox: (tenantId: string, cashboxId: string) =>
+    mockRequest((): CashboxLifecycleOutcome | undefined => {
+      const cashbox = getTenantScoped(cashboxes, (item) => item.id === cashboxId, tenantId);
+      if (!cashbox) return undefined;
+      if (cashbox.status !== 'archived') return { ok: false, reason: 'invalidStatus' };
+      cashbox.status = 'inactive';
+      recordCashboxLifecycleAudit(tenantId, cashbox, 'finance.cashbox.unarchived', 'archived');
+      return { ok: true, cashbox: withComputedBalance(cashbox) };
     }),
 
   /** Adhérents actuellement adhérents d'une caisse — dérivé de `CashboxMembership` (adhésions actives), filtré tenant pour ne jamais laisser fuiter un `memberId` d'un autre tenant. */
@@ -471,19 +576,27 @@ export const financeService = {
       return withComputedBalance(cashbox);
     }),
 
-  listTransactions: (tenantId: string) => mockRequest(() => transactions.filter((transaction) => transaction.tenantId === tenantId)),
   /**
-   * Vue consolidée du tenant bornée par un Fiscal Year (mandat « Finance →
-   * Transactions ») — `startDate`/`endDate` sont toujours celles du
-   * `FiscalYear` déjà résolu côté appelant via `useFiscalYear()` (jamais une
-   * caisse particulière comme périmètre). `tenantId` reste le seul
-   * paramètre de sécurité, comme partout ailleurs dans ce service — toujours
-   * `currentTenant.id`, jamais une valeur fournie par un formulaire. Bornes
-   * inclusives, comparables lexicographiquement (`Transaction.date` et les
-   * dates de `FiscalYear` partagent le même format ISO `YYYY-MM-DD`).
+   * Toutes les lectures du journal renvoient l'ordre « plus récente d'abord »
+   * (`sortTransactionsNewestFirst` : `recordedAt`/`date` réels décroissants, puis
+   * `id` décroissant) — comme le ferait un `ORDER BY` backend. Les vues ne font
+   * que filtrer (filtre stable), l'ordre est donc conservé quels que soient
+   * séance, caisse, recherche ou filtres.
    */
-  listTransactionsInDateRange: (tenantId: string, startDate: string, endDate: string) =>
-    mockRequest(() => transactions.filter((transaction) => transaction.tenantId === tenantId && transaction.date >= startDate && transaction.date <= endDate)),
+  listTransactions: (tenantId: string) => mockRequest(() => sortTransactionsNewestFirst(transactions.filter((transaction) => transaction.tenantId === tenantId))),
+  /**
+   * Transactions du tenant rattachées à l'exercice `fiscalYearId` (contexte
+   * global Tenant → Exercice, mandat « Caisse + exercice fiscal contexte
+   * global ») — règle unique `transactionBelongsToFiscalYear`. `[]` si
+   * l'exercice n'appartient pas au tenant : jamais les données d'un autre
+   * tenant ni d'un autre exercice.
+   */
+  listTransactionsForFiscalYear: (tenantId: string, fiscalYearId: string) =>
+    mockRequest(() => {
+      const fiscalYear = fiscalYears.find((year) => year.id === fiscalYearId && year.tenantId === tenantId);
+      if (!fiscalYear) return [];
+      return sortTransactionsNewestFirst(transactions.filter((transaction) => transaction.tenantId === tenantId && transactionBelongsToFiscalYear(transaction, fiscalYear)));
+    }),
 
   getTransaction: (tenantId: string, transactionId: string) =>
     mockRequest(() => getTenantScoped(transactions, (transaction) => transaction.id === transactionId, tenantId)),
@@ -501,16 +614,27 @@ export const financeService = {
    * séance se lit, elle, via `FiscalSession.date` (`sessionId`).
    */
   createTransaction: (tenantId: string, input: TransactionInput) => mockRequest(() => insertTransaction(tenantId, input)),
+  /**
+   * Mouvements financiers produits par un prêt (mandat « Séparation Caisses / Crédit ») : décaissement(s)
+   * et encaissements de remboursement, chacun rattaché à SA caisse. Un prêt peut en avoir plusieurs
+   * (relation 1-N via `Transaction.loanId`) — rien n'impose un décaissement unique.
+   */
+  listTransactionsByLoan: (tenantId: string, loanId: string) => mockRequest(() => sortTransactionsNewestFirst(transactions.filter((transaction) => transaction.tenantId === tenantId && transaction.loanId === loanId))),
 
   /**
    * `recordedAt`/`date` (la « Date transaction » d'audit) ne figurent PAS dans
    * le patch : une correction historique doit passer par un mécanisme
    * d'annulation/correction, jamais par une réécriture de l'horodatage.
+   * `subcategory: null` = retirer explicitement la sous-catégorie (ex. passage à Épargne).
    */
-  updateTransaction: (tenantId: string, transactionId: string, patch: Partial<Pick<Transaction, 'category' | 'subcategory' | 'type' | 'amount' | 'description' | 'sessionId'>>) =>
+  updateTransaction: (tenantId: string, transactionId: string, patch: Partial<Pick<Transaction, 'category' | 'type' | 'amount' | 'description' | 'sessionId'>> & { subcategory?: TransactionSubcategory | null }) =>
     mockRequest(() => {
       const transaction = getTenantScoped(transactions, (item) => item.id === transactionId, tenantId);
       if (!transaction || transaction.status === 'cancelled') return undefined;
+      // Type imposé par l'opération RÉSULTANTE (catégorie / sous-catégorie / type après modification) — vérifié AVANT toute écriture.
+      const nextCategory = patch.category ?? transaction.category;
+      const nextSubcategory = nextCategory === 'AUTRES' ? (patch.subcategory !== undefined ? patch.subcategory : transaction.subcategory) ?? null : null;
+      if (!isTransactionTypeAllowed(nextCategory, nextSubcategory, patch.type ?? transaction.type)) return undefined;
       if (patch.amount !== undefined) {
         const amount = Number(patch.amount);
         if (!Number.isFinite(amount) || amount <= 0) return undefined;

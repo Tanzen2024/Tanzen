@@ -1,8 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { creditService } from './credit.service';
 import { workflowService } from './workflow.service';
 import { transactions } from '@/mocks/finance/transactions';
+import { loanRules } from '@/mocks/finance/loan-rules';
+import { repayments } from '@/mocks/finance/repayments';
+import { loanDebtAt } from '@/lib/finance';
 import type { TransactionInput } from './finance.service';
+
+// Workflow d'approbation des prêts (2026-09-27) : un prêt n'est enregistré DIRECTEMENT que si la règle n'exige
+// pas d'approbation (sinon il passe par `submitLoanApplication`) — ces tests portent sur ce chemin direct.
+const RULES_SEED = structuredClone(loanRules);
+beforeEach(() => { loanRules.splice(0, loanRules.length, ...structuredClone(RULES_SEED)); loanRules.find((rule) => rule.id === 'LR-001')!.requiresApproval = false; });
+afterEach(() => { loanRules.splice(0, loanRules.length, ...structuredClone(RULES_SEED)); });
 
 describe('creditService — Applications', () => {
   it('ALLOW/DENY: listApplications and getApplication are scoped to the requesting tenant', async () => {
@@ -73,7 +82,9 @@ describe('creditService — REGRESSION: repayment recalculates parent loan paidA
     // `before` is a live reference into the same mutable mock array (services never clone),
     // so its primitive fields must be captured before the mutation, not read again afterwards.
     const beforePaidAmount = before?.paidAmount ?? 0;
-    const totalRepayable = before?.totalRepayable ?? 0;
+    // Règles de référence (2026-09-28) : la dette avant remboursement est la DETTE COURANTE à la date du paiement.
+    const debtOf = (date: string) => loanDebtAt(before!, repayments.filter((item) => item.loanId === 'L-001' && item.tenantId === 'T-001'), date);
+    const debtBefore = debtOf('2026-09-01');
     const principalPart = 80_000;
     const interestPart = 20_000;
     const repayment = await creditService.createRepayment('T-001', { loanId: 'L-001', paymentDate: '2026-09-01', principalPart, interestPart, status: 'completed' });
@@ -82,10 +93,12 @@ describe('creditService — REGRESSION: repayment recalculates parent loan paidA
 
     const after = await creditService.getLoan('T-001', 'L-001');
     const expectedPaidAmount = beforePaidAmount + principalPart + interestPart;
-    const expectedOutstanding = totalRepayable - expectedPaidAmount;
-    const expectedProgress = Math.round((expectedPaidAmount / totalRepayable) * 100);
+    // Dette juste après le paiement = dette courante du 01/09 − 100 000 (le remboursement ne crée aucun intérêt).
+    expect(debtOf('2026-09-01')).toBe(debtBefore - 100_000);
+    const expectedProgress = Math.min(100, Math.round((expectedPaidAmount / (expectedPaidAmount + debtBefore - 100_000)) * 100));
     expect(after?.paidAmount).toBe(expectedPaidAmount);
-    expect(after?.outstanding).toBe(expectedOutstanding);
+    // `outstanding` exposé = dette courante du jour (intérêts des échéances suivantes sur la base réduite).
+    expect(after?.outstanding).toBe(debtOf(new Date().toISOString().slice(0, 10)));
     expect(after?.progress).toBe(expectedProgress);
     expect(after?.lastPaymentDate).toBe('2026-09-01');
   });
@@ -106,12 +119,11 @@ describe('creditService — REGRESSION: repayment recalculates parent loan paidA
 });
 
 describe('creditService — createRepayment: garde-fous ajoutés (mandat Finance/Tontines §14)', () => {
-  it('DENY: refuse un remboursement qui dépasserait le total dû, sans muter le prêt', async () => {
+  it('DENY: refuse un remboursement qui dépasserait la dette courante, sans muter le prêt', async () => {
     const before = await creditService.getLoan('T-001', 'L-001');
-    const totalRepayable = before?.totalRepayable ?? 0;
     const paidAmount = before?.paidAmount ?? 0;
-    const remaining = totalRepayable - paidAmount;
-    const result = await creditService.createRepayment('T-001', { loanId: 'L-001', paymentDate: '2026-09-01', principalPart: remaining + 100_000, interestPart: 0, status: 'completed' });
+    const debt = loanDebtAt(before!, repayments.filter((item) => item.loanId === 'L-001'), '2026-09-01');
+    const result = await creditService.createRepayment('T-001', { loanId: 'L-001', paymentDate: '2026-09-01', principalPart: debt + 1, interestPart: 0, status: 'completed' });
     expect(result).toBeNull();
     const after = await creditService.getLoan('T-001', 'L-001');
     expect(after?.paidAmount).toBe(paidAmount);
@@ -123,22 +135,24 @@ describe('creditService — createRepayment: garde-fous ajoutés (mandat Finance
   });
 
   it('ALLOW: un remboursement qui solde exactement le prêt fait passer le statut à "repaid"', async () => {
-    const loan = await creditService.createLoan({ tenantId: 'T-001', memberId: 'M-001', borrower: 'Test Borrower', principal: 100_000, interestRate: 0, interestAmount: 0, totalRepayable: 100_000, maturityDate: '2027-01-01', monthlyPayment: 100_000, nextPaymentDate: '2026-10-01', applicationId: 'AP-TEST', tenantName: 'Coopérative Sutura' });
+    const loan = await creditService.createLoan({ tenantId: 'T-001', memberId: 'M-001', borrower: 'Test Borrower', principal: 100_000, loanMode: 'SIMPLE', interestRate: 0, interestPeriod: 'MONTHLY', interestAmount: 0, totalRepayable: 100_000, maturityDate: '2027-01-01', monthlyPayment: 100_000, nextPaymentDate: '2026-10-01', applicationId: 'AP-TEST', tenantName: 'Coopérative Sutura' });
     expect(loan.status).toBe('active');
-    const result = await creditService.createRepayment('T-001', { loanId: loan.id, paymentDate: '2026-09-15', principalPart: 100_000, interestPart: 0, status: 'completed' });
+    // Date du paiement ≥ décaissement (aujourd'hui) : avant le décaissement la dette vaut 0 et tout paiement est refusé.
+    const payDay = loan.disbursementDate;
+    const result = await creditService.createRepayment('T-001', { loanId: loan.id, paymentDate: payDay, principalPart: 100_000, interestPart: 0, status: 'completed' });
     expect(result).not.toBeNull();
     const after = await creditService.getLoan('T-001', loan.id);
     expect(after?.outstanding).toBe(0);
     expect(after?.status).toBe('repaid');
-    // Toute nouvelle tentative de remboursement sur un prêt déjà soldé dépasserait le total dû.
-    const overpay = await creditService.createRepayment('T-001', { loanId: loan.id, paymentDate: '2026-09-16', principalPart: 1, interestPart: 0, status: 'completed' });
+    // Toute nouvelle tentative de remboursement sur un prêt déjà soldé dépasserait la dette (0).
+    const overpay = await creditService.createRepayment('T-001', { loanId: loan.id, paymentDate: payDay, principalPart: 1, interestPart: 0, status: 'completed' });
     expect(overpay).toBeNull();
   });
 });
 
 describe('creditService — submitLoanApplication (mandat Finance/Tontines, création réelle d’une demande)', () => {
   it('ALLOW: une demande conforme crée un Application ET une WorkflowRequest (WD-001) liés', async () => {
-    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', cashboxId: 'AC-004', requestedAmount: 100_000, purpose: 'Test' }, 'Khadija Mbaye', 'U-TEST');
+    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', requestedAmount: 100_000, purpose: 'Test', guarantors: [{ guarantorName: 'Aïssatou Bâ', guaranteedAmount: 100_000, relation: 'Membre' }] }, 'Khadija Mbaye', 'U-TEST'); // LR-002 : 1 garant (80 %) requis
     expect(result).not.toBeUndefined();
     expect(result?.application.stage).toBe('stageSubmitted');
     expect(result?.request.domain).toBe('credit');
@@ -149,47 +163,50 @@ describe('creditService — submitLoanApplication (mandat Finance/Tontines, cré
 
   it('DENY: montant hors des bornes de la politique — aucune Application ni WorkflowRequest créée', async () => {
     const before = await creditService.listApplications('T-002');
-    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', cashboxId: 'AC-004', requestedAmount: 1, purpose: 'Test' }, 'Khadija Mbaye');
+    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', requestedAmount: 1, purpose: 'Test' }, 'Khadija Mbaye');
     expect(result).toBeUndefined();
     const after = await creditService.listApplications('T-002');
     expect(after.length).toBe(before.length);
   });
 
   it('DENY: maxActiveLoans déjà atteint (L-002 actif, politique T-002 limitée à 1)', async () => {
-    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-002', cashboxId: 'AC-004', requestedAmount: 100_000, purpose: 'Test' }, 'Mamadou Sow');
+    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-002', requestedAmount: 100_000, purpose: 'Test' }, 'Mamadou Sow');
     expect(result).toBeUndefined();
   });
 
   it('DENY: compte d’un autre tenant', async () => {
-    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-002', cashboxId: 'AC-001', requestedAmount: 100_000, purpose: 'Test' }, 'Mamadou Sow');
+    const result = await creditService.submitLoanApplication('T-002', { memberId: 'M-002', requestedAmount: 100_000, purpose: 'Test' }, 'Mamadou Sow');
     expect(result).toBeUndefined();
   });
 
-  it('DENY: aucune politique de prêt active pour ce compte (AC-003, compte courant sans LoanRule)', async () => {
-    const result = await creditService.submitLoanApplication('T-001', { memberId: 'M-001', cashboxId: 'AC-003', requestedAmount: 100_000, purpose: 'Test' }, 'Fatou Ndiaye');
-    expect(result).toBeUndefined();
+  it('DENY: tenant sans règle de crédit vivante → aucune demande possible, quelle que soit la caisse', async () => {
+    const rule = loanRules.find((item) => item.id === 'LR-001')!;
+    rule.deletedAt = '2026-09-26T00:00:00.000Z';
+    try {
+      const result = await creditService.submitLoanApplication('T-001', { memberId: 'M-001', requestedAmount: 100_000, purpose: 'Test' }, 'Fatou Ndiaye');
+      expect(result).toBeUndefined();
+    } finally { rule.deletedAt = null; }
+  });
+
+  it('ALLOW: règle unique du tenant — aucune caisse choisie : la caisse de décaissement prioritaire est TOUJOURS Épargne (AC-009, SAVINGS)', async () => {
+    const result = await creditService.submitLoanApplication('T-001', { memberId: 'M-001', requestedAmount: 100_000, purpose: 'Test caisse quelconque', guarantors: [{ guarantorName: 'Cheikh Diop', guaranteedAmount: 100_000, relation: 'Membre' }] }, 'Fatou Ndiaye');
+    expect(result?.application.cashboxId).toBe('AC-009');
   });
 });
 
 describe('creditService — cycle de vie complet demande → approbation → décaissement', () => {
-  it('applyLoanApplicationDecision fait progresser Application.stage en miroir des 2 étapes de WD-001, disburseLoan crée un Loan réel et lie la Transaction', async () => {
-    const submitted = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', cashboxId: 'AC-004', requestedAmount: 200_000, purpose: 'Cycle complet', guarantors: [{ guarantorName: 'Aïssatou Bâ', guaranteedAmount: 200_000, relation: 'Membre tontine' }] }, 'Khadija Mbaye', 'U-TEST');
+  it('applyLoanApplicationDecision fait progresser Application.stage avec l’UNIQUE étape de WD-001 (niveau de la règle), disburseLoan crée un Loan réel et lie la Transaction', async () => {
+    const submitted = await creditService.submitLoanApplication('T-002', { memberId: 'M-007', requestedAmount: 200_000, purpose: 'Cycle complet', guarantors: [{ guarantorName: 'Aïssatou Bâ', guaranteedAmount: 200_000, relation: 'Membre tontine' }] }, 'Khadija Mbaye', 'U-TEST');
     expect(submitted).not.toBeUndefined();
     const requestId = submitted!.request.id;
     const applicationId = submitted!.application.id;
 
-    // Étape 1 : dossier vérifié.
-    const step1 = await workflowService.submitAction('T-002', requestId, 'approve', 'Amadou Mbaye', undefined, 'U-001');
-    expect(step1).not.toBeNull();
-    creditService.applyLoanApplicationDecision('T-002', step1!);
+    // UNE étape, nommée et gardée selon le niveau d'approbation de la règle (LR-002 : Bureau).
+    expect(submitted!.request.steps.map((step) => [step.name, step.approverPermission])).toEqual([['Approbation du bureau', 'loans.approve.board']]);
+    const decided = await workflowService.submitAction('T-002', requestId, 'approve', 'Amadou Mbaye', undefined, 'U-001');
+    expect(decided?.status).toBe('approved');
+    creditService.applyLoanApplicationDecision('T-002', decided!);
     let application = await creditService.getApplication('T-002', applicationId);
-    expect(application?.stage).toBe('stageReview');
-
-    // Étape 2 : décision finale.
-    const step2 = await workflowService.submitAction('T-002', requestId, 'approve', 'Amadou Mbaye', undefined, 'U-001');
-    expect(step2?.status).toBe('approved');
-    creditService.applyLoanApplicationDecision('T-002', step2!);
-    application = await creditService.getApplication('T-002', applicationId);
     expect(application?.stage).toBe('stageApproved');
 
     // Décaissement.
@@ -202,7 +219,7 @@ describe('creditService — cycle de vie complet demande → approbation → dé
     expect(transactions.length).toBe(transactionsBefore + 1);
     const createdTransaction = transactions[transactions.length - 1];
     expect(createdTransaction.loanId).toBe(disbursed?.loan.id);
-    expect(createdTransaction.category).toBe('PRET');
+    expect(createdTransaction).toMatchObject({ category: 'AUTRES', subcategory: 'PRET', type: 'debit' });
     application = await creditService.getApplication('T-002', applicationId);
     expect(application?.stage).toBe('stageDisbursed');
 
@@ -214,7 +231,7 @@ describe('creditService — cycle de vie complet demande → approbation → dé
   it('disburseLoan refuse une demande qui n’est pas encore approuvée', async () => {
     // AC-009/LR-004 (T-001) : maxActiveLoans 3, sans garant requis — évite toute
     // dépendance à l'état accumulé par les tests précédents sur M-007/AC-004.
-    const submitted = await creditService.submitLoanApplication('T-001', { memberId: 'M-006', cashboxId: 'AC-009', requestedAmount: 100_000, purpose: 'Pas encore approuvé' }, 'Cheikh Diop');
+    const submitted = await creditService.submitLoanApplication('T-001', { memberId: 'M-006', requestedAmount: 100_000, purpose: 'Pas encore approuvé', guarantors: [{ guarantorName: 'Fatou Ndiaye', guaranteedAmount: 100_000, relation: 'Membre' }] }, 'Cheikh Diop');
     expect(submitted).not.toBeUndefined();
     const result = await creditService.disburseLoan('T-001', submitted!.application.id);
     expect(result).toBeUndefined();
@@ -223,10 +240,10 @@ describe('creditService — cycle de vie complet demande → approbation → dé
 
 describe('creditService — createLoanTransaction (chemin direct du formulaire de transaction, atomique)', () => {
   const buildPretInput = (amount: number): TransactionInput => ({
-    cashboxNumber: 'CS-001-TRÉS',
+    cashboxNumber: 'CS-001-CX-004',
     memberId: 'M-001',
     memberName: 'Fatou Ndiaye',
-    category: 'PRET',
+    category: 'AUTRES', subcategory: 'PRET',
     type: 'debit',
     amount,
     description: 'Prêt test service',
@@ -234,7 +251,6 @@ describe('creditService — createLoanTransaction (chemin direct du formulaire d
 
   it('ALLOW: crée Transaction + Application(stageDisbursed) + Loan + Guarantor, liés entre eux', async () => {
     const result = await creditService.createLoanTransaction('T-001', {
-      cashboxId: 'AC-001',
       memberId: 'M-001',
       principal: 300_000,
       guarantors: [{ guarantorName: 'Cheikh Diop', guaranteedAmount: 300_000, relation: 'Ami' }],
@@ -253,7 +269,6 @@ describe('creditService — createLoanTransaction (chemin direct du formulaire d
   it('DENY: montant hors politique — AUCUNE transaction créée (atomicité)', async () => {
     const before = transactions.length;
     const result = await creditService.createLoanTransaction('T-001', {
-      cashboxId: 'AC-001',
       memberId: 'M-001',
       principal: 1_000, // < minAmount 50 000
       guarantors: [],
@@ -265,9 +280,9 @@ describe('creditService — createLoanTransaction (chemin direct du formulaire d
   });
 
   it('DENY: garant insuffisant alors que la politique l’exige — aucune transaction créée', async () => {
+    loanRules.find((rule) => rule.id === 'LR-001')!.requiresGuarantor = true; // LR-001 est OFF dans les données DEMO : ce test porte sur une règle qui EXIGE un garant.
     const before = transactions.length;
     const result = await creditService.createLoanTransaction('T-001', {
-      cashboxId: 'AC-001',
       memberId: 'M-001',
       principal: 300_000,
       guarantors: [],
@@ -281,7 +296,6 @@ describe('creditService — createLoanTransaction (chemin direct du formulaire d
   it('DENY: approbation requise mais non cochée — aucune transaction créée', async () => {
     const before = transactions.length;
     const result = await creditService.createLoanTransaction('T-001', {
-      cashboxId: 'AC-001',
       memberId: 'M-001',
       principal: 300_000,
       guarantors: [{ guarantorName: 'Cheikh Diop', guaranteedAmount: 300_000, relation: 'Ami' }],
@@ -302,7 +316,7 @@ describe('creditService — createRepaymentTransaction (chemin direct, atomique)
       paymentDate: '2026-09-20',
       principalPart: 50_000,
       interestPart: 5_000,
-      transactionInput: { cashboxNumber: 'CS-001-TRÉS', memberId: 'M-001', memberName: 'Fatou Ndiaye', category: 'REMBOURSEMENT', type: 'credit', amount: 55_000, description: 'Remboursement test service' },
+      transactionInput: { cashboxNumber: 'CS-001-CX-004', memberId: 'M-001', memberName: 'Fatou Ndiaye', category: 'AUTRES', subcategory: 'REMBOURSEMENT', type: 'credit', amount: 55_000, description: 'Remboursement test service' },
     });
     expect(result).not.toBeUndefined();
     expect(result?.transaction?.loanId).toBe('L-001');
@@ -319,7 +333,7 @@ describe('creditService — createRepaymentTransaction (chemin direct, atomique)
       paymentDate: '2026-09-20',
       principalPart: remaining + 500_000,
       interestPart: 0,
-      transactionInput: { cashboxNumber: 'CS-001-TRÉS', memberId: 'M-006', memberName: 'Cheikh Diop', category: 'REMBOURSEMENT', type: 'credit', amount: remaining + 500_000, description: 'Remboursement excessif' },
+      transactionInput: { cashboxNumber: 'CS-001-CX-004', memberId: 'M-006', memberName: 'Cheikh Diop', category: 'AUTRES', subcategory: 'REMBOURSEMENT', type: 'credit', amount: remaining + 500_000, description: 'Remboursement excessif' },
     });
     expect(result).toBeUndefined();
     expect(transactions.length).toBe(before);

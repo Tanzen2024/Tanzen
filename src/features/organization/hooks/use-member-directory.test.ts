@@ -16,14 +16,14 @@ function makeMember(index: number, overrides: Partial<Member> = {}): Member {
     id: `T-${padded}`, uuid: `uuid-${padded}`, tenantId: 'T-TEST', matricule: '',
     firstName: `Prenom${padded}`, lastName: `Nom${padded}`, gender: index % 2 === 0 ? 'male' : 'female',
     birthDate: '1990-01-01', nationality: 'Test', idNumber: '', occupation: 'Test',
-    email: `member${padded}@test.sn`, phone: `+000${padded}`, address: '', photoUrl: '',
+    email: `member${padded}@test.cm`, phone: `+000${padded}`, address: '', photoUrl: '',
     joinedAt: `2020-01-${String((index % 28) + 1).padStart(2, '0')}`,
     status: statuses[index % statuses.length],
     statusHistory: [{ status: statuses[index % statuses.length], since: '2020-01-01' }],
     syncStatus: 'synced', version: 1, createdAt: '2020-01-01T00:00:00.000Z', updatedAt: '2020-01-01T00:00:00.000Z',
     deletedAt: null, createdBy: null, updatedBy: null, tenantName: 'Tenant Test',
     positions: index % 3 === 0 ? [{ id: `P-${padded}`, role: 'treasurer', tenantName: 'Tenant Test', startDate: '2020-01-01', endDate: null }] : [],
-    accounts: [], documents: [], activities: [], governanceParticipation: [],
+    cashboxes: [], documents: [], activities: [], governanceParticipation: [],
     ...overrides,
   };
 }

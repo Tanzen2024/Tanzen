@@ -1,22 +1,36 @@
-import { describe, it, expect } from 'vitest';
-import { screen, within, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router-dom';
 import { renderWithProviders } from '@/test/render-with-providers';
 import { FinanceModule } from './finance-module';
+import { transactions } from '@/mocks/finance/transactions';
+import { cashboxes } from '@/mocks/finance/cashboxes';
+import { fiscalSessions } from '@/mocks/settings/fiscal-sessions';
 
 /**
- * Finance → Transactions (mandat « refonte complète — vue consolidée du
- * tenant pour un Fiscal Year ») — vérifie le composant réellement monté par
- * la route `/finance/transactions` (`FinanceModule` → `TransactionsList`,
- * `finance-module.tsx`), avec les données réellement seedées du tenant par
- * défaut (T-001, cf. `rbac.mocks.currentUser`) : « Coopérative Sutura », dont
- * l'exercice courant (`isCurrent`) est « Exercice 2026 »
- * (`FY-T001-2026`, 2026-01-01 → 2026-12-31), qui couvre 6 transactions
- * réelles : 3 pour Fatou Ndiaye (M-001), 1 pour Cheikh Diop (M-006), et 2
- * mouvements purement inter-comptes sans adhérent (frais bancaires,
- * virement interne). Aucune donnée mockée ad hoc n'est introduite.
+ * Finance → Caisses → onglets « Caisses » / « Transactions » (mandat « Évolution
+ * globale du module Finance » §2-§19, tests §46-§49). L'ancienne vue consolidée
+ * `/finance/transactions` EST désormais l'onglet Transactions (la route y
+ * redirige) : le filtre de période par dates est remplacé par la séance du
+ * contexte Finance.
+ *
+ * Données réellement seedées du tenant par défaut T-001 (« Coopérative
+ * Sutura »), exercice courant « Exercice 2026 » : jeu de démonstration de 16
+ * transactions (Épargne, Inscription, Secours, Transport ; 4 adhérents), toutes
+ * rattachées à la séance FS-001 du 14/07/2026 — la seule séance de l'exercice.
  */
+const TRANSACTIONS_SEED = structuredClone(transactions);
+const SESSIONS_SEED = structuredClone(fiscalSessions);
+const CASHBOXES_SEED = structuredClone(cashboxes);
+function restoreSeeds() {
+  transactions.splice(0, transactions.length, ...structuredClone(TRANSACTIONS_SEED));
+  fiscalSessions.splice(0, fiscalSessions.length, ...structuredClone(SESSIONS_SEED));
+  cashboxes.splice(0, cashboxes.length, ...structuredClone(CASHBOXES_SEED));
+}
+beforeEach(restoreSeeds);
+afterEach(restoreSeeds);
+
 function renderFinance(route: string) {
   return renderWithProviders(
     <Routes><Route path="/finance/*" element={<FinanceModule />} /></Routes>,
@@ -24,248 +38,236 @@ function renderFinance(route: string) {
   );
 }
 
-describe('Finance → Transactions — vue consolidée tenant + Fiscal Year (tenant T-001, Exercice 2026)', () => {
-  it('AC01/AC02: affiche les transactions consolidées du tenant courant pour l’exercice fiscal courant, provenant de plusieurs comptes', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    // Fatou Ndiaye apparaît sur 3 transactions distinctes (contributions ET décaissement de prêt — deux comptes différents), Cheikh Diop sur 1.
-    expect(within(table).getAllByText('Fatou Ndiaye').length).toBe(3);
-    expect(within(table).getAllByText('Cheikh Diop').length).toBe(1);
+const journal = async () => (await screen.findAllByRole('table')).find((table) => !table.getAttribute('aria-label')) as HTMLElement;
+/** Mandat du 2026-09-27 : plus AUCUN « Récapitulatif par caisse » dans Transactions (la synthèse des caisses appartient à l'onglet Caisses). */
+const expectNoCashboxRecap = () => {
+  expect(screen.queryByTestId('cashbox-recap')).not.toBeInTheDocument();
+  expect(screen.queryByText('Récapitulatif par caisse')).not.toBeInTheDocument();
+};
+
+describe('Finance → Caisses — deux onglets (§2/§3, tests §46)', () => {
+  it('deux onglets, « Caisses » en premier puis « Transactions »', async () => {
+    renderFinance('/finance/cashboxes');
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Caisses', 'Transactions']);
   });
 
-  it('AC03/AC08: le filtre Adhérent ne liste que les membres ayant réellement une transaction dans l’exercice, jamais via Cashbox.memberIds', async () => {
+  it('au moins une caisse → « Transactions » actif par défaut', async () => {
+    renderFinance('/finance/cashboxes');
+    expect(await screen.findByRole('tab', { name: 'Transactions', selected: true })).toBeInTheDocument();
+    expect(await screen.findByTestId('transactions-context-header')).toBeInTheDocument();
+  });
+
+  it('aucune caisse → « Caisses » actif par défaut', async () => {
+    for (let index = cashboxes.length - 1; index >= 0; index -= 1) if (cashboxes[index].tenantId === 'T-001') cashboxes.splice(index, 1);
+    renderFinance('/finance/cashboxes');
+    expect(await screen.findByRole('tab', { name: 'Caisses', selected: true })).toBeInTheDocument();
+    expect(await screen.findByText('Aucune caisse')).toBeInTheDocument();
+  });
+
+  it('navigation manuelle entre les deux onglets', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes');
+    await screen.findByTestId('transactions-context-header');
+    await user.click(screen.getByRole('tab', { name: 'Caisses' }));
+    expect(await screen.findByTestId('cashbox-home-kpis')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Transactions' }));
+    expect(await screen.findByTestId('transactions-context-header')).toBeInTheDocument();
+  });
+
+  it('l’ancienne URL /finance/transactions ouvre l’onglet Transactions (aucun second journal)', async () => {
     renderFinance('/finance/transactions');
-    await screen.findByRole('table');
+    expect(await screen.findByRole('tab', { name: 'Transactions', selected: true })).toBeInTheDocument();
+  });
+});
+
+describe('Finance → Transactions — séance du contexte Finance (§6-§11, tests §47)', () => {
+  it('sélecteur « Date de séance » : Toutes les séances + séances de l’exercice + « Ajouter une séance » ; dernière séance sélectionnée', async () => {
+    renderFinance('/finance/cashboxes?tab=transactions');
+    const picker = await screen.findByLabelText('Date de séance') as HTMLSelectElement;
+    await waitFor(() => expect(picker.value).toBe('FS-001'));
+    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual(['Toutes les séances', '14/07/2026', '──────────', '+ Ajouter une séance']);
+  });
+
+  it('une séance précise filtre la liste (aucun récapitulatif par caisse)', async () => {
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    // Une transaction de l'exercice HORS séance : visible dans « Toutes les séances », jamais dans FS-001.
+    transactions.push({ ...transactions.find((tx) => tx.id === 'TR-017')!, id: 'TR-HORS-SEANCE', description: 'Épargne hors séance', sessionId: undefined });
+    const table = await journal();
+    expect(within(table).getAllByRole('row')).toHaveLength(17); // en-tête + 16 transactions de FS-001
+    expect(within(table).getAllByText('Épargne mensuelle').length).toBeGreaterThan(0);
+    expect(within(table).queryByText('Épargne hors séance')).not.toBeInTheDocument();
+    expectNoCashboxRecap();
+  });
+
+  it('« Toutes les séances » : toutes les transactions de l’exercice, sans récapitulatif par caisse', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    const table = await journal();
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(17));
+    expectNoCashboxRecap();
+    // Transactions = journal : une seule table (la liste), jamais une seconde table de soldes.
+    expect(screen.getAllByRole('table')).toHaveLength(1);
+  });
+
+  it('la synthèse des caisses reste dans l’onglet « Caisses » (solde à l’ouverture, crédit, débit, solde)', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await journal();
+    expectNoCashboxRecap();
+    await user.click(screen.getByRole('tab', { name: 'Caisses' }));
+    const headers = (await screen.findAllByRole('columnheader')).map((th) => th.textContent);
+    expect(headers).toEqual(expect.arrayContaining(['Solde à l’ouverture', 'Crédit', 'Débit', 'Solde']));
+  });
+
+  it('la séance est un contexte PARTAGÉ : choisie dans Transactions, elle reste sélectionnée dans la fiche caisse', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    await user.click(screen.getByRole('tab', { name: 'Caisses' }));
+    const table = await screen.findByRole('table');
+    const row = within(table).getAllByRole('row').find((tr) => within(tr).queryByRole('button', { name: 'Transport' }))!;
+    await user.click(within(row).getByRole('button', { name: 'Voir le détail' }));
+    await screen.findByRole('heading', { name: 'Transport' });
+    expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('all');
+  });
+
+  it('« + Ajouter une séance » crée la séance (moteur existant) et la rend courante', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    const picker = await screen.findByLabelText('Date de séance') as HTMLSelectElement;
+    await waitFor(() => expect(picker.value).toBe('FS-001'));
+    await user.selectOptions(picker, '__add_session__');
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Date de la séance'), { target: { value: '2026-10-25' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Ajouter une séance' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const created = fiscalSessions.find((session) => session.tenantId === 'T-001' && session.date === '2026-10-25');
+    expect(created).toMatchObject({ fiscalYearId: 'FY-T001-2026', sessionNumber: 2 });
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe(created!.id));
+    expect(within(screen.getByLabelText('Date de séance')).getByRole('option', { name: '25/10/2026' })).toBeInTheDocument();
+  });
+
+  it('exercice clôturé : la création de séance est interdite', async () => {
+    window.localStorage.setItem('tanzen.currentFiscalYear.T-001', 'FY-T001-2025');
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    const picker = await screen.findByLabelText('Date de séance');
+    await user.selectOptions(picker, '__add_session__');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Exercice clôturé : aucune séance ne peut être créée.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Ajouter une séance' })).toBeDisabled();
+  });
+});
+
+describe('Finance → Transactions — filtres séance × caisse (§12-§15, tests §49)', () => {
+  it('caisse précise + toutes les séances : uniquement ses transactions', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'AC-012');
+    const table = await journal();
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(5)); // Transport : TR-006, TR-010, TR-018, TR-019
+    expectNoCashboxRecap();
+  });
+
+  it('caisse précise + séance précise : les deux filtres se cumulent', async () => {
+    const user = userEvent.setup();
+    // Achat tontine (AC-015) n'a aucune transaction en séance FS-001 ; Inscription (AC-010) en a deux.
+    renderFinance('/finance/cashboxes?tab=transactions&cashboxId=AC-015');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    expect((screen.getByLabelText('Libelle de caisse') as HTMLSelectElement).value).toBe('AC-015');
+    expect(await screen.findByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'AC-010');
+    const table = await journal();
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(3));
+  });
+
+  it('filtre Adhérent : uniquement les membres porteurs d’une transaction dans le périmètre, jamais ceux d’un autre tenant', async () => {
+    const user = userEvent.setup();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    await journal();
     const memberSelect = screen.getByLabelText('Adhérent');
-    expect(within(memberSelect).getByRole('option', { name: 'Fatou Ndiaye' })).toBeInTheDocument();
-    expect(within(memberSelect).getByRole('option', { name: 'Cheikh Diop' })).toBeInTheDocument();
-    expect(within(memberSelect).getByRole('option', { name: 'Tous les adhérents' })).toBeInTheDocument();
-    // Exactement 3 options (Tous les adhérents + 2 adhérents réels) — aucun doublon, aucun membre fantôme.
-    expect(within(memberSelect).getAllByRole('option')).toHaveLength(3);
+    await waitFor(() => expect(within(memberSelect).getAllByRole('option').map((option) => option.textContent)).toEqual(['Tous les adhérents', 'Cheikh Diop', 'Coumba Thiam', 'Fatou Ndiaye', 'Modou Faye']));
+    expect(screen.queryByText('Mamadou Sow')).not.toBeInTheDocument();
   });
 
-  it('AC09: aucun adhérent ni aucune transaction d’un autre tenant n’apparaît (Mamadou Sow / Khadija Mbaye sont des membres réels du tenant T-002)', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    const memberSelect = screen.getByLabelText('Adhérent');
-    expect(within(memberSelect).queryByRole('option', { name: 'Mamadou Sow' })).not.toBeInTheDocument();
-    expect(within(memberSelect).queryByRole('option', { name: 'Khadija Mbaye' })).not.toBeInTheDocument();
-    expect(within(table).queryByText('Mamadou Sow')).not.toBeInTheDocument();
-    expect(within(table).queryByText('Khadija Mbaye')).not.toBeInTheDocument();
+  it('les caisses désactivées restent consultables dans le filtre, signalées par leur statut', async () => {
+    cashboxes.find((cashbox) => cashbox.id === 'AC-012')!.status = 'inactive';
+    renderFinance('/finance/cashboxes?tab=transactions');
+    const select = await screen.findByLabelText('Libelle de caisse');
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Transport (Inactive)' })).toBeInTheDocument());
   });
 
-  it('AC06/AC05: sélectionner un adhérent affiche uniquement ses transactions (tous comptes confondus), il n’apparaît qu’une seule fois dans le filtre malgré 3 transactions', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
+  it('aucun identifiant technique affiché dans le journal (ni TR-xxx, ni REF-xxx, ni numéro de caisse)', async () => {
     const user = userEvent.setup();
-    const memberSelect = screen.getByLabelText('Adhérent');
-    await user.selectOptions(memberSelect, 'Fatou Ndiaye');
-    expect(within(table).getAllByText('Fatou Ndiaye')).toHaveLength(3);
-    expect(within(table).queryByText('Cheikh Diop')).not.toBeInTheDocument();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    const table = await journal();
+    await waitFor(() => expect(within(table).getAllByRole('row')).toHaveLength(17));
+    expect(table.textContent).not.toMatch(/TR-\d|REF-\d|CS-001|FS-\d|AC-\d/);
   });
+});
 
-  it('AC07: « Tous les adhérents » réaffiche toutes les transactions admissibles du tenant, y compris les mouvements sans adhérent (frais, virement interne)', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
+describe('Finance → Transactions — « + Nouvelle transaction » (§9/§17-§19, tests §48)', () => {
+  it('« Toutes les séances » bloque la création : « Séance requise »', async () => {
     const user = userEvent.setup();
-    const memberSelect = screen.getByLabelText('Adhérent') as HTMLSelectElement;
-    await user.selectOptions(memberSelect, 'Fatou Ndiaye');
-    await user.selectOptions(memberSelect, 'Tous les adhérents');
-    expect(memberSelect.value).toBe('');
-    expect(within(table).getAllByText('Fatou Ndiaye')).toHaveLength(3);
-    expect(within(table).getAllByText('Cheikh Diop')).toHaveLength(1);
-    // 6 lignes au total pour l'exercice 2026 (4 avec adhérent + 2 sans, cf. seed) — les mouvements sans adhérent restent visibles ici.
-    expect(within(table).getAllByRole('row')).toHaveLength(1 + 6);
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.selectOptions(screen.getByLabelText('Date de séance'), 'all');
+    await user.click(screen.getByRole('button', { name: /Nouvelle transaction/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Séance requise')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('Veuillez sélectionner une séance précise avant de créer une transaction.');
+    expect(screen.queryByRole('button', { name: 'Ajouter une ligne' })).not.toBeInTheDocument();
   });
 
-  it('§2/§3 CHAMP EXERCICE EN LECTURE SEULE : reflète l’exercice global du header, n’est pas un second sélecteur, et affiche aussi les bornes de dates', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    const fiscalYearField = screen.getByLabelText('Exercice') as HTMLInputElement;
-    // Un <input readOnly>, jamais un <select> permettant de changer d'exercice.
-    expect(fiscalYearField.tagName).toBe('INPUT');
-    expect(fiscalYearField).toHaveAttribute('readonly');
-    expect(screen.queryByRole('combobox', { name: 'Exercice' })).not.toBeInTheDocument();
-    expect(fiscalYearField.value).toBe('Exercice 2026');
-    // Bornes de l'exercice toujours affichées.
-    expect(screen.getByText('Date début')).toBeInTheDocument();
-    expect(screen.getByText('Date fin')).toBeInTheDocument();
-  });
-
-  it('§1 FILTRE « Libelle de caisse » : label exact, option « Toutes les caisses » + les libellés réels des caisses du tenant (jamais codés en dur)', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    const accountSelect = screen.getByLabelText('Libelle de caisse');
-    expect(within(accountSelect).getByRole('option', { name: 'Toutes les caisses' })).toBeInTheDocument();
-    // Libellés réels seedés pour T-001 (cashboxes.ts) — présents, non inventés.
-    for (const title of ['Trésorerie', 'Compte courant', 'Inscription', 'Fond de solidarité']) {
-      expect(within(accountSelect).getByRole('option', { name: title })).toBeInTheDocument();
-    }
-    // Aucune caisse d'un autre tenant.
-    expect(within(accountSelect).queryByRole('option', { name: 'TH-002-ÉPG' })).not.toBeInTheDocument();
-  });
-
-  it('§4/§5 SÉLECTION D’UNE CAISSE : liste, compteur ET KPI (débit/crédit/solde) ne portent plus que sur cette caisse', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
+  it('aucune séance : création bloquée, « Ajouter une séance » proposé', async () => {
+    fiscalSessions.splice(0, fiscalSessions.length, ...fiscalSessions.filter((session) => session.tenantId !== 'T-001'));
     const user = userEvent.setup();
-    const kpi = (label: string, target: string) => {
-      const card = screen.getByText(label).closest('article') as HTMLElement;
-      return within(card).getByText((content) => content.replace(/\s/g, '') === target);
-    };
-
-    // Toutes les caisses → 6 transactions, totaux du mandat (1 375 000 / 220 000 / -1 155 000).
-    expect(within(table).getAllByRole('row')).toHaveLength(1 + 6);
-    expect(kpi('Total débit', '1375000FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '220000FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '-1155000FCFA')).toBeInTheDocument();
-
-    // Caisse « Trésorerie » (CS-001-TRÉS) : TR-002 (débit 850 000), TR-004 (crédit 120 000), TR-010 (débit 500 000).
-    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Trésorerie');
-    expect(within(table).getAllByRole('row')).toHaveLength(1 + 3);
-    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
-    expect(within(table).getByText('Fatou Ndiaye')).toBeInTheDocument();
-    // Total débit = 1 350 000, Total crédit = 120 000, Solde = -1 230 000 — uniquement Trésorerie.
-    expect(kpi('Total débit', '1350000FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '120000FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '-1230000FCFA')).toBeInTheDocument();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await screen.findByTestId('transactions-context-header');
+    await user.click(await screen.findByRole('button', { name: /Nouvelle transaction/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Aucune séance disponible.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Ajouter une séance/ })).toBeInTheDocument();
   });
 
-  it('§14 CAISSE SANS TRANSACTION : la caisse reste sélectionnable, la liste est vide et les KPI valent 0', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
+  it('aucune caisse : création bloquée, retour vers l’onglet Caisses', async () => {
+    for (let index = cashboxes.length - 1; index >= 0; index -= 1) if (cashboxes[index].tenantId === 'T-001') cashboxes.splice(index, 1);
     const user = userEvent.setup();
-    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Inscription');
-    expect(within(table).queryByText('Fatou Ndiaye')).not.toBeInTheDocument();
-    expect(screen.getByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
-    const debitCard = screen.getByText('Total débit').closest('article') as HTMLElement;
-    expect(within(debitCard).getByText((c) => c.replace(/\s/g, '') === '0FCFA')).toBeInTheDocument();
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await user.click(await screen.findByRole('button', { name: /Nouvelle transaction/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Créez d’abord une caisse avant d’enregistrer une transaction.');
+    await user.click(within(dialog).getByRole('button', { name: 'Aller aux caisses' }));
+    expect(await screen.findByRole('tab', { name: 'Caisses', selected: true })).toBeInTheDocument();
   });
 
-  it('FILTRES DU JOURNAL : les filtres Montant min / Montant max ont été retirés, la barre reste centrée sur les filtres métier', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    // Filtres métier conservés
-    expect(screen.getByLabelText('Catégorie')).toBeInTheDocument();
-    expect(screen.getByLabelText('Statut')).toBeInTheDocument();
-    expect(screen.getByLabelText('Type')).toBeInTheDocument();
-    // Filtres montant supprimés — plus aucune trace dans l'UI
-    expect(screen.queryByLabelText('Montant min')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Montant max')).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('Montant min')).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('Montant max')).not.toBeInTheDocument();
-  });
-
-  const kpi = (label: string, target: string) => {
-    const card = screen.getByText(label).closest('article') as HTMLElement;
-    return within(card).getByText((content) => content.replace(/\s/g, '') === target);
-  };
-
-  it('§1 PÉRIODE PAR DÉFAUT : « Date début » / « Date fin » sont initialisées sur les bornes réelles de l’exercice sélectionné, bornées par min/max', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    const start = screen.getByLabelText('Date début') as HTMLInputElement;
-    const end = screen.getByLabelText('Date fin') as HTMLInputElement;
-    expect(start.type).toBe('date');
-    expect(start.value).toBe('2026-01-01');
-    expect(end.value).toBe('2026-12-31');
-    // §9 : impossible de sortir des limites de l'exercice.
-    expect(start).toHaveAttribute('min', '2026-01-01');
-    expect(start).toHaveAttribute('max', '2026-12-31');
-    expect(end).toHaveAttribute('min', '2026-01-01');
-    expect(end).toHaveAttribute('max', '2026-12-31');
-    // Période complète → les 6 transactions de l'exercice, totaux du mandat.
-    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(1 + 6);
-    expect(kpi('Total débit', '1375000FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '220000FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '-1155000FCFA')).toBeInTheDocument();
-  });
-
-  it('§2/§3/§4 PÉRIODE PARTIELLE : restreindre la période refiltre la liste ET recalcule débit / crédit / solde / nombre', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    // 2026-08-01 → 2026-08-09 : TR-012 (crédit 50 000), TR-010 (débit 500 000), TR-006 (débit 25 000), TR-004 (crédit 120 000).
-    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-01' } });
-    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-09' } });
-    expect(within(table).getAllByRole('row')).toHaveLength(1 + 4);
-    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
-    expect(within(table).getAllByText('Fatou Ndiaye')).toHaveLength(1);
-    expect(kpi('Total débit', '525000FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '170000FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '-355000FCFA')).toBeInTheDocument();
-  });
-
-  it('§5 CAISSE + PÉRIODE : les deux filtres se cumulent, KPI sur ce périmètre exact', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
+  it('séance précise : ouvre le formulaire centralisé, séance héritée en lecture seule, date/heure de transaction distincte, caisses actives uniquement', async () => {
+    cashboxes.find((cashbox) => cashbox.id === 'AC-012')!.status = 'inactive';
+    cashboxes.find((cashbox) => cashbox.id === 'AC-011')!.status = 'archived';
     const user = userEvent.setup();
-    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-01' } });
-    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-09' } });
-    // Trésorerie (CS-001-TRÉS) sur cette période : TR-010 (débit 500 000, sortie) + TR-004 (crédit 120 000, Cheikh Diop → Trésorerie).
-    await user.selectOptions(screen.getByLabelText('Libelle de caisse'), 'Trésorerie');
-    expect(within(table).getAllByRole('row')).toHaveLength(1 + 2);
-    expect(within(table).getByText('Cheikh Diop')).toBeInTheDocument();
-    expect(kpi('Total débit', '500000FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '120000FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '-380000FCFA')).toBeInTheDocument();
-  });
-
-  it('§8/§16 PÉRIODE SANS TRANSACTION : liste vide, 0 transaction, tous les KPI à 0', async () => {
-    renderFinance('/finance/transactions');
-    const table = await screen.findByRole('table');
-    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-09-01' } });
-    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-09-30' } });
-    expect(within(table).queryByText('Fatou Ndiaye')).not.toBeInTheDocument();
-    expect(screen.getByText('Aucune transaction ne correspond aux critères sélectionnés.')).toBeInTheDocument();
-    expect(kpi('Total débit', '0FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '0FCFA')).toBeInTheDocument();
-    expect(kpi('Solde', '0FCFA')).toBeInTheDocument();
-  });
-
-  it('§10 PÉRIODE INVALIDE (début > fin) : erreur signalée, aucune donnée renvoyée', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    fireEvent.change(screen.getByLabelText('Date début'), { target: { value: '2026-08-20' } });
-    fireEvent.change(screen.getByLabelText('Date fin'), { target: { value: '2026-08-10' } });
-    expect(screen.getByText('La date de début doit être antérieure ou égale à la date de fin.')).toBeInTheDocument();
-    expect(kpi('Total débit', '0FCFA')).toBeInTheDocument();
-    expect(kpi('Total crédit', '0FCFA')).toBeInTheDocument();
-  });
-
-  it('IMPORTANT : le filtre Sous-catégorie n’apparaît que pour Catégorie = AUTRES', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    const user = userEvent.setup();
-    const categorySelect = screen.getByLabelText('Catégorie') as HTMLSelectElement;
-
-    // ÉPARGNE / PRÊT / REMBOURSEMENT → pas de filtre Sous-catégorie
-    for (const category of ['Épargne', 'Prêt', 'Remboursement']) {
-      await user.selectOptions(categorySelect, category);
-      expect(screen.queryByLabelText('Sous-catégorie')).not.toBeInTheDocument();
-    }
-
-    // AUTRES → filtre Sous-catégorie visible, limité aux sous-catégories de AUTRES
-    await user.selectOptions(categorySelect, 'Autres');
-    const subSelect = await screen.findByLabelText('Sous-catégorie');
-    expect(within(subSelect).getByRole('option', { name: 'Toutes les sous-catégories' })).toBeInTheDocument();
-    expect(within(subSelect).getByRole('option', { name: 'Frais' })).toBeInTheDocument();
-    // 9 sous-catégories AUTRES + l'option « Toutes »
-    expect(within(subSelect).getAllByRole('option')).toHaveLength(10);
-  });
-
-  it('§FILTRE / TEST 9 : « Libelle de caisse » n’affiche jamais deux options de libellé normalisé identique (anomalie AC-002 « Épargne » / AC-009 « Epargne »)', async () => {
-    renderFinance('/finance/transactions');
-    await screen.findByRole('table');
-    const accountSelect = screen.getByLabelText('Libelle de caisse');
-    const norm = (label: string) => label.normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const optionLabels = within(accountSelect)
-      .getAllByRole('option')
-      .map((option) => option.textContent ?? '')
-      .filter((label) => label !== 'Toutes les caisses')
-      .map(norm);
-    // Aucun libellé normalisé en double.
-    expect(new Set(optionLabels).size).toBe(optionLabels.length);
-    // « epargne » n'apparaît qu'une fois (AC-002, porteuse de transactions, est conservée ; AC-009 est masquée).
-    expect(optionLabels.filter((label) => label === 'epargne')).toHaveLength(1);
+    renderFinance('/finance/cashboxes?tab=transactions');
+    await waitFor(() => expect((screen.getByLabelText('Date de séance') as HTMLSelectElement).value).toBe('FS-001'));
+    await user.click(screen.getByRole('button', { name: /Nouvelle transaction/ }));
+    await screen.findByRole('heading', { name: 'Transactions' });
+    const session = screen.getByLabelText('Date de séance') as HTMLInputElement;
+    expect(session.value).toBe('14/07/2026');
+    expect(session).toBeDisabled();
+    // Saisie rapide : la date/heure de transaction n'est plus affichée (décision Hugues) — elle reste générée à l'enregistrement (`recordedAt`).
+    expect(screen.queryByLabelText('Date et heure de la transaction')).not.toBeInTheDocument();
+    const cashboxOptions = within(screen.getByLabelText(/^Caisse/)).getAllByRole('option').map((option) => option.textContent);
+    expect(cashboxOptions).not.toContain('Transport');
+    expect(cashboxOptions).not.toContain('Secours');
+    expect(cashboxOptions).toContain('Inscription');
   });
 });

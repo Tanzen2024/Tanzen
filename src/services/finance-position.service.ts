@@ -1,12 +1,16 @@
 import { mockRequest } from './api-client';
-import { cashboxes } from '@/mocks/finance/cashboxes';
+import { cashboxes, type CashboxRecord } from '@/mocks/finance/cashboxes';
 import { transactions } from '@/mocks/finance/transactions';
 import { cashboxMemberships } from '@/mocks/finance/cashbox-memberships';
 import { openingEntries, finalOpeningEntryForFiscalYear, type OpeningEntry } from '@/mocks/finance/opening-entries';
 import { closingEntries, finalClosingEntry, type ClosingEntry } from '@/mocks/finance/closing-entries';
 import { fiscalYears, fiscalYearLabel } from '@/mocks/settings/fiscal-years';
+import { fiscalSessions } from '@/mocks/settings/fiscal-sessions';
 import { loans } from '@/mocks/finance/loans';
 import { repayments } from '@/mocks/finance/repayments';
+import { tenantCreditRule } from '@/mocks/finance/loan-rules';
+import { members } from '@/mocks/organization/members';
+import { isAdhesionActiveAt, occurrenceBeneficiaries, tontineAdhesions, tontineOccurrences, tontines } from '@/mocks/tontines/tontines';
 import { auditEvents, type AuditEvent } from '@/mocks/audit/audit-events';
 import { currentUser } from '@/mocks/rbac.mocks';
 import {
@@ -18,6 +22,16 @@ import {
   verifyCarryForwardIntegrity as verifyCarryForwardIntegrityEngine,
   memberFinancialPosition as memberFinancialPositionEngine,
   memberFinancialPositions as memberFinancialPositionsEngine,
+  memberBalanceSheets as memberBalanceSheetsEngine,
+  summarizeBalanceSheets,
+  memberPeriodStatements as memberPeriodStatementsEngine,
+  summarizePeriodStatements,
+  type BalanceSheetCtx,
+  type BalanceSheetParams,
+  type PeriodParams,
+  type TontinePurchaseGroup,
+  cashboxesFiscalYearSummary,
+  cashboxesSessionSummary,
   type FinanceCtx,
   type FinancialScope,
   type IntegrityMismatch,
@@ -34,9 +48,46 @@ import {
  * ISOLATION : `ctxForTenant` est le SEUL point où le `tenantId` entre en jeu.
  * Les fonctions pures ne voient jamais les données d'un autre tenant.
  */
+/**
+ * Périmètre du bilan des adhérents : contexte du tenant, adhérents du tenant uniquement (« ALL » =
+ * tous), caisse ignorée si elle n'appartient pas au tenant. Mode de la règle de crédit UNIQUE du
+ * tenant ; sans règle, aucun prêt ne peut exister — SIMPLE par défaut.
+ */
+/**
+ * Achats de tontine du tenant → personnes appartenant à la tontine de l'achat (adhésions actives à la
+ * date de l'achat, une part par personne) : base de la redistribution « Achat tontine » à parts égales.
+ * Relation relue par `Transaction.tontineBeneficiaryId` → bénéficiaire → Tour → Tontine, jamais recopiée.
+ */
+function tontinePurchaseGroups(tenantId: string, tenantTransactions: typeof transactions): TontinePurchaseGroup[] {
+  const beneficiaryById = new Map(occurrenceBeneficiaries.filter((item) => item.tenantId === tenantId).map((item) => [item.id, item]));
+  const occurrenceById = new Map(tontineOccurrences.filter((item) => item.tenantId === tenantId).map((item) => [item.id, item]));
+  const tontineById = new Map(tontines.filter((item) => item.tenantId === tenantId).map((item) => [item.id, item]));
+  const groups: TontinePurchaseGroup[] = [];
+  for (const tx of tenantTransactions) {
+    if (tx.subcategory !== 'ACHAT_TONTINE' || !tx.tontineBeneficiaryId) continue;
+    const occurrence = occurrenceById.get(beneficiaryById.get(tx.tontineBeneficiaryId)?.occurrenceId ?? '');
+    const tontine = occurrence && tontineById.get(occurrence.tontineId);
+    if (!tontine) continue;
+    const memberIds = [...new Set(tontineAdhesions.filter((adhesion) => adhesion.tenantId === tenantId && adhesion.tontineId === tontine.id && isAdhesionActiveAt(adhesion, tx.date)).map((adhesion) => adhesion.memberId))];
+    groups.push({ transactionId: tx.id, tontineId: tontine.id, tontineName: tontine.name, memberIds });
+  }
+  return groups;
+}
+
+function balanceSheetScope(tenantId: string, requested: string[] | 'ALL', requestedCashboxId: string | undefined): { ctx: BalanceSheetCtx; memberIds: string[]; cashboxId: string | undefined } {
+  const finance = ctxForTenant(tenantId);
+  const rule = tenantCreditRule(tenantId);
+  const tenantMemberIds = members.filter((member) => member.tenantId === tenantId).map((member) => member.id);
+  return {
+    ctx: { transactions: finance.transactions, loans: finance.loans ?? [], repayments: finance.repayments ?? [], cashboxes: finance.cashboxes, loanMode: rule?.loanMode ?? 'SIMPLE', interestPeriod: rule?.interestPeriod ?? 'MONTHLY', tontinePurchases: tontinePurchaseGroups(tenantId, finance.transactions) },
+    memberIds: requested === 'ALL' ? tenantMemberIds : requested.filter((id) => tenantMemberIds.includes(id)),
+    cashboxId: requestedCashboxId && finance.cashboxes.some((cashbox) => cashbox.id === requestedCashboxId) ? requestedCashboxId : undefined,
+  };
+}
+
 function ctxForTenant(tenantId: string): FinanceCtx {
   return {
-    cashboxes: cashboxes.filter((account) => account.tenantId === tenantId),
+    cashboxes: cashboxes.filter((cashbox) => cashbox.tenantId === tenantId),
     transactions: transactions.filter((transaction) => transaction.tenantId === tenantId),
     memberships: cashboxMemberships.filter((membership) => membership.tenantId === tenantId),
     openingEntries: openingEntries.filter((entry) => entry.tenantId === tenantId),
@@ -88,7 +139,63 @@ function recordFinanceAudit(params: {
   auditEvents.push(event);
 }
 
+/**
+ * Caisse vue dans le contexte d'UN exercice fiscal (mandat « Caisse + exercice
+ * fiscal contexte global ») : la donnée stockée de la caisse + sa situation SUR
+ * CET EXERCICE uniquement (`cashboxesFiscalYearSummary`). `balance` = solde à la
+ * fin de l'exercice ; `lastMovement` = dernier mouvement DANS l'exercice (`null`
+ * sinon). Jamais de chiffre d'un autre exercice.
+ */
+export type CashboxInFiscalYear = CashboxRecord & {
+  fiscalYearId: string;
+  yearOpeningBalance: number;
+  inflows: number;
+  outflows: number;
+  balance: number;
+  movementCount: number;
+  lastMovement: string | null;
+};
+
+function cashboxesInFiscalYear(tenantId: string, fiscalYearId: string, sessionId?: string): CashboxInFiscalYear[] | undefined {
+  // Isolation : l'exercice doit appartenir au tenant, sinon aucune donnée.
+  const fiscalYear = fiscalYears.find((year) => year.id === fiscalYearId && year.tenantId === tenantId);
+  if (!fiscalYear) return undefined;
+  const ctx = ctxForTenant(tenantId);
+  // Séance précise → situation de CETTE séance (séances de l'exercice + tenant uniquement) ; sinon, tout l'exercice.
+  const sessionNumberById = new Map(fiscalSessions.filter((session) => session.tenantId === tenantId && session.fiscalYearId === fiscalYearId).map((session) => [session.id, session.sessionNumber]));
+  const lines = sessionId ? cashboxesSessionSummary(ctx, fiscalYear, sessionNumberById, sessionId) : cashboxesFiscalYearSummary(ctx, fiscalYear);
+  return lines.map((line) => {
+    const record = ctx.cashboxes.find((cashbox) => cashbox.id === line.cashboxId)!;
+    return {
+      ...record,
+      fiscalYearId,
+      yearOpeningBalance: line.openingBalance,
+      inflows: line.inflows,
+      outflows: line.outflows,
+      balance: line.balance,
+      movementCount: line.movementCount,
+      lastMovement: line.lastMovement,
+    };
+  });
+}
+
 export const financePositionService = {
+  /** Caisses du tenant dans le contexte de l'exercice `fiscalYearId` (tenant + exercice). `undefined` si l'exercice n'appartient pas au tenant. */
+  cashboxesForFiscalYear: (tenantId: string, fiscalYearId: string) =>
+    mockRequest(() => cashboxesInFiscalYear(tenantId, fiscalYearId)),
+
+  /**
+   * Récapitulatif par caisse de l'onglet Transactions (mandat « Évolution globale du module Finance » §14) :
+   * `sessionId` fourni → situation de CETTE séance (`cashboxesSessionSummary`) ; absent (« Toutes les
+   * séances ») → situation de tout l'exercice, strictement identique à `cashboxesForFiscalYear`.
+   */
+  cashboxesForSession: (tenantId: string, fiscalYearId: string, sessionId: string | undefined) =>
+    mockRequest(() => cashboxesInFiscalYear(tenantId, fiscalYearId, sessionId)),
+
+  /** Une caisse dans le contexte de l'exercice `fiscalYearId` — `undefined` si la caisse ou l'exercice n'appartient pas au tenant. */
+  cashboxForFiscalYear: (tenantId: string, cashboxId: string, fiscalYearId: string) =>
+    mockRequest(() => cashboxesInFiscalYear(tenantId, fiscalYearId)?.find((cashbox) => cashbox.id === cashboxId)),
+
   /** Solde à l'instant T pour un périmètre (caisse / tenant / adhérent / adhérent×caisse). */
   balanceAsOf: (tenantId: string, scope: FinancialScope, asOfDate: string) =>
     mockRequest(() => balanceAsOf(scope, ctxForTenant(tenantId), asOfDate)),
@@ -111,6 +218,36 @@ export const financePositionService = {
   /** Version batch — un `memberFinancialPosition` par membre, même scope (caisse unique si `cashboxId` fourni, sinon toutes ses caisses). */
   memberFinancialPositions: (tenantId: string, memberIds: string[], cashboxId: string | undefined, asOfDate: string) =>
     mockRequest(() => memberFinancialPositionsEngine(memberIds, cashboxId, ctxForTenant(tenantId), asOfDate)),
+
+  /**
+   * BILAN FINANCIER DES ADHÉRENTS (mandat du 2026-09-27) — un, plusieurs (`memberIds`) ou tous
+   * (`'ALL'` = tous les adhérents du tenant) : bilans individuels + synthèse agrégée. UNE seule
+   * composition du contexte et UNE passe d'indexation quel que soit le nombre d'adhérents
+   * (`memberBalanceSheets`). Backend réel : même contrat, agrégation SQL groupée par adhérent.
+   * La caisse filtrée doit appartenir au tenant (sinon `cashboxId` est ignoré → aucun mouvement).
+   */
+  memberBalanceSheets: (tenantId: string, params: Omit<BalanceSheetParams, 'memberIds'> & { memberIds: string[] | 'ALL' }) =>
+    mockRequest(() => {
+      const { ctx, memberIds, cashboxId } = balanceSheetScope(tenantId, params.memberIds, params.cashboxId);
+      const sheets = memberBalanceSheetsEngine(ctx, { ...params, memberIds, cashboxId });
+      return { sheets, summary: summarizeBalanceSheets(sheets) };
+    }),
+
+  /**
+   * BILAN SUR UNE PÉRIODE (Date de début → Date de fin) : situation au début, mouvements de la
+   * période, situation à la fin — par adhérent + synthèse agrégée. Même périmètre tenant que
+   * `memberBalanceSheets` ; une période inversée est refusée (`from > to`).
+   */
+  memberPeriodStatements: (tenantId: string, params: Omit<PeriodParams, 'memberIds'> & { memberIds: string[] | 'ALL' }) =>
+    mockRequest(() => {
+      const { ctx, memberIds, cashboxId } = balanceSheetScope(tenantId, params.memberIds, params.cashboxId);
+      const statements = memberPeriodStatementsEngine(ctx, { ...params, memberIds, cashboxId });
+      const rule = tenantCreditRule(tenantId);
+      // Règle de crédit appliquée au relevé : périodicité des lignes et des intérêts, et intérêts
+      // applicables (prêts autorisés, taux non nul) — sinon le relevé n'affiche aucun intérêt artificiel.
+      const creditRule = { loanMode: ctx.loanMode, interestPeriod: ctx.interestPeriod ?? 'MONTHLY', interestRate: rule?.interestRate ?? 0, interestApplicable: Boolean(rule && rule.allowLoans && rule.interestRate > 0) };
+      return { statements, summary: summarizePeriodStatements(statements), creditRule };
+    }),
 
   /**
    * CLÔTURE D'EXERCICE (étape 6) — calcule (via `computeFiscalYearClosing`,
@@ -149,7 +286,7 @@ export const financePositionService = {
         resourceId: fiscalYear.id,
         resourceLabel: fiscalYearLabel(fiscalYear),
         sensitive: true,
-        context: { accountCount: created.length },
+        context: { cashboxCount: created.length },
       });
       return { ok: true as const, entries: created };
     }),
@@ -232,7 +369,7 @@ export const financePositionService = {
         resourceId: toFiscalYear.id,
         resourceLabel: fiscalYearLabel(toFiscalYear),
         sensitive: true,
-        context: { fromFiscalYearId: fromFiscalYear.id, accountCount: created.length },
+        context: { fromFiscalYearId: fromFiscalYear.id, cashboxCount: created.length },
       });
       return { ok: true as const, entries: created };
     }),
@@ -262,8 +399,8 @@ export const financePositionService = {
   createInitialOpeningEntry: (tenantId: string, cashboxId: string, fiscalYearId: string, amount: number) =>
     mockRequest(() => {
       const fiscalYear = fiscalYears.find((fy) => fy.id === fiscalYearId && fy.tenantId === tenantId);
-      const account = cashboxes.find((item) => item.id === cashboxId && item.tenantId === tenantId);
-      if (!fiscalYear || !account || !Number.isFinite(amount)) return undefined;
+      const cashbox = cashboxes.find((item) => item.id === cashboxId && item.tenantId === tenantId);
+      if (!fiscalYear || !cashbox || !Number.isFinite(amount)) return undefined;
       if (finalOpeningEntryForFiscalYear(openingEntries, cashboxId, fiscalYearId)) return undefined;
 
       const entry: OpeningEntry = {
@@ -282,7 +419,7 @@ export const financePositionService = {
         tenantId,
         action: 'finance.openingEntry.created',
         resourceId: entry.id,
-        resourceLabel: `${account.title} · ${fiscalYearLabel(fiscalYear)}`,
+        resourceLabel: `${cashbox.title} · ${fiscalYearLabel(fiscalYear)}`,
         sensitive: true,
         context: { origin: 'INITIAL', amount },
       });

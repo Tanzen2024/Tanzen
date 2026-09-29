@@ -10,15 +10,26 @@
  * financier de la caisse et les caisses spécialisées associées ont été
  * supprimés, sans mécanisme de remplacement.
  *
- * Les 8 caisses historiques (trésorerie/épargne/courant) sont référencées par
- * id (`AC-xxx`, préfixe technique conservé tel quel — IMMUABLE, jamais affiché
- * à l'utilisateur) dans loan-rules.ts/loan-rule.service.test.ts.
+ * Les caisses sont référencées par id (`AC-xxx`, préfixe technique conservé
+ * tel quel — IMMUABLE, jamais affiché à l'utilisateur).
  * `memberIds` réutilise directement `Cashbox` pour porter la relation
  * Caisse ↔ Membre (adhérents affectés à la caisse) plutôt que d'introduire
  * une entité de jointure séparée, qui n'existe nulle part ailleurs dans le modèle.
  */
 export type CashboxType = 'LIBRE' | 'TAUX_FIXE';
-export type CashboxStatus = 'active' | 'inactive';
+/**
+ * Cycle de vie d'une caisse (mandat « Évolution globale du module Finance ») :
+ * `active` (opérationnelle) → `inactive` (« Désactivée », réversible) →
+ * `archived` (« Archivée », sortie de la gestion courante). Aucun statut ne
+ * supprime quoi que ce soit : l'historique reste consultable. Seule une caisse
+ * `active` reçoit de nouvelles transactions (`isCashboxOperational`).
+ */
+export type CashboxStatus = 'active' | 'inactive' | 'archived';
+
+/** Seule une caisse ACTIVE peut recevoir une nouvelle transaction — règle appliquée par `insertTransaction`, jamais seulement par l'UI. */
+export function isCashboxOperational(cashbox: Pick<CashboxRecord, 'status'>): boolean {
+  return cashbox.status === 'active';
+}
 
 /**
  * Code technique d'une caisse SYSTÈME (mandat « robustifier Achat tontine »,
@@ -88,10 +99,11 @@ export type Cashbox = {
  */
 export type CashboxRecord = Omit<Cashbox, 'balance' | 'lastMovement'>;
 
+// Jeu de démonstration T-001 (nettoyage du 2026-09-27) : seules les caisses SYSTÈME (`systemCode`) et
+// « Transport » sont conservées. Les caisses historiques Trésorerie (AC-001), Épargne (AC-002), Compte
+// courant (AC-003), Achat argent (AC-013) et Fond de solidarité (AC-014) ont été retirées du seed, avec
+// leurs transactions et adhésions. Leurs identifiants ne sont jamais réutilisés.
 export const cashboxes: CashboxRecord[] = [
-  { id: 'AC-001', tenantId: 'T-001', cashboxNumber: 'CS-001-TRÉS', title: 'Trésorerie', type: 'LIBRE', amount: null, description: '', openingBalance: 13_730_000, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-01-01', memberIds: [] },
-  { id: 'AC-002', tenantId: 'T-001', cashboxNumber: 'CS-001-ÉPG', title: 'Épargne', type: 'LIBRE', amount: null, description: '', openingBalance: 8_650_000, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-01-01', memberIds: [] },
-  { id: 'AC-003', tenantId: 'T-001', cashboxNumber: 'CS-001-COUR', title: 'Compte courant', type: 'LIBRE', amount: null, description: '', openingBalance: 2_725_000, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-01-01', memberIds: [] },
   { id: 'AC-004', tenantId: 'T-002', cashboxNumber: 'TH-002-TRÉS', title: 'Trésorerie', type: 'LIBRE', amount: null, description: '', openingBalance: 6_200_000, tenantName: 'Tontine Horizon', status: 'active', openedOn: '2026-01-01', memberIds: [] },
   { id: 'AC-005', tenantId: 'T-002', cashboxNumber: 'TH-002-ÉPG', title: 'Épargne', type: 'LIBRE', amount: null, description: '', openingBalance: 1_975_000, tenantName: 'Tontine Horizon', status: 'active', openedOn: '2026-01-01', memberIds: [] },
   { id: 'AC-006', tenantId: 'T-003', cashboxNumber: 'MT-003-TRÉS', title: 'Trésorerie', type: 'LIBRE', amount: null, description: '', openingBalance: 6_600_000, tenantName: 'Mutuelle Teranga', status: 'active', openedOn: '2026-01-01', memberIds: [] },
@@ -103,18 +115,16 @@ export const cashboxes: CashboxRecord[] = [
   // EMERGENCY_FUND historiques de T-001, ADOPTÉES par `systemCode` via
   // `ensureSystemCashbox` (mandat « centre financier ») — jamais dupliquées,
   // même mécanisme que « Achat tontine » (AC-015/AC-016).
-  { id: 'AC-009', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-001', title: 'Epargne', type: 'LIBRE', amount: null, description: 'Epargne volontaire des adhérents', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'SAVINGS' },
+  { id: 'AC-009', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-001', title: 'Épargne', type: 'LIBRE', amount: null, description: 'Epargne volontaire des adhérents', openingBalance: 8_650_000, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'SAVINGS' },
   { id: 'AC-010', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-002', title: 'Inscription', type: 'TAUX_FIXE', amount: 500, description: "Cotisation d'inscription", openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'REGISTRATION' },
   { id: 'AC-011', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-003', title: 'Secours', type: 'TAUX_FIXE', amount: 12_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [], systemCode: 'EMERGENCY_FUND' },
   { id: 'AC-012', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-004', title: 'Transport', type: 'TAUX_FIXE', amount: 5_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
-  { id: 'AC-013', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-005', title: 'Achat argent', type: 'LIBRE', amount: null, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
-  { id: 'AC-014', tenantId: 'T-001', cashboxNumber: 'CS-001-CX-006', title: 'Fond de solidarité', type: 'TAUX_FIXE', amount: 40_000, description: '', openingBalance: 0, tenantName: 'Coopérative Sutura', status: 'active', openedOn: '2026-08-01', memberIds: [] },
 
   // Caisses système « Achat tontine » (TONTINE_PURCHASE, mandat « robustifier
   // Achat tontine ») — une par tenant, identifiée par `systemCode`, jamais par
   // son libellé. Seule la caisse marquée `systemCode: 'TONTINE_PURCHASE'` du
   // tenant courant reçoit les montants d'achat — jamais les cotisations (cf.
-  // doc du champ `Tontine.purchaseAccountId`). T-003/T-004/T-005 n'ont pas
+  // doc du champ `Tontine.purchaseCashboxId`). T-003/T-004/T-005 n'ont pas
   // besoin d'être seedés ici : `financeService` les garantit automatiquement
   // (`ensureSystemCashbox`), idempotent, pour tout tenant présent dans
   // `mocks/organization/tenants.ts`.
@@ -175,15 +185,15 @@ export function hasCashboxLabelConflict(
   );
 }
 
-type LedgerEntry = { type: 'debit' | 'credit'; amount: number; status: string; tenantId: string; fromAccount: string; toAccount: string; date: string; recordedAt?: string };
+type LedgerEntry = { type: 'debit' | 'credit'; amount: number; status: string; tenantId: string; source: string; destination: string; date: string; recordedAt?: string };
 
 /**
  * Transactions COMPTABILISÉES (`completed`) réellement rattachées à cette caisse
  * — même tenant, et la caisse figure sur l'une des deux extrémités de l'écriture
- * (`fromAccount` OU `toAccount`). C'est EXACTEMENT le prédicat du panneau
+ * (`source` OU `destination`). C'est EXACTEMENT le prédicat du panneau
  * « Transactions » de la fiche caisse : toute ligne visible dans ce panneau
  * entre donc dans le solde, et réciproquement (mandat « cohérence solde ↔
- * journal »). Un virement inter-caisses (`fromAccount` et `toAccount` tous deux
+ * journal »). Un virement inter-caisses (`source` et `destination` tous deux
  * des caisses) est ainsi compté des deux côtés.
  */
 export function cashboxLedgerEntries<T extends LedgerEntry>(cashbox: CashboxRecord, transactions: T[]): T[] {
@@ -191,22 +201,22 @@ export function cashboxLedgerEntries<T extends LedgerEntry>(cashbox: CashboxReco
     (transaction) =>
       transaction.tenantId === cashbox.tenantId &&
       transaction.status === 'completed' &&
-      (transaction.fromAccount === cashbox.cashboxNumber || transaction.toAccount === cashbox.cashboxNumber),
+      (transaction.source === cashbox.cashboxNumber || transaction.destination === cashbox.cashboxNumber),
   );
 }
 
 /**
  * Effet signé d'une écriture sur CETTE caisse : `+montant` si les fonds y
- * entrent (la caisse est `toAccount`), `−montant` s'ils en sortent (la caisse
- * est `fromAccount`). Le sens `Transaction.type` (perspective JOURNAL du tenant)
+ * entrent (la caisse est `destination`), `−montant` s'ils en sortent (la caisse
+ * est `source`). Le sens `Transaction.type` (perspective JOURNAL du tenant)
  * n'intervient pas dans ce calcul par caisse — aucune notion de « sens de la
  * caisse ».
  */
 export function cashboxEntryEffect(cashboxNumber: string, entry: LedgerEntry): number {
-  const isFrom = entry.fromAccount === cashboxNumber;
-  const isTo = entry.toAccount === cashboxNumber;
+  const isFrom = entry.source === cashboxNumber;
+  const isTo = entry.destination === cashboxNumber;
   // Écriture interne à la caisse (frais, pénalité, ajustement sans contrepartie
-  // adhérent : `fromAccount === toAccount === cashboxNumber`) → le sens du
+  // adhérent : `source === destination === cashboxNumber`) → le sens du
   // JOURNAL (`entry.type`) tranche : crédit = +, débit = −.
   if (isFrom && isTo) return entry.type === 'credit' ? entry.amount : -entry.amount;
   if (isTo) return entry.amount;

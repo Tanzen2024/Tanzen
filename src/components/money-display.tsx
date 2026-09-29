@@ -9,8 +9,8 @@ import { formatCurrency } from '@/constants/currencies';
  * résolu depuis la devise de l'organisation du tenant courant
  * (`useOrganizationCurrency`), jamais hardcodé.
  */
-export function MoneyDisplay({ amount, currency, compact = false }: { amount: number; currency?: string; compact?: boolean }) {
+export function MoneyDisplay({ amount, currency }: { amount: number; currency?: string }) {
   const { locale } = useLocale();
   const organizationCurrency = useOrganizationCurrency();
-  return <span>{formatCurrency(amount, currency ?? organizationCurrency, locale, { compact })}</span>;
+  return <span>{formatCurrency(amount, currency ?? organizationCurrency, locale)}</span>;
 }
