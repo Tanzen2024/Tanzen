@@ -75,7 +75,7 @@ describe('GLOBAL 25 % — intérêt déterminé à la base, puis aucun intérêt
   const repayments = [refRepay(50_000, '2026-03-15'), refRepay(25_000, '2026-05-15'), refRepay(50_000, '2026-07-15')];
 
   it('100 000 → 125 000 à rembourser ; une seule ligne d’intérêt, à l’origine', () => {
-    expect(loanInterestAccruals(global, repayments)).toEqual([{ date: '2026-01-01', amount: 25_000, base: 100_000, rate: 25, periodStart: '2026-01-01', debtBefore: 100_000 }]);
+    expect(loanInterestAccruals(global, repayments, REF.maturityDate)).toEqual([{ date: '2026-01-01', amount: 25_000, base: 100_000, rate: 25, periodStart: '2026-01-01', debtBefore: 100_000 }]);
     expect(loanDebtAt(global, [], '2026-01-01')).toBe(125_000);
     expect(loanDebtAt(global, [], '2026-12-31')).toBe(125_000); // aucun nouvel intérêt périodique
   });
@@ -108,7 +108,7 @@ describe('SIMPLE 15 % — base = capital de référence restant après rembourse
   });
 
   it('bases : 100 000 puis 95 000 (M3 à M6, intérêts NON capitalisés), 52 000, 29 800 ; plus d’intérêt une fois soldé', () => {
-    expect(loanInterestAccruals(simple, repayments).map((accrual) => [accrual.date, accrual.base, accrual.amount])).toEqual([
+    expect(loanInterestAccruals(simple, repayments, REF.maturityDate).map((accrual) => [accrual.date, accrual.base, accrual.amount])).toEqual([
       ['2026-02-01', 100_000, 15_000],
       ['2026-03-01', 95_000, 14_250],
       ['2026-04-01', 95_000, 14_250],
@@ -120,22 +120,22 @@ describe('SIMPLE 15 % — base = capital de référence restant après rembourse
   });
 
   it('aucun remboursement : base = 100 000 à chaque période (jamais la dette courante)', () => {
-    expect(loanInterestAccruals(simple, []).slice(0, 4).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 15_000], [100_000, 15_000], [100_000, 15_000], [100_000, 15_000]]);
+    expect(loanInterestAccruals(simple, [], REF.maturityDate).slice(0, 4).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 15_000], [100_000, 15_000], [100_000, 15_000], [100_000, 15_000]]);
     expect(loanDebtAt(simple, [], '2026-05-01')).toBe(160_000);
   });
 
   it('plusieurs remboursements dans une même période : même capital de référence qu’un remboursement unique', () => {
     const split = [refRepay(10_000, '2026-02-10'), refRepay(10_000, '2026-02-20')];
-    expect(loanInterestAccruals(simple, split).slice(1, 3).map((accrual) => accrual.base)).toEqual([95_000, 95_000]);
+    expect(loanInterestAccruals(simple, split, REF.maturityDate).slice(1, 3).map((accrual) => accrual.base)).toEqual([95_000, 95_000]);
   });
 
   it('remboursement le jour même de l’échéance : appliqué APRÈS l’intérêt du mois (mois M : intérêt, puis remboursement)', () => {
-    expect(loanInterestAccruals(simple, [refRepay(20_000, '2026-02-01')]).slice(0, 2).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 15_000], [95_000, 14_250]]);
+    expect(loanInterestAccruals(simple, [refRepay(20_000, '2026-02-01')], REF.maturityDate).slice(0, 2).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 15_000], [95_000, 14_250]]);
   });
 
   it('remboursement total puis au-delà : plus aucun intérêt (la dette ne génère rien quand elle est nulle ou négative)', () => {
-    expect(loanInterestAccruals(simple, [refRepay(115_000, '2026-02-15')])).toHaveLength(1);
-    expect(loanInterestAccruals(simple, [refRepay(200_000, '2026-02-15')])).toHaveLength(1);
+    expect(loanInterestAccruals(simple, [refRepay(115_000, '2026-02-15')], REF.maturityDate)).toHaveLength(1);
+    expect(loanInterestAccruals(simple, [refRepay(200_000, '2026-02-15')], REF.maturityDate)).toHaveLength(1);
   });
 });
 
@@ -157,7 +157,7 @@ describe('COMPOSÉ 10 % — base = dette courante (intérêts capitalisés)', ()
   });
 
   it('bases = dette courante ; intérêts entiers', () => {
-    const accruals = loanInterestAccruals(compound, repayments);
+    const accruals = loanInterestAccruals(compound, repayments, REF.maturityDate);
     expect(accruals.map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 10_000], [90_000, 9_000], [99_000, 9_900], [108_900, 10_890], [119_790, 11_979], [31_769, 3_177], [4_946, 495]]);
     expect(accruals.every((accrual) => Number.isInteger(accrual.amount) && Number.isInteger(accrual.base))).toBe(true);
   });
@@ -168,9 +168,9 @@ describe('COMPOSÉ 10 % — base = dette courante (intérêts capitalisés)', ()
 
   it('plusieurs remboursements dans une même période ; remboursement total ; au-delà : plus aucun intérêt', () => {
     const split = [refRepay(15_000, '2026-02-10'), refRepay(5_000, '2026-02-25')];
-    expect(loanInterestAccruals(compound, split)[1].base).toBe(90_000);
-    expect(loanInterestAccruals(compound, [refRepay(110_000, '2026-02-15')])).toHaveLength(1);
-    expect(loanInterestAccruals(compound, [refRepay(500_000, '2026-02-15')])).toHaveLength(1);
+    expect(loanInterestAccruals(compound, split, REF.maturityDate)[1].base).toBe(90_000);
+    expect(loanInterestAccruals(compound, [refRepay(110_000, '2026-02-15')], REF.maturityDate)).toHaveLength(1);
+    expect(loanInterestAccruals(compound, [refRepay(500_000, '2026-02-15')], REF.maturityDate)).toHaveLength(1);
   });
 });
 
@@ -346,12 +346,12 @@ describe('Bilan individuel', () => {
     const loan = makeLoan({ id: 'L-1', memberId: 'M-1', principal: 100_000, interestRate: 1, disbursementDate: '2026-01-10', maturityDate: '2027-01-10' });
     const context = ctx({ loans: [loan], transactions: [saving('M-1', 10_000, '2026-01-05'), saving('M-1', 5_000, '2026-03-20')] });
     expect(sheetOf(context, 'M-1', '2026-03-15').months).toEqual([
-      { month: '2026-01', savings: 10_000, debt: 100_000, interest: 0, cumulativeInterest: 0 },
-      { month: '2026-02', savings: 10_000, debt: 101_000, interest: 1_000, cumulativeInterest: 1_000 },
-      { month: '2026-03', savings: 10_000, debt: 102_000, interest: 1_000, cumulativeInterest: 2_000 },
+      { month: '2026-01', savings: 10_000, debt: 100_000, interest: 0, cumulativeInterest: 0, penalties: 0 },
+      { month: '2026-02', savings: 10_000, debt: 101_000, interest: 1_000, cumulativeInterest: 1_000, penalties: 0 },
+      { month: '2026-03', savings: 10_000, debt: 102_000, interest: 1_000, cumulativeInterest: 2_000, penalties: 0 },
     ]);
     const fromMarch = memberBalanceSheets(context, { memberIds: ['M-1'], asOfDate: '2026-03-15', historyFrom: '2026-03-01' })[0];
-    expect(fromMarch.months).toEqual([{ month: '2026-03', savings: 10_000, debt: 102_000, interest: 1_000, cumulativeInterest: 2_000 }]);
+    expect(fromMarch.months).toEqual([{ month: '2026-03', savings: 10_000, debt: 102_000, interest: 1_000, cumulativeInterest: 2_000, penalties: 0 }]);
   });
 
   it('détail des opérations calculé seulement à la demande, du plus récent au plus ancien', () => {
@@ -455,21 +455,20 @@ describe('Relevé par périodicité des intérêts', () => {
     for (const loanMode of ['SIMPLE', 'COMPOUND', 'GLOBAL'] as const) {
       const [statement] = memberPeriodStatements(example(loanMode, { repayments: [makeRepayment({ loanId: 'L-LAM', paymentDate: '2026-02-20', amount: 30_000 })] }), { memberIds: ['LAMAT'], from: '2026-01-01', to: '2026-03-31', withLines: true });
       const lines = statement.end.lines!;
-      for (const line of lines) expect(line.debtRemaining).toBe(line.debtCarried + line.loansDisbursed + line.interest - line.repayments);
+      for (const line of lines) expect(line.debtRemaining).toBe(line.debtCarried + line.loansDisbursed + line.interest + line.penalties - line.repayments);
       for (let index = 1; index < lines.length; index += 1) expect(lines[index].debtCarried).toBe(lines[index - 1].debtRemaining);
       expect(lines.at(-1)!.debtRemaining).toBe(statement.closing.debt);
       expect(lines.reduce((sum, line) => sum + line.interest, 0)).toBe(statement.movements.interestAccrued);
     }
   });
 
-  it('lignes hebdomadaires (semaines ISO bornées) ; journalières : seulement les jours mouvementés', () => {
-    const context = ctx({ transactions: [saving('M-1', 10_000, '2026-01-07'), saving('M-1', 5_000, '2026-01-20')], interestPeriod: 'WEEKLY' });
-    const weekly = memberPeriodStatements(context, { memberIds: ['M-1'], from: '2026-01-01', to: '2026-01-31', withLines: true })[0].end.lines!;
-    expect(weekly[0]).toMatchObject({ start: '2026-01-01', end: '2026-01-04' });
-    expect(weekly[1]).toMatchObject({ start: '2026-01-05', end: '2026-01-11', savings: 10_000 });
-    expect(weekly.at(-1)).toMatchObject({ start: '2026-01-26', end: '2026-01-31', savingsBalance: 15_000 });
-    const daily = memberPeriodStatements({ ...context, interestPeriod: 'DAILY' }, { memberIds: ['M-1'], from: '2026-01-01', to: '2026-01-31', withLines: true })[0].end.lines!;
-    expect(daily.map((line) => line.start)).toEqual(['2026-01-07', '2026-01-20']);
+  it('lignes TOUJOURS mensuelles (règle du 2026-09-29) : une ancienne périodicité WEEKLY / DAILY du contexte est ignorée', () => {
+    const context = ctx({ transactions: [saving('M-1', 10_000, '2026-01-07'), saving('M-1', 5_000, '2026-02-20')] });
+    for (const legacy of ['WEEKLY', 'DAILY', 'YEARLY'] as const) {
+      const lines = memberPeriodStatements({ ...context, interestPeriod: legacy }, { memberIds: ['M-1'], from: '2026-01-01', to: '2026-03-31', withLines: true })[0].end.lines!;
+      expect(lines.map((line) => [line.start, line.end])).toEqual([['2026-01-01', '2026-01-31'], ['2026-02-01', '2026-02-28'], ['2026-03-01', '2026-03-31']]);
+      expect(lines.map((line) => line.savingsBalance)).toEqual([10_000, 15_000, 15_000]);
+    }
   });
 
   it('transaction sans adhérent : jamais attribuée au relevé d’un adhérent', () => {

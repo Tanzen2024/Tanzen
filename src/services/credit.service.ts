@@ -16,12 +16,15 @@ import { loanFundingAllocations, type LoanFundingAllocation } from '@/mocks/fina
 import { transactions, type Transaction } from '@/mocks/finance/transactions';
 import { isLoanDisbursement, isLoanRepayment } from '@/mocks/finance/transaction-classification';
 import { fiscalSessions, type FiscalSession } from '@/mocks/settings/fiscal-sessions';
-import { computeLoanTerms, loanPolicyViolations, splitRepaymentProRata, planLoanFunding, splitByAllocations, loanApprovalSteps, loanDebtAt, type FundingAllocationInput } from '@/lib/finance';
+import { computeLoanTerms, loanPolicyViolations, splitRepayment, planLoanFunding, splitByAllocations, loanApprovalSteps, loanDebtAt, loanState, INTEREST_PERIOD, type FundingAllocationInput } from '@/lib/finance';
 import { workflowRequests } from '@/mocks/operations/workflow-requests';
 
 export type ApplicationInput = Omit<Application, 'id' | 'stage' | 'reviewDate' | 'approvalDate' | 'submittedDate'>;
-export type LoanInput = Omit<Loan, 'id' | 'outstanding' | 'progress' | 'paidAmount' | 'status' | 'disbursementDate' | 'lastPaymentDate' | 'penalties' | 'documents' | 'activities'>;
-export type RepaymentInput = { loanId: string; paymentDate: string; principalPart: number; interestPart: number; status: RepaymentStatus };
+/** Création directe (sans règle) : pénalité de retard DÉSACTIVÉE si non fournie — jamais de pénalité implicite. */
+export type LoanInput = Omit<Loan, 'id' | 'outstanding' | 'progress' | 'paidAmount' | 'status' | 'disbursementDate' | 'lastPaymentDate' | 'penalties' | 'documents' | 'activities' | 'penaltyEnabled' | 'penaltyType' | 'penaltyValue'>
+  & Partial<Pick<Loan, 'penaltyEnabled' | 'penaltyType' | 'penaltyValue'>>;
+/** `penaltyPart` : part imputée sur les pénalités de retard (0 par défaut) ; montant = capital + intérêts + pénalités. */
+export type RepaymentInput = { loanId: string; paymentDate: string; principalPart: number; interestPart: number; penaltyPart?: number; status: RepaymentStatus };
 export type GuarantorInput = Pick<Guarantor, 'loanId' | 'guarantorName' | 'guaranteedAmount' | 'relation'>;
 
 /** Aucune caisse : la caisse de décaissement prioritaire est TOUJOURS Épargne (`SAVINGS`), résolue par le service. */
@@ -66,8 +69,12 @@ export type CreateLoanTransactionInput = {
 /**
  * Un REMBOURSEMENT n'appartient à aucune caisse : seule la transaction d'ENCAISSEMENT
  * (`transactionInput.cashboxNumber`) l'est. Fournir `amount` seul : le métier Crédit en calcule
- * la répartition capital / intérêts (`splitRepaymentProRata`). `principalPart`/`interestPart`
- * explicites restent acceptés (compatibilité des appels existants) et priment alors.
+ * la répartition capital / intérêts / pénalités (`splitRepayment`, même calcul que l'aperçu de la saisie
+ * rapide). `principalPart`/`interestPart`/`penaltyPart` explicites restent acceptés (compatibilité des appels
+ * existants) et priment alors.
+ * PÉNALITÉS (2026-09-29) : la part imputée sur les pénalités de retard (`penaltyPart`) suit l'imputation du
+ * moteur (`loanState`) — dette hors pénalités d'abord, reliquat sur les pénalités ; seul le reste est
+ * ventilé capital / intérêts par `splitRepaymentProRata`, inchangé.
  */
 export type CreateRepaymentTransactionInput = {
   loanId: string;
@@ -75,6 +82,7 @@ export type CreateRepaymentTransactionInput = {
   amount?: number;
   principalPart?: number;
   interestPart?: number;
+  penaltyPart?: number;
   transactionInput: TransactionInput;
 };
 
@@ -110,23 +118,39 @@ function resolveActiveLoanRule(tenantId: string): LoanRule | undefined {
  * mandat, l'UI calculait son propre `activeLoanCount` sans jamais bloquer la
  * soumission avec — cf. audit TANZEN, section Finance).
  */
-/** Paramètres financiers de la règle EN VIGUEUR, copiés sur le prêt à l'octroi — jamais relus ensuite (`Loan.loanMode`). */
-function historisedTerms(rule: LoanRule): Pick<Loan, 'loanMode' | 'interestRate' | 'interestPeriod'> {
-  return { loanMode: rule.loanMode, interestRate: rule.interestRate, interestPeriod: rule.interestPeriod };
+/**
+ * Paramètres financiers de la règle EN VIGUEUR, copiés sur le prêt à l'octroi — jamais relus ensuite
+ * (`Loan.loanMode`, `Loan.penalty*`) : une modification ultérieure de la règle ne touche aucun prêt accordé.
+ * Périodicité : toujours `INTEREST_PERIOD` (mensuelle), quelle que soit la valeur historique de la règle.
+ */
+function historisedTerms(rule: LoanRule): Pick<Loan, 'loanMode' | 'interestRate' | 'interestPeriod' | 'penaltyEnabled' | 'penaltyType' | 'penaltyValue'> {
+  const penaltyEnabled = rule.penaltyEnabled === true && rule.penaltyType !== null && rule.penaltyValue > 0;
+  return {
+    loanMode: rule.loanMode, interestRate: rule.interestRate, interestPeriod: INTEREST_PERIOD,
+    penaltyEnabled, penaltyType: penaltyEnabled ? rule.penaltyType : null, penaltyValue: penaltyEnabled ? rule.penaltyValue : 0,
+  };
 }
 
 /**
- * DETTE COURANTE d'un prêt à une date — RÈGLES MÉTIER DE RÉFÉRENCE (2026-09-28) : capital + intérêts
- * générés selon le type historisé du prêt − remboursements réalisés (`loanDebtAt`, même calcul que le
- * bilan). Remplace l'ancien encours contractuel figé (`totalRepayable − paidAmount`).
+ * DETTE COURANTE d'un prêt à une date — RÈGLES MÉTIER DE RÉFÉRENCE (2026-09-28, 2026-09-29) : capital +
+ * intérêts mensuels générés selon le type historisé du prêt (y compris après l'échéance) + pénalités de
+ * retard − remboursements réalisés (`loanDebtAt`, même calcul que le bilan). Remplace l'ancien encours
+ * contractuel figé (`totalRepayable − paidAmount`).
  */
-function currentDebt(loan: Loan, date: string = today()): number {
-  return loanDebtAt(loan, repayments.filter((repayment) => repayment.loanId === loan.id && repayment.tenantId === loan.tenantId), date);
+function loanRepaymentsOf(loan: Loan): Repayment[] {
+  return repayments.filter((repayment) => repayment.loanId === loan.id && repayment.tenantId === loan.tenantId);
 }
+
+function currentDebt(loan: Loan, date: string = today()): number {
+  return loanDebtAt(loan, loanRepaymentsOf(loan), date);
+}
+
 
 /** Prêt tel qu'exposé aux écrans : `outstanding` = dette courante à `date` (du jour par défaut), jamais l'encours contractuel stocké. */
 function withCurrentDebt(loan: Loan, date: string = today()): Loan {
-  return { ...loan, outstanding: currentDebt(loan, date) };
+  if (loan.disbursementDate > date) return { ...loan, outstanding: 0, penaltyOutstanding: 0 };
+  const state = loanState(loan, loanRepaymentsOf(loan), date);
+  return { ...loan, outstanding: state.debt, penaltyOutstanding: state.penaltyDebt };
 }
 
 function countActiveLoans(tenantId: string, memberId: string): number {
@@ -187,9 +211,10 @@ function recordCreditAudit(params: { tenantId: string; action: string; resourceI
  * négatif, nul ou SUPÉRIEUR à cette dette est refusé (aucune mutation). À appeler AVANT d'enregistrer
  * le `Repayment` (la dette avant remboursement ne doit pas l'inclure).
  */
-function applyRepaymentToLoan(loan: Loan, input: Pick<RepaymentInput, 'principalPart' | 'interestPart' | 'paymentDate' | 'status'>): boolean {
-  if (input.principalPart < 0 || input.interestPart < 0) return false;
-  const amount = input.principalPart + input.interestPart;
+function applyRepaymentToLoan(loan: Loan, input: Pick<RepaymentInput, 'principalPart' | 'interestPart' | 'penaltyPart' | 'paymentDate' | 'status'>): boolean {
+  const penaltyPart = input.penaltyPart ?? 0;
+  if (input.principalPart < 0 || input.interestPart < 0 || penaltyPart < 0) return false;
+  const amount = input.principalPart + input.interestPart + penaltyPart;
   if (input.status === 'completed') {
     if (amount <= 0) return false;
     const debtBefore = currentDebt(loan, input.paymentDate);
@@ -669,7 +694,7 @@ export const creditService = {
   countActiveLoans: (tenantId: string, memberId: string) => mockRequest(() => countActiveLoans(tenantId, memberId)),
   createLoan: (input: LoanInput) =>
     mockRequest(() => {
-      const loan: Loan = { id: `L-${String(loans.length + 1).padStart(3, '0')}`, outstanding: input.principal, progress: 0, paidAmount: 0, status: 'active', disbursementDate: today(), lastPaymentDate: today(), penalties: [], documents: [], activities: [], ...input };
+      const loan: Loan = { id: `L-${String(loans.length + 1).padStart(3, '0')}`, outstanding: input.principal, progress: 0, paidAmount: 0, status: 'active', disbursementDate: today(), lastPaymentDate: today(), penalties: [], documents: [], activities: [], penaltyEnabled: false, penaltyType: null, penaltyValue: 0, ...input };
       loans.push(loan);
       return loan;
     }),
@@ -703,7 +728,7 @@ export const creditService = {
       if (!loan) return undefined;
       const applied = applyRepaymentToLoan(loan, input);
       if (!applied) return undefined;
-      const repayment: Repayment = { id: `RP-${String(repayments.length + 1).padStart(3, '0')}`, tenantId, borrower: loan.borrower, amount: input.principalPart + input.interestPart, ...input };
+      const repayment: Repayment = { id: `RP-${String(repayments.length + 1).padStart(3, '0')}`, tenantId, borrower: loan.borrower, amount: input.principalPart + input.interestPart + (input.penaltyPart ?? 0), ...input };
       repayments.push(repayment);
       return repayment;
     }),
@@ -722,11 +747,14 @@ export const creditService = {
       const loan = getTenantScoped(loans, (item) => item.id === input.loanId, tenantId);
       if (!loan) return undefined;
       // Répartition : explicite si fournie (compatibilité), sinon calculée par le métier Crédit au prorata du prêt.
-      const split = input.principalPart !== undefined || input.interestPart !== undefined
-        ? { principalPart: input.principalPart ?? 0, interestPart: input.interestPart ?? 0 }
-        : splitRepaymentProRata(loan, input.amount ?? 0);
-      const amount = split.principalPart + split.interestPart;
-      if (split.principalPart < 0 || split.interestPart < 0 || amount <= 0) return undefined;
+      // Pénalités d'abord isolées selon l'imputation du moteur (dette hors pénalités en premier), le reste ventilé capital / intérêts.
+      const explicit = input.principalPart !== undefined || input.interestPart !== undefined || input.penaltyPart !== undefined;
+      const split = explicit
+        ? { principalPart: input.principalPart ?? 0, interestPart: input.interestPart ?? 0, penaltyPart: input.penaltyPart ?? 0 }
+        : splitRepayment(loan, input.amount ?? 0, loanState(loan, loanRepaymentsOf(loan), input.paymentDate).interestDebt);
+      const { penaltyPart } = split;
+      const amount = split.principalPart + split.interestPart + penaltyPart;
+      if (split.principalPart < 0 || split.interestPart < 0 || penaltyPart < 0 || amount <= 0) return undefined;
       // Remboursement plafonné à la DETTE COURANTE à sa date (règles de référence) : jamais au-delà.
       if (amount > currentDebt(loan, input.paymentDate)) return undefined;
       // L'ENCAISSEMENT est un crédit de la caisse, du montant exact du remboursement.
@@ -743,8 +771,8 @@ export const creditService = {
       if (!written || written.length === 0) return undefined;
       const transaction = written[0];
 
-      applyRepaymentToLoan(loan, { principalPart: split.principalPart, interestPart: split.interestPart, paymentDate: input.paymentDate, status: 'completed' });
-      const repayment: Repayment = { id: `RP-${String(repayments.length + 1).padStart(3, '0')}`, tenantId, borrower: loan.borrower, amount, loanId: input.loanId, paymentDate: input.paymentDate, principalPart: split.principalPart, interestPart: split.interestPart, status: 'completed' };
+      applyRepaymentToLoan(loan, { principalPart: split.principalPart, interestPart: split.interestPart, penaltyPart, paymentDate: input.paymentDate, status: 'completed' });
+      const repayment: Repayment = { id: `RP-${String(repayments.length + 1).padStart(3, '0')}`, tenantId, borrower: loan.borrower, amount, loanId: input.loanId, paymentDate: input.paymentDate, principalPart: split.principalPart, interestPart: split.interestPart, ...(penaltyPart > 0 ? { penaltyPart } : {}), status: 'completed' };
       repayments.push(repayment);
       // Traçabilité : encaissement → remboursement → prêt (le remboursement reste l'événement métier, la transaction son mouvement financier).
       for (const collected of written) {

@@ -34,7 +34,7 @@ function renderFinance(route: string) {
 
 function makeLoan(partial: Partial<Loan>): Loan {
   return {
-    id: 'L-TEST', tenantId: 'T-001', memberId: 'M-001', borrower: 'Fatou Ndiaye', principal: 300_000, loanMode: 'COMPOUND', interestRate: 10, interestPeriod: 'MONTHLY',
+    id: 'L-TEST', tenantId: 'T-001', memberId: 'M-001', borrower: 'Fatou Ndiaye', principal: 300_000, loanMode: 'COMPOUND', interestRate: 10, interestPeriod: 'MONTHLY', penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
     interestAmount: 30_000, totalRepayable: 330_000, paidAmount: 0, outstanding: 330_000, disbursementDate: '2026-06-01',
     maturityDate: '2027-06-01', monthlyPayment: 30_000, nextPaymentDate: '2026-09-01', lastPaymentDate: '2026-08-01',
     status: 'active', progress: 0, applicationId: '', tenantName: 'Coopérative Sutura', penalties: [], documents: [], activities: [],

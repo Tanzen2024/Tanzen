@@ -387,7 +387,7 @@ describe('Espace de travail du Tour — Montant d’achat par bénéficiaire (ma
     await settle(user, 'Modou Faye', 50_000);
     const summary = screen.getByText('Somme achats').closest('div')!;
     expect(within(summary).getByText(/150.?000/)).toBeInTheDocument();
-  });
+  }, 30_000); // parcours UI complet (3 ajouts + 3 règlements) : plus long que le délai par défaut de 5 s en suite complète
 
   it('CAS 3 — montants d’achat différents par bénéficiaire : la Somme achats est bien la SOMME, jamais N × un montant fixe', async () => {
     const user = userEvent.setup();

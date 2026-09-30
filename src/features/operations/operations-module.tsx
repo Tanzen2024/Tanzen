@@ -35,6 +35,7 @@ import type { Notification, NotificationPriority } from '@/mocks/operations/noti
 import type { DocumentRecord, DocumentCategory, DocumentEntityType } from '@/mocks/operations/documents';
 import type { TableColumn, StatusTone } from '@/types/ui';
 import { formatDate, formatNumber } from '@/lib/utils';
+import { INTEREST_PERIOD } from '@/lib/finance';
 import { formatCurrency } from '@/constants/currencies';
 import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
 
@@ -48,7 +49,7 @@ const ENTITY_KEY: Record<WorkflowRequest['entityType'], string> = { application:
 /** Libellés des champs d'un ChangeSet Membre (besoin §20, tableau avant/après) — réutilise le vocabulaire déjà établi par `organization-module.tsx` (`PersonalTab`) plutôt que d'en inventer un second, sous forme de clés `operations` locales (le `T` de ce module reste borné à `'operations' | 'nav'`, pas d'accès direct à la section `organization`). */
 const MEMBER_CHANGE_FIELD_KEY: Record<string, string> = { firstName: 'changeFieldFirstName', lastName: 'changeFieldLastName', gender: 'changeFieldGender', email: 'changeFieldEmail', phone: 'changeFieldPhone', occupation: 'changeFieldOccupation', nationality: 'changeFieldNationality', address: 'changeFieldAddress', status: 'changeFieldStatus', matricule: 'changeFieldMatricule' };
 /** Libellés des champs d'un ChangeSet de RÈGLE DE CRÉDIT (double approbation WD-009). */
-const CREDIT_RULE_CHANGE_FIELD_KEY: Record<string, string> = { name: 'ruleFieldName', allowLoans: 'ruleFieldAllowLoans', loanMode: 'ruleFieldLoanMode', minAmount: 'ruleFieldMinAmount', maxAmount: 'ruleFieldMaxAmount', interestRate: 'ruleFieldInterestRate', interestPeriod: 'ruleFieldInterestPeriod', durationMonths: 'ruleFieldDurationMonths', maxActiveLoans: 'ruleFieldMaxActiveLoans', maxLoanExposure: 'ruleFieldMaxLoanExposure', requiresGuarantor: 'ruleFieldRequiresGuarantor', minGuarantors: 'ruleFieldMinGuarantors', maxGuarantors: 'ruleFieldMaxGuarantors', guaranteeTypeRequired: 'ruleFieldGuaranteeType', guaranteeRatio: 'ruleFieldGuaranteeRatio', allowSelfGuarantee: 'ruleFieldAllowSelfGuarantee', requiresApproval: 'ruleFieldRequiresApproval', approvalLevel: 'ruleFieldApprovalLevel' };
+const CREDIT_RULE_CHANGE_FIELD_KEY: Record<string, string> = { name: 'ruleFieldName', allowLoans: 'ruleFieldAllowLoans', loanMode: 'ruleFieldLoanMode', minAmount: 'ruleFieldMinAmount', maxAmount: 'ruleFieldMaxAmount', interestRate: 'ruleFieldInterestRate', interestPeriod: 'ruleFieldInterestPeriod', durationMonths: 'ruleFieldDurationMonths', penaltyEnabled: 'ruleFieldPenaltyEnabled', penaltyType: 'ruleFieldPenaltyType', penaltyValue: 'ruleFieldPenaltyValue', maxActiveLoans: 'ruleFieldMaxActiveLoans', maxLoanExposure: 'ruleFieldMaxLoanExposure', requiresGuarantor: 'ruleFieldRequiresGuarantor', minGuarantors: 'ruleFieldMinGuarantors', maxGuarantors: 'ruleFieldMaxGuarantors', guaranteeTypeRequired: 'ruleFieldGuaranteeType', guaranteeRatio: 'ruleFieldGuaranteeRatio', allowSelfGuarantee: 'ruleFieldAllowSelfGuarantee', requiresApproval: 'ruleFieldRequiresApproval', approvalLevel: 'ruleFieldApprovalLevel' };
 const PRIORITY_TONE: Record<NotificationPriority, StatusTone> = { high: 'error', medium: 'warning', low: 'info' };
 const PRIORITY_KEY: Record<NotificationPriority, string> = { high: 'priorityHigh', medium: 'priorityMedium', low: 'priorityLow' };
 const CATEGORY_KEY: Record<DocumentCategory, string> = { idDocument: 'categoryIdDocument', contract: 'categoryContract', statement: 'categoryStatement', minutes: 'categoryMinutes', report: 'categoryReport', other: 'categoryOther' };
@@ -199,7 +200,8 @@ function LoanRequestDetails({ t, tenantId, applicationId, money }: { t: T; tenan
     [t('operations', 'loanFundingCashbox'), application.cashboxId ? titleOf(application.cashboxId) : '—'],
     ...(application.complementaryFunding && application.complementaryFunding.length > 0 ? [[t('operations', 'loanComplementaryFunding'), application.complementaryFunding.map((part) => `${titleOf(part.cashboxId)} ${money(part.amount)}`).join(' · ')] as [string, ReactNode]] : []),
     ...(rule ? [
-      [t('operations', 'loanTerms'), `${rule.interestRate} % · ${t('finance', 'loanMode' + rule.loanMode)} · ${t('finance', 'interestPeriod' + rule.interestPeriod)}`] as [string, ReactNode],
+      [t('operations', 'loanTerms'), `${rule.interestRate} % · ${t('finance', 'loanMode' + rule.loanMode)} · ${t('finance', 'interestPeriod' + INTEREST_PERIOD)}`] as [string, ReactNode],
+      [t('finance', 'latePenalty'), !rule.penaltyEnabled || !rule.penaltyType ? t('finance', 'penaltyDisabled') : t('finance', `penaltySummary${rule.penaltyType}`, { value: rule.penaltyType === 'FIXED' ? money(rule.penaltyValue) : String(rule.penaltyValue) })] as [string, ReactNode],
       [t('operations', 'loanDuration'), t('operations', 'loanDurationMonths', { count: String(rule.durationMonths) })] as [string, ReactNode],
       [t('operations', 'loanGuarantorRequired'), t('operations', rule.requiresGuarantor ? 'yes' : 'no')] as [string, ReactNode],
     ] : []),

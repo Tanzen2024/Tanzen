@@ -1,14 +1,14 @@
 import { cashboxEntryEffect } from '@/mocks/finance/cashboxes';
 import type { CashboxRecord } from '@/mocks/finance/cashboxes';
 import type { Loan } from '@/mocks/finance/loans';
-import type { LoanRuleInterestPeriod, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import type { LoanPenaltyType, LoanRuleInterestPeriod, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { Repayment } from '@/mocks/finance/repayments';
 import type { Transaction } from '@/mocks/finance/transactions';
 import { isLoanDisbursement, isLoanRepayment, type TransactionSubcategory } from '@/mocks/finance/transaction-classification';
 import { referenceDate } from './reference-date';
-import { addDays, addMonths, cashboxPortion, distributeInterest, loanFundingShares, loanInterestAccruals, type GainLine, type InterestAccrual, type InterestDistribution, type TontinePurchaseGroup } from './interest-distribution';
+import { addDays, addMonths, cashboxPortion, distributeInterest, INTEREST_PERIOD, loanFundingShares, loanInterestAccruals, loanPenaltyAccruals, type GainLine, type InterestAccrual, type InterestDistribution, type PenaltyAccrual, type TontinePurchaseGroup } from './interest-distribution';
 
-export { loanInterestAccruals, type InterestAccrual } from './interest-distribution';
+export { loanInterestAccruals, loanPenaltyAccruals, type InterestAccrual, type PenaltyAccrual } from './interest-distribution';
 
 /**
  * BILAN FINANCIER DES ADHÉRENTS — un, plusieurs ou tous les adhérents. Fonctions PURES : le
@@ -18,9 +18,10 @@ export { loanInterestAccruals, type InterestAccrual } from './interest-distribut
  * redistributions : RÈGLES MÉTIER DE RÉFÉRENCE du 2026-09-28 (voir interest-distribution.ts) :
  *   - ÉPARGNE VERSÉE = Σ ÉPARGNE − Σ retraits (AUTRES › RETRAIT) de l'adhérent, signées par leur
  *     type, toutes caisses ou la seule caisse filtrée.
- *   - DETTE (flux 1) = capital + intérêts générés − remboursements (dossier de prêt, `Repayment`
- *     « completed ») ; intérêts : GLOBAL déterminé à l'origine puis aucun, SIMPLE sur le capital de
- *     référence (dette restante après le dernier remboursement), COMPOUND sur la dette courante.
+ *   - DETTE (flux 1) = capital + intérêts générés + pénalités de retard − remboursements (dossier de prêt,
+ *     `Repayment` « completed ») ; intérêts MENSUELS : GLOBAL déterminé à l'origine puis aucun, SIMPLE sur
+ *     le capital de référence, COMPOUND sur la dette courante hors pénalités — y compris après `maturityDate`.
+ *     Intérêts et pénalités restent deux montants DISTINCTS partout (colonnes, détails, totaux).
  *   - GAINS (flux 2 et 3) = intérêts redistribués + gains Achat tontine reçus, calculés SÉPARÉMENT :
  *     ils ne réduisent jamais la dette de l'adhérent. SOLDE ÉPARGNE = épargne versée + gains.
  *   - Les autres mouvements (cotisation, inscription, secours, achat tontine…) sont affichés À PART.
@@ -38,7 +39,7 @@ export type BalanceSheetCtx = {
   cashboxes: CashboxRecord[];
   /** Mode de la règle de crédit ACTUELLE — affiché pour un adhérent sans prêt ; les calculs utilisent le mode historisé de chaque prêt. */
   loanMode: LoanRuleLoanMode;
-  /** Périodicité de la règle actuelle — découpage des lignes du relevé (défaut : mensuel) ; les intérêts suivent la périodicité historisée du prêt. */
+  /** @deprecated Ignoré depuis le 2026-09-29 : lignes du relevé et intérêts TOUJOURS mensuels (`INTEREST_PERIOD`). */
   interestPeriod?: LoanRuleInterestPeriod;
   /** Achats de tontine et membres de leur tontine (redistribution « Achat tontine »). */
   tontinePurchases?: TontinePurchaseGroup[];
@@ -55,7 +56,7 @@ export type BalanceSheetParams = {
   withOperations?: boolean;
   /** Historique mensuel (défaut : oui) — inutile pour un simple solde d'ouverture. */
   withMonths?: boolean;
-  /** Lignes du relevé (une par période de la périodicité des intérêts) de cette date jusqu'à `asOfDate`. */
+  /** Lignes MENSUELLES du relevé de cette date jusqu'à `asOfDate`. */
   linesFrom?: string;
   /** Redistribution déjà calculée (jusqu'à une date ≥ `asOfDate`) — évite de la refaire. */
   distribution?: InterestDistribution;
@@ -63,13 +64,16 @@ export type BalanceSheetParams = {
 
 export type MemberLoanLine = {
   loanId: string;
-  /** Type d'intérêt et périodicité HISTORISÉS du prêt. */
+  /** Type d'intérêt HISTORISÉ du prêt (intérêts toujours mensuels). */
   loanMode: LoanRuleLoanMode;
-  interestPeriod: LoanRuleInterestPeriod;
   disbursementDate: string;
   maturityDate: string;
-  /** Taux du prêt (% par période). */
+  /** Taux du prêt (% par mois). */
   rate: number;
+  /** Pénalité de retard HISTORISÉE du prêt. */
+  penaltyEnabled: boolean;
+  penaltyType: LoanPenaltyType | null;
+  penaltyValue: number;
   /** Part du prêt imputée au périmètre (1 = toutes caisses ; sinon part financée par la caisse filtrée). */
   share: number;
   /** Caisses qui ont financé le prêt (où son intérêt est généré et redistribué). */
@@ -77,6 +81,8 @@ export type MemberLoanLine = {
   principal: number;
   /** Intérêts générés à la date (dette de l'emprunteur). */
   interestAccrued: number;
+  /** Pénalités de retard générées à la date (dette de l'emprunteur, jamais redistribuées). */
+  penaltiesAccrued: number;
   repaid: number;
   outstanding: number;
   status: 'active' | 'repaid';
@@ -84,6 +90,9 @@ export type MemberLoanLine = {
 
 /** Intérêt généré par un prêt de l'adhérent (traçabilité côté emprunteur). */
 export type MemberInterestLine = InterestAccrual & { loanId: string };
+
+/** Pénalité de retard générée par un prêt de l'adhérent. */
+export type MemberPenaltyLine = PenaltyAccrual & { loanId: string };
 
 export type BalanceMonthLine = {
   /** `YYYY-MM`. */
@@ -96,13 +105,14 @@ export type BalanceMonthLine = {
   interest: number;
   /** Intérêts générés cumulés depuis l'origine. */
   cumulativeInterest: number;
+  /** Pénalités de retard générées pendant le mois. */
+  penalties: number;
 };
 
 /**
- * Ligne du RELEVÉ de l'adhérent — une par période de la périodicité des intérêts, bornée à la
- * période du bilan. Par construction :
+ * Ligne du RELEVÉ de l'adhérent — une par MOIS civil, bornée à la période du bilan. Par construction :
  *   soldeÉpargne = soldeÉpargne(ligne précédente) + épargne + gains ;
- *   detteRestante = reportDette + prêts + intérêts − remboursements.
+ *   detteRestante = reportDette + prêts + intérêts + pénalités − remboursements.
  */
 export type StatementLine = {
   start: string;
@@ -118,6 +128,8 @@ export type StatementLine = {
   loansDisbursed: number;
   /** Intérêts générés par ses prêts (ajoutés à sa dette). */
   interest: number;
+  /** Pénalités de retard générées par ses prêts (ajoutées à sa dette, colonne distincte des intérêts). */
+  penalties: number;
   repayments: number;
   /** Dette restante à la fin de la période. */
   debtRemaining: number;
@@ -138,12 +150,15 @@ export type MemberBalanceSheet = {
   otherMovementsTotal: number;
   debt: number;
   interestAccrued: number;
+  penaltiesAccrued: number;
   repayments: number;
   netPosition: number;
   loans: MemberLoanLine[];
   months: BalanceMonthLine[];
   /** Détail des intérêts générés par ses prêts (≤ date). */
   interestLines: MemberInterestLine[];
+  /** Détail des pénalités de retard générées par ses prêts (≤ date). */
+  penaltyLines: MemberPenaltyLine[];
   /** Détail des gains redistribués reçus (≤ date, caisse filtrée le cas échéant). */
   gainLines: GainLine[];
   /** Σ transactions REMBOURSEMENT du journal (même périmètre) — contrôle de cohérence. */
@@ -163,6 +178,7 @@ export type BalanceSheetSummary = {
   gains: number;
   debt: number;
   interestAccrued: number;
+  penaltiesAccrued: number;
   repayments: number;
   netPosition: number;
   months: BalanceMonthLine[];
@@ -239,26 +255,26 @@ const signed = (tx: Transaction) => (tx.type === 'credit' ? tx.amount : -tx.amou
 const isWithdrawal = (tx: Transaction) => tx.category === 'AUTRES' && tx.subcategory === 'RETRAIT';
 
 /** `portion` : part ENTIÈRE d'un montant du prêt imputée au périmètre (identité sans caisse filtrée). */
-type PreparedLoan = { loan: Loan; share: number; portion: (amount: number) => number; funding: { cashboxId: string; share: number }[]; repayments: Repayment[]; accruals: InterestAccrual[] };
+type PreparedLoan = { loan: Loan; share: number; portion: (amount: number) => number; funding: { cashboxId: string; share: number }[]; repayments: Repayment[]; accruals: InterestAccrual[]; penalties: PenaltyAccrual[] };
 
 function loanStateAt(prepared: PreparedLoan, date: string) {
   const { portion } = prepared;
   const interestAccrued = prepared.accruals.filter((accrual) => accrual.date <= date).reduce((sum, accrual) => sum + portion(accrual.amount), 0);
+  const penaltiesAccrued = prepared.penalties.filter((penalty) => penalty.date <= date).reduce((sum, penalty) => sum + portion(penalty.amount), 0);
   const repaid = prepared.repayments.filter((repayment) => repayment.status === 'completed' && repayment.paymentDate <= date).reduce((sum, repayment) => sum + portion(repayment.amount), 0);
   const principal = portion(prepared.loan.principal);
-  return { principal, interestAccrued, repaid, outstanding: principal + interestAccrued - repaid };
+  return { principal, interestAccrued, penaltiesAccrued, repaid, outstanding: principal + interestAccrued + penaltiesAccrued - repaid };
 }
 
 type DatedAmount = { date: string; amount: number };
 
 /**
- * Relevé par période — balayage UNIQUE d'événements triés (épargne, gains, décaissements, intérêts,
- * remboursements), mêmes montants que `loanStateAt` et la redistribution : aucune règle nouvelle,
- * seulement un regroupement par période. En périodicité journalière, seules les journées
- * mouvementées sont listées.
+ * Relevé MENSUEL — balayage UNIQUE d'événements triés (épargne, gains, décaissements, intérêts,
+ * pénalités, remboursements), mêmes montants que `loanStateAt` et la redistribution : aucune règle
+ * nouvelle, seulement un regroupement par mois civil. Intérêts et pénalités restent séparés.
  */
-function statementLines(savingsEvents: DatedAmount[], gainEvents: DatedAmount[], prepared: PreparedLoan[], from: string, to: string, period: LoanRuleInterestPeriod): StatementLine[] {
-  type Kind = 'savings' | 'gain' | 'loan' | 'interest' | 'repayment';
+function statementLines(savingsEvents: DatedAmount[], gainEvents: DatedAmount[], prepared: PreparedLoan[], from: string, to: string): StatementLine[] {
+  type Kind = 'savings' | 'gain' | 'loan' | 'interest' | 'penalty' | 'repayment';
   const events: (DatedAmount & { kind: Kind })[] = [
     ...savingsEvents.map((event) => ({ ...event, kind: 'savings' as const })),
     ...gainEvents.map((event) => ({ ...event, kind: 'gain' as const })),
@@ -266,10 +282,11 @@ function statementLines(savingsEvents: DatedAmount[], gainEvents: DatedAmount[],
   for (const item of prepared) {
     events.push({ date: item.loan.disbursementDate, amount: item.portion(item.loan.principal), kind: 'loan' });
     for (const accrual of item.accruals) events.push({ date: accrual.date, amount: item.portion(accrual.amount), kind: 'interest' });
+    for (const penalty of item.penalties) events.push({ date: penalty.date, amount: item.portion(penalty.amount), kind: 'penalty' });
     for (const repayment of item.repayments) if (repayment.status === 'completed') events.push({ date: repayment.paymentDate, amount: item.portion(repayment.amount), kind: 'repayment' });
   }
   events.sort((a, b) => a.date.localeCompare(b.date));
-  const debtEffect = (event: { kind: Kind; amount: number }) => (event.kind === 'loan' || event.kind === 'interest' ? event.amount : event.kind === 'repayment' ? -event.amount : 0);
+  const debtEffect = (event: { kind: Kind; amount: number }) => (event.kind === 'loan' || event.kind === 'interest' || event.kind === 'penalty' ? event.amount : event.kind === 'repayment' ? -event.amount : 0);
   let pointer = 0;
   let savingsBalance = 0;
   let debt = 0;
@@ -279,23 +296,22 @@ function statementLines(savingsEvents: DatedAmount[], gainEvents: DatedAmount[],
     else debt += debtEffect(event);
   }
   const lines: StatementLine[] = [];
-  for (const bucket of periodBuckets(from, to, period)) {
-    const line: StatementLine = { ...bucket, savings: 0, gains: 0, savingsBalance, debtCarried: debt, loansDisbursed: 0, interest: 0, repayments: 0, debtRemaining: debt };
-    let active = false;
+  for (const bucket of periodBuckets(from, to, INTEREST_PERIOD)) {
+    const line: StatementLine = { ...bucket, savings: 0, gains: 0, savingsBalance, debtCarried: debt, loansDisbursed: 0, interest: 0, penalties: 0, repayments: 0, debtRemaining: debt };
     while (pointer < events.length && events[pointer].date <= bucket.end) {
       const event = events[pointer++];
-      active = true;
       if (event.kind === 'savings') line.savings += event.amount;
       else if (event.kind === 'gain') line.gains += event.amount;
       else if (event.kind === 'loan') line.loansDisbursed += event.amount;
       else if (event.kind === 'interest') line.interest += event.amount;
+      else if (event.kind === 'penalty') line.penalties += event.amount;
       else line.repayments += event.amount;
       debt += debtEffect(event);
     }
     savingsBalance += line.savings + line.gains;
     line.savingsBalance = savingsBalance;
     line.debtRemaining = debt;
-    if (period !== 'DAILY' || active) lines.push(line);
+    lines.push(line);
   }
   return lines;
 }
@@ -350,7 +366,8 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
       }
       const loanRepayments = repaymentsByLoan.get(loan.id) ?? [];
       const funding = shares.flatMap((item) => { const id = cashboxIdByNumber.get(item.cashboxNumber); return id ? [{ cashboxId: id, share: item.share }] : []; });
-      prepared.push({ loan, share, portion, funding, repayments: loanRepayments, accruals: loanInterestAccruals(loan, loanRepayments) });
+      // Date limite du calcul = date de situation (les intérêts ne s'arrêtent plus à l'échéance).
+      prepared.push({ loan, share, portion, funding, repayments: loanRepayments, accruals: loanInterestAccruals(loan, loanRepayments, asOfDate), penalties: loanPenaltyAccruals(loan, loanRepayments, asOfDate) });
     }
 
     const loanLines: MemberLoanLine[] = prepared.map((item) => {
@@ -358,14 +375,17 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
       return {
         loanId: item.loan.id,
         loanMode: item.loan.loanMode,
-        interestPeriod: item.loan.interestPeriod,
         disbursementDate: item.loan.disbursementDate,
         maturityDate: item.loan.maturityDate,
         rate: item.loan.interestRate,
+        penaltyEnabled: item.loan.penaltyEnabled,
+        penaltyType: item.loan.penaltyType,
+        penaltyValue: item.loan.penaltyValue,
         share: item.share,
         funding: item.funding,
         principal: state.principal,
         interestAccrued: state.interestAccrued,
+        penaltiesAccrued: state.penaltiesAccrued,
         repaid: state.repaid,
         outstanding: state.outstanding,
         status: state.outstanding > 0 ? 'active' : 'repaid',
@@ -375,10 +395,15 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
       .filter((accrual) => accrual.date <= asOfDate)
       .map((accrual) => ({ ...accrual, amount: item.portion(accrual.amount), base: item.portion(accrual.base), debtBefore: item.portion(accrual.debtBefore), loanId: item.loan.id })))
       .sort((a, b) => a.date.localeCompare(b.date));
+    const penaltyLines: MemberPenaltyLine[] = prepared.flatMap((item) => item.penalties
+      .filter((penalty) => penalty.date <= asOfDate)
+      .map((penalty) => ({ ...penalty, amount: item.portion(penalty.amount), base: item.portion(penalty.base), debtBefore: item.portion(penalty.debtBefore), loanId: item.loan.id })))
+      .sort((a, b) => a.date.localeCompare(b.date));
 
     const savings = savingsDeposits - withdrawals;
     const debt = loanLines.reduce((sum, line) => sum + line.outstanding, 0);
     const interestAccrued = loanLines.reduce((sum, line) => sum + line.interestAccrued, 0);
+    const penaltiesAccrued = loanLines.reduce((sum, line) => sum + line.penaltiesAccrued, 0);
     const repaid = loanLines.reduce((sum, line) => sum + line.repaid, 0);
 
     // Historique mensuel : stocks en fin de mois (bornés à la date de situation), intérêts du mois.
@@ -394,6 +419,7 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
         while (pointer < savingsTx.length && referenceDate(savingsTx[pointer]) <= end) runningSavings += effect(savingsTx[pointer++]);
         let monthDebt = 0;
         let monthInterest = 0;
+        let monthPenalties = 0;
         let cumulativeInterest = 0;
         for (const item of prepared) {
           if (item.loan.disbursementDate > end) continue;
@@ -401,8 +427,9 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
           monthDebt += state.outstanding;
           cumulativeInterest += state.interestAccrued;
           monthInterest += item.accruals.filter((accrual) => monthOf(accrual.date) === month && accrual.date <= end).reduce((sum, accrual) => sum + item.portion(accrual.amount), 0);
+          monthPenalties += item.penalties.filter((penalty) => monthOf(penalty.date) === month && penalty.date <= end).reduce((sum, penalty) => sum + item.portion(penalty.amount), 0);
         }
-        months.push({ month, savings: runningSavings, debt: monthDebt, interest: monthInterest, cumulativeInterest });
+        months.push({ month, savings: runningSavings, debt: monthDebt, interest: monthInterest, cumulativeInterest, penalties: monthPenalties });
       }
     }
 
@@ -418,11 +445,13 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
       otherMovementsTotal: Object.values(otherMovements).reduce((sum, value) => sum + (value ?? 0), 0),
       debt,
       interestAccrued,
+      penaltiesAccrued,
       repayments: repaid,
       netPosition: savings + gains - debt,
       loans: loanLines,
       months,
       interestLines,
+      penaltyLines,
       gainLines,
       journalRepayments,
       repaymentsMismatch: Math.round(journalRepayments) !== Math.round(repaid),
@@ -432,7 +461,7 @@ export function memberBalanceSheets(ctx: BalanceSheetCtx, params: BalanceSheetPa
     if (params.linesFrom && params.linesFrom <= asOfDate) {
       const savingsEvents = inScope.filter((tx) => tx.category === 'EPARGNE' || isWithdrawal(tx)).map((tx) => ({ date: referenceDate(tx), amount: effect(tx) }));
       const gainEvents = gainLines.map((line) => ({ date: line.date, amount: line.gain }));
-      sheet.lines = statementLines(savingsEvents, gainEvents, prepared, params.linesFrom, asOfDate, ctx.interestPeriod ?? 'MONTHLY');
+      sheet.lines = statementLines(savingsEvents, gainEvents, prepared, params.linesFrom, asOfDate);
     }
     return sheet;
   });
@@ -443,11 +472,12 @@ export function summarizeBalanceSheets(sheets: MemberBalanceSheet[]): BalanceShe
   const byMonth = new Map<string, BalanceMonthLine>();
   for (const sheet of sheets) {
     for (const line of sheet.months) {
-      const current = byMonth.get(line.month) ?? { month: line.month, savings: 0, debt: 0, interest: 0, cumulativeInterest: 0 };
+      const current = byMonth.get(line.month) ?? { month: line.month, savings: 0, debt: 0, interest: 0, cumulativeInterest: 0, penalties: 0 };
       current.savings += line.savings;
       current.debt += line.debt;
       current.interest += line.interest;
       current.cumulativeInterest += line.cumulativeInterest;
+      current.penalties += line.penalties;
       byMonth.set(line.month, current);
     }
   }
@@ -458,6 +488,7 @@ export function summarizeBalanceSheets(sheets: MemberBalanceSheet[]): BalanceShe
     gains: sum((sheet) => sheet.gains),
     debt: sum((sheet) => sheet.debt),
     interestAccrued: sum((sheet) => sheet.interestAccrued),
+    penaltiesAccrued: sum((sheet) => sheet.penaltiesAccrued),
     repayments: sum((sheet) => sheet.repayments),
     netPosition: sum((sheet) => sheet.netPosition),
     months: [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month)),
@@ -478,6 +509,7 @@ export type PeriodMovements = {
   gains: number;
   loansDisbursed: number;
   interestAccrued: number;
+  penaltiesAccrued: number;
   repayments: number;
   otherMovements: Partial<Record<TransactionSubcategory, number>>;
 };
@@ -497,7 +529,7 @@ export type PeriodSummary = { memberCount: number; opening: PeriodPosition; move
 export type PeriodParams = Omit<BalanceSheetParams, 'asOfDate' | 'historyFrom' | 'linesFrom' | 'distribution'> & {
   from: string;
   to: string;
-  /** Relevé par période de la périodicité des intérêts (`MemberBalanceSheet.lines`). */
+  /** Relevé mensuel (`MemberBalanceSheet.lines`). */
   withLines?: boolean;
 };
 
@@ -520,6 +552,7 @@ export function memberPeriodStatements(ctx: BalanceSheetCtx, params: PeriodParam
     }
     if (end.operations) end.operations = end.operations.filter((tx) => referenceDate(tx) >= params.from);
     end.interestLines = end.interestLines.filter((line) => line.date >= params.from);
+    end.penaltyLines = end.penaltyLines.filter((line) => line.date >= params.from);
     end.gainLines = end.gainLines.filter((line) => line.date >= params.from);
     return {
       memberId: end.memberId,
@@ -533,6 +566,7 @@ export function memberPeriodStatements(ctx: BalanceSheetCtx, params: PeriodParam
         gains: end.gains - start.gains,
         loansDisbursed: loansTotal(end) - loansTotal(start),
         interestAccrued: end.interestAccrued - start.interestAccrued,
+        penaltiesAccrued: end.penaltiesAccrued - start.penaltiesAccrued,
         repayments: end.repayments - start.repayments,
         otherMovements,
       },
@@ -557,6 +591,7 @@ export function summarizePeriodStatements(statements: MemberPeriodStatement[]): 
       gains: sum((s) => s.movements.gains),
       loansDisbursed: sum((s) => s.movements.loansDisbursed),
       interestAccrued: sum((s) => s.movements.interestAccrued),
+      penaltiesAccrued: sum((s) => s.movements.penaltiesAccrued),
       repayments: sum((s) => s.movements.repayments),
     },
     closing: positionSum((s) => s.closing),

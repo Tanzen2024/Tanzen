@@ -9,6 +9,11 @@ export type Repayment = {
   amount: number;
   principalPart: number;
   interestPart: number;
+  /**
+   * Part imputée sur les PÉNALITÉS DE RETARD (2026-09-29) — absente = 0. Informative : la dette est toujours
+   * recalculée à partir de `amount` par le moteur (`loanState`, dette hors pénalités d'abord).
+   */
+  penaltyPart?: number;
   status: RepaymentStatus;
   /**
    * Transaction d'ENCAISSEMENT du remboursement (mandat 2026-09-25) — posée par

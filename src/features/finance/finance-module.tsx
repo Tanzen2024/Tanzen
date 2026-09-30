@@ -21,7 +21,7 @@ import { useFiscalYear } from '@/contexts/fiscal-year-context';
 import { NotFoundPage, PermissionRoute } from '@/routes';
 import { financeService, type CashboxCreateInput, type CashboxLifecycleBlocker, type CashboxLifecycleOutcome, type CashboxUpdateInput, type TransactionInput } from '@/services/finance.service';
 import { financePositionService, type CashboxInFiscalYear } from '@/services/finance-position.service';
-import { loanPolicyViolations, scopeKey } from '@/lib/finance';
+import { INTEREST_PERIOD, loanPolicyViolations, scopeKey } from '@/lib/finance';
 import { creditService } from '@/services/credit.service';
 import { workflowService } from '@/services/workflow.service';
 import { loanRuleService, type LoanRuleInput, type LoanRuleUpdateInput } from '@/services/loan-rule.service';
@@ -41,7 +41,7 @@ import type { Application } from '@/mocks/finance/applications';
 import type { Repayment } from '@/mocks/finance/repayments';
 import type { Guarantor } from '@/mocks/finance/guarantors';
 import { TRANSACTION_CATEGORIES, TRANSACTION_OPERATIONS, OTHER_OPERATION_SUBCATEGORIES, operationForClassification, operationLabelKey, classificationForOperation, DEFAULT_DIRECTION, requiredTransactionType, categoryLabelKey, subcategoryLabelKey, subcategoriesFor, isLoanDisbursement, isLoanRepayment, type TransactionCategory, type TransactionSubcategory, type TransactionOperation } from '@/mocks/finance/transaction-classification';
-import { LOAN_MODES, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import { LOAN_MODES, LOAN_PENALTY_TYPES, type LoanPenaltyType, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { TableColumn } from '@/types/ui';
 import { formatDate, formatNumber } from '@/lib/utils';
 import { formatCurrency } from '@/constants/currencies';
@@ -1395,7 +1395,7 @@ function TransactionDetail({ t }: { t: T }) {
         {/* Traçabilité mouvement → objet métier : la transaction RÉFÉRENCE le prêt / le remboursement qui l'a produite, sans en être un. */}
         {transaction.loanId && <Info label={t('finance', 'loanConcerned')} value={<button type="button" className="font-medium text-primary hover:underline" onClick={() => navigate(`/finance/credit/loans/${transaction.loanId}`)}>{transaction.loanId}</button>} icon={HandCoins} />}
         {linkedLoan && <>
-          <Info label={t('finance', 'txLoanTerms')} value={`${t('finance', 'mbInterestType' + linkedLoan.loanMode)} — ${formatNumber(linkedLoan.interestRate)} % ${t('finance', 'mbRatePer' + linkedLoan.interestPeriod)}`} icon={ListChecks} />
+          <Info label={t('finance', 'txLoanTerms')} value={`${t('finance', 'mbInterestType' + linkedLoan.loanMode)} — ${formatNumber(linkedLoan.interestRate)} % ${t('finance', 'mbRatePer' + INTEREST_PERIOD)}`} icon={ListChecks} />
           <Info label={t('finance', 'txLoanPrincipal')} value={<MoneyDisplay amount={linkedLoan.principal} />} icon={HandCoins} />
           <Info label={t('finance', 'txLoanFunding')} value={loanAllocations.length > 0 ? loanAllocations.map((item) => `${loanCashboxes.find((cashbox) => cashbox.id === item.cashboxId)?.title ?? item.cashboxId} ${formatNumber(item.amount)}`).join(' · ') : partyLabel(transaction.type === 'debit' ? transaction.source : transaction.destination)} icon={Landmark} />
           <Info label={t('finance', 'txLoanApplication')} value={approvalRequest ? <button type="button" className="font-medium text-primary hover:underline" onClick={() => navigate(`/operations/workflows/${approvalRequest.id}`)}>{linkedLoan.applicationId}</button> : (linkedLoan.applicationId || '—')} icon={FileText} />
@@ -1417,16 +1417,18 @@ function TransactionDetail({ t }: { t: T }) {
 }
 
 type LoanRuleFormState = {
-  name: string; allowLoans: boolean; loanMode: LoanRuleLoanMode; minAmount: string; maxAmount: string; interestRate: string; interestPeriod: LoanRuleInterestPeriod; durationMonths: string; maxActiveLoans: string; maxLoanExposure: string; requiresGuarantor: boolean; minGuarantors: string; maxGuarantors: string; guaranteeTypeRequired: LoanRuleGuaranteeType; guaranteeRatio: string; allowSelfGuarantee: boolean; requiresApproval: boolean; approvalLevel: LoanRuleApprovalLevel;
+  name: string; allowLoans: boolean; loanMode: LoanRuleLoanMode; minAmount: string; maxAmount: string; interestRate: string; durationMonths: string; penaltyEnabled: boolean; penaltyType: LoanPenaltyType; penaltyValue: string; maxActiveLoans: string; maxLoanExposure: string; requiresGuarantor: boolean; minGuarantors: string; maxGuarantors: string; guaranteeTypeRequired: LoanRuleGuaranteeType; guaranteeRatio: string; allowSelfGuarantee: boolean; requiresApproval: boolean; approvalLevel: LoanRuleApprovalLevel;
 };
 
-const defaultLoanRuleForm: LoanRuleFormState = { name: '', allowLoans: true, loanMode: 'SIMPLE', minAmount: '0', maxAmount: '', interestRate: '0', interestPeriod: 'MONTHLY', durationMonths: '12', maxActiveLoans: '1', maxLoanExposure: '', requiresGuarantor: false, minGuarantors: '0', maxGuarantors: '1', guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: '100', allowSelfGuarantee: false, requiresApproval: true, approvalLevel: 'ADMIN' };
+const defaultLoanRuleForm: LoanRuleFormState = { name: '', allowLoans: true, loanMode: 'SIMPLE', minAmount: '0', maxAmount: '', interestRate: '0', durationMonths: '12', penaltyEnabled: false, penaltyType: 'FIXED', penaltyValue: '0', maxActiveLoans: '1', maxLoanExposure: '', requiresGuarantor: false, minGuarantors: '0', maxGuarantors: '1', guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: '100', allowSelfGuarantee: false, requiresApproval: true, approvalLevel: 'ADMIN' };
 
 function loanRuleFormToInput(form: LoanRuleFormState): LoanRuleInput {
   return {
     name: form.name.trim(), allowLoans: form.allowLoans, loanMode: form.loanMode,
     minAmount: Number(form.minAmount) || 0, maxAmount: Number(form.maxAmount) || 0, interestRate: Number(form.interestRate) || 0,
-    interestPeriod: form.interestPeriod, durationMonths: Number(form.durationMonths) || 0,
+    durationMonths: Number(form.durationMonths) || 0,
+    // Pénalité OFF : type null et valeur 0 (validation de la règle) ; ON : type et valeur saisis.
+    penaltyEnabled: form.penaltyEnabled, penaltyType: form.penaltyEnabled ? form.penaltyType : null, penaltyValue: form.penaltyEnabled ? Number(form.penaltyValue) || 0 : 0,
     maxActiveLoans: Number(form.maxActiveLoans) || 1, maxLoanExposure: form.maxLoanExposure === '' ? null : Number(form.maxLoanExposure),
     requiresGuarantor: form.requiresGuarantor, minGuarantors: Number(form.minGuarantors) || 0, maxGuarantors: Number(form.maxGuarantors) || 0,
     guaranteeTypeRequired: form.guaranteeTypeRequired, guaranteeRatio: Number(form.guaranteeRatio) || 0, allowSelfGuarantee: form.allowSelfGuarantee,
@@ -1434,7 +1436,9 @@ function loanRuleFormToInput(form: LoanRuleFormState): LoanRuleInput {
   };
 }
 
-function LoanRuleFormBody({ t, form, setForm, errors }: { t: T; form: LoanRuleFormState; setForm: (updater: LoanRuleFormState | ((prev: LoanRuleFormState) => LoanRuleFormState)) => void; errors: { name?: string; maxAmount?: string } }) {
+type LoanRuleFormErrors = { name?: string; maxAmount?: string; penaltyType?: string; penaltyValue?: string };
+
+function LoanRuleFormBody({ t, form, setForm, errors }: { t: T; form: LoanRuleFormState; setForm: (updater: LoanRuleFormState | ((prev: LoanRuleFormState) => LoanRuleFormState)) => void; errors: LoanRuleFormErrors }) {
   const set = <K extends keyof LoanRuleFormState>(key: K, value: LoanRuleFormState[K]) => setForm((prev) => ({ ...prev, [key]: value }));
   // Cartes pleine largeur empilées dans l'ordre métier, TOUTES sur la même grille de champs
   // (`FIELD_GRID` : 1 → 2 → 4 colonnes) : les colonnes s'alignent d'une carte à l'autre, chaque carte a
@@ -1456,10 +1460,23 @@ function LoanRuleFormBody({ t, form, setForm, errors }: { t: T; form: LoanRuleFo
         <div className="space-y-2"><Label htmlFor="loan-rule-max-amount">{t('finance', 'maxAmount')}</Label><AmountInput id="loan-rule-max-amount" value={form.maxAmount} onValueChange={(value) => set('maxAmount', value)} aria-invalid={Boolean(errors.maxAmount)} /><FieldError message={errors.maxAmount} /></div>
         <div className="space-y-2"><Label htmlFor="loan-rule-interest-rate">{t('finance', 'interestRate')}</Label><Input id="loan-rule-interest-rate" type="number" inputMode="decimal" value={form.interestRate} onChange={(event) => set('interestRate', event.target.value)} /></div>
         <div className="space-y-2"><Label htmlFor="loan-rule-duration">{t('finance', 'durationMonths')}</Label><Input id="loan-rule-duration" type="number" inputMode="numeric" value={form.durationMonths} onChange={(event) => set('durationMonths', event.target.value)} /></div>
-        <div className="space-y-2"><Label htmlFor="loan-rule-interest-period">{t('finance', 'interestPeriod')}</Label><select id="loan-rule-interest-period" value={form.interestPeriod} onChange={(event) => set('interestPeriod', event.target.value as LoanRuleInterestPeriod)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"><option value="DAILY">{t('finance', 'interestPeriodDAILY')}</option><option value="WEEKLY">{t('finance', 'interestPeriodWEEKLY')}</option><option value="MONTHLY">{t('finance', 'interestPeriodMONTHLY')}</option><option value="YEARLY">{t('finance', 'interestPeriodYEARLY')}</option></select></div>
+        {/* Périodicité des intérêts : TOUJOURS mensuelle (règle définitive du 2026-09-29) — affichée, jamais choisie. */}
+        <div className="space-y-2"><Label htmlFor="loan-rule-interest-period">{t('finance', 'interestPeriod')}</Label><Input id="loan-rule-interest-period" value={t('finance', 'interestPeriodMONTHLY')} readOnly disabled aria-describedby="loan-rule-interest-period-hint" /><p id="loan-rule-interest-period-hint" className="text-[11px] text-muted-foreground">{t('finance', 'interestAlwaysMonthlyHint')}</p></div>
         <div className="space-y-2"><Label htmlFor="loan-rule-max-active-loans">{t('finance', 'maxActiveLoans')}</Label><Input id="loan-rule-max-active-loans" type="number" inputMode="numeric" value={form.maxActiveLoans} onChange={(event) => set('maxActiveLoans', event.target.value)} /></div>
         {/* Dernier champ : complète sa ligne (pleine largeur en 2 colonnes, moitié droite en 4 colonnes) — aucune demi-ligne vide. */}
         <div className="space-y-2 sm:col-span-2"><Label htmlFor="loan-rule-max-exposure">{t('finance', 'maxLoanExposure')}</Label><AmountInput id="loan-rule-max-exposure" value={form.maxLoanExposure} onValueChange={(value) => set('maxLoanExposure', value)} /></div>
+      </div>
+    </FormSection>
+    <FormSection title={t('finance', 'latePenalty')}>
+      <div className={FIELD_GRID}>
+        <div className="flex items-center gap-2 sm:col-span-2 lg:col-span-4"><Switch id="loan-rule-penalty-enabled" checked={form.penaltyEnabled} onCheckedChange={(checked: boolean) => set('penaltyEnabled', checked)} /><Label htmlFor="loan-rule-penalty-enabled">{t('finance', 'penaltyEnabled')}</Label></div>
+        {form.penaltyEnabled && <>
+        <div className="space-y-2 lg:col-span-2"><Label htmlFor="loan-rule-penalty-type">{t('finance', 'penaltyType')}</Label><select id="loan-rule-penalty-type" value={form.penaltyType} onChange={(event) => set('penaltyType', event.target.value as LoanPenaltyType)} aria-invalid={Boolean(errors.penaltyType)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">{LOAN_PENALTY_TYPES.map((type) => <option key={type} value={type}>{t('finance', `penaltyType${type}`)}</option>)}</select><FieldError message={errors.penaltyType} /></div>
+        <div className="space-y-2 lg:col-span-2"><Label htmlFor="loan-rule-penalty-value">{t('finance', form.penaltyType === 'FIXED' ? 'penaltyValueFIXED' : 'penaltyValuePERCENTAGE')}</Label>{form.penaltyType === 'FIXED'
+          ? <AmountInput id="loan-rule-penalty-value" value={form.penaltyValue} onValueChange={(value) => set('penaltyValue', value)} aria-invalid={Boolean(errors.penaltyValue)} />
+          : <Input id="loan-rule-penalty-value" type="number" inputMode="decimal" value={form.penaltyValue} onChange={(event) => set('penaltyValue', event.target.value)} aria-invalid={Boolean(errors.penaltyValue)} />}<FieldError message={errors.penaltyValue} /></div>
+        <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-4">{t('finance', form.penaltyType === 'FIXED' ? 'penaltyHintFIXED' : 'penaltyHintPERCENTAGE')}</p>
+        </>}
       </div>
     </FormSection>
     <FormSection title={t('finance', 'guarantees')}>
@@ -1509,7 +1526,7 @@ function LegacyLoanRulesRedirect() {
 }
 
 function creditRuleToForm(rule: LoanRule): LoanRuleFormState {
-  return { name: rule.name, allowLoans: rule.allowLoans, loanMode: rule.loanMode, minAmount: String(rule.minAmount), maxAmount: String(rule.maxAmount), interestRate: String(rule.interestRate), interestPeriod: rule.interestPeriod, durationMonths: String(rule.durationMonths), maxActiveLoans: String(rule.maxActiveLoans), maxLoanExposure: rule.maxLoanExposure === null ? '' : String(rule.maxLoanExposure), requiresGuarantor: rule.requiresGuarantor, minGuarantors: String(rule.minGuarantors), maxGuarantors: String(rule.maxGuarantors), guaranteeTypeRequired: rule.guaranteeTypeRequired, guaranteeRatio: String(rule.guaranteeRatio), allowSelfGuarantee: rule.allowSelfGuarantee, requiresApproval: rule.requiresApproval, approvalLevel: rule.approvalLevel ?? 'ADMIN' };
+  return { name: rule.name, allowLoans: rule.allowLoans, loanMode: rule.loanMode, minAmount: String(rule.minAmount), maxAmount: String(rule.maxAmount), interestRate: String(rule.interestRate), durationMonths: String(rule.durationMonths), penaltyEnabled: rule.penaltyEnabled, penaltyType: rule.penaltyType ?? 'FIXED', penaltyValue: String(rule.penaltyValue), maxActiveLoans: String(rule.maxActiveLoans), maxLoanExposure: rule.maxLoanExposure === null ? '' : String(rule.maxLoanExposure), requiresGuarantor: rule.requiresGuarantor, minGuarantors: String(rule.minGuarantors), maxGuarantors: String(rule.maxGuarantors), guaranteeTypeRequired: rule.guaranteeTypeRequired, guaranteeRatio: String(rule.guaranteeRatio), allowSelfGuarantee: rule.allowSelfGuarantee, requiresApproval: rule.requiresApproval, approvalLevel: rule.approvalLevel ?? 'ADMIN' };
 }
 
 /**
@@ -1524,7 +1541,7 @@ function CreditRulePage({ t }: { t: T }) {
   const { data: changes = [] } = useQuery({ queryKey: [...queryKeys.credit.loanRules(currentTenant.id), 'changes', rule?.id ?? ''], queryFn: () => loanRuleService.listLoanRuleChanges(currentTenant.id, rule!.id), enabled: Boolean(rule) });
   const pending = changes.find((request) => request.status === 'pending' || request.status === 'inProgress');
   const [form, setForm] = useState<LoanRuleFormState | null>(null);
-  const [errors, setErrors] = useState<{ name?: string; maxAmount?: string }>({});
+  const [errors, setErrors] = useState<LoanRuleFormErrors>({});
   const invalidateKeys = [queryKeys.credit.loanRules(currentTenant.id), ['operations']];
   const createMutation = useMockMutation<Awaited<ReturnType<typeof loanRuleService.createLoanRule>>, LoanRuleInput>({
     mutationFn: (input) => loanRuleService.createLoanRule(currentTenant.id, input),
@@ -1550,6 +1567,9 @@ function CreditRulePage({ t }: { t: T }) {
     const nextErrors: typeof errors = {};
     if (!current.name.trim()) nextErrors.name = t('finance', 'fieldRequired');
     if (!current.maxAmount || Number(current.maxAmount) < (Number(current.minAmount) || 0)) nextErrors.maxAmount = t('finance', 'fieldRequired');
+    // Pénalité ON : type obligatoire et valeur strictement positive (mêmes contraintes que le service).
+    if (current.penaltyEnabled && !LOAN_PENALTY_TYPES.includes(current.penaltyType)) nextErrors.penaltyType = t('finance', 'fieldRequired');
+    if (current.penaltyEnabled && !(Number(current.penaltyValue) > 0)) nextErrors.penaltyValue = t('finance', 'penaltyValuePositive');
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     if (rule) requestMutation.mutate(loanRuleFormToInput(current));
@@ -1600,7 +1620,7 @@ function CreditRulePage({ t }: { t: T }) {
 }
 
 /** Libellés des champs de la règle (historique des modifications) — mêmes clés que le formulaire. */
-const LOAN_RULE_FIELD_KEY: Record<string, string> = { name: 'loanRuleName', allowLoans: 'allowLoans', loanMode: 'loanMode', minAmount: 'minAmount', maxAmount: 'maxAmount', interestRate: 'interestRate', interestPeriod: 'interestPeriod', durationMonths: 'durationMonths', maxActiveLoans: 'maxActiveLoans', maxLoanExposure: 'maxLoanExposure', requiresGuarantor: 'requiresGuarantor', minGuarantors: 'minGuarantors', maxGuarantors: 'maxGuarantors', guaranteeTypeRequired: 'guaranteeTypeRequired', guaranteeRatio: 'guaranteeRatio', allowSelfGuarantee: 'allowSelfGuarantee', requiresApproval: 'requiresApproval', approvalLevel: 'approvalLevel' };
+const LOAN_RULE_FIELD_KEY: Record<string, string> = { name: 'loanRuleName', allowLoans: 'allowLoans', loanMode: 'loanMode', minAmount: 'minAmount', maxAmount: 'maxAmount', interestRate: 'interestRate', interestPeriod: 'interestPeriod', durationMonths: 'durationMonths', penaltyEnabled: 'penaltyEnabled', penaltyType: 'penaltyType', penaltyValue: 'penaltyValue', maxActiveLoans: 'maxActiveLoans', maxLoanExposure: 'maxLoanExposure', requiresGuarantor: 'requiresGuarantor', minGuarantors: 'minGuarantors', maxGuarantors: 'maxGuarantors', guaranteeTypeRequired: 'guaranteeTypeRequired', guaranteeRatio: 'guaranteeRatio', allowSelfGuarantee: 'allowSelfGuarantee', requiresApproval: 'requiresApproval', approvalLevel: 'approvalLevel' };
 
 // ----------------------------------------------------------------------- Crédit : demandes, prêts (mandat « Finalisation Finance/Tontines »)
 
@@ -1869,6 +1889,8 @@ function LoanDetail({ t }: { t: T }) {
     { key: 'paymentDate', header: t('finance', 'paymentDate'), render: (row) => <DateDisplay value={row.paymentDate} /> },
     { key: 'principalPart', header: t('finance', 'principalPart'), render: (row) => <MoneyDisplay amount={row.principalPart} /> },
     { key: 'interestPart', header: t('finance', 'interestPart'), render: (row) => <MoneyDisplay amount={row.interestPart} /> },
+    // Part pénalités : seulement pour un prêt à pénalité ACTIVÉE (historisée) — jamais une colonne de zéros sinon.
+    ...(loan.penaltyEnabled ? [{ key: 'penaltyPart', header: t('finance', 'penaltyPart'), render: (row: Repayment) => <MoneyDisplay amount={row.penaltyPart ?? 0} /> }] : []),
     { key: 'amount', header: t('finance', 'amount'), render: (row) => <MoneyDisplay amount={row.amount} /> },
     { key: 'status', header: t('finance', 'status'), render: (row) => <StatusBadge label={t('finance', row.status)} tone={tone[row.status]} /> },
   ];

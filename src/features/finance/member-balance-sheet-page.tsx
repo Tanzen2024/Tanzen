@@ -12,8 +12,8 @@ import { defaultTenantBranding, useTheme } from '@/contexts/theme-context';
 import { formatDate, formatNumber } from '@/lib/utils';
 import { getCurrencyDecimals, getCurrencyDisplayLabel } from '@/constants/currencies';
 import { useOrganizationCurrency } from '@/hooks/use-organization-currency';
-import { defaultBalancePeriod, type MemberPeriodStatement, type StatementLine } from '@/lib/finance';
-import type { LoanRuleInterestPeriod, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import { defaultBalancePeriod, INTEREST_PERIOD, type MemberPeriodStatement, type StatementLine } from '@/lib/finance';
+import type { LoanPenaltyType, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { Tenant } from '@/mocks/organization/tenants';
 import type { Member } from '@/mocks/organization/members';
 import { fiscalYearLabel } from '@/mocks/settings/fiscal-years';
@@ -26,7 +26,7 @@ import { Page, type T } from './finance-module';
 
 const selectClass = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm';
 
-type CreditRuleInfo = { loanMode: LoanRuleLoanMode; interestPeriod: LoanRuleInterestPeriod; interestRate: number; interestApplicable: boolean };
+type CreditRuleInfo = { loanMode: LoanRuleLoanMode; interestRate: number; interestApplicable: boolean };
 type DocumentContext = {
   t: T;
   tenant: Tenant;
@@ -47,8 +47,8 @@ type DocumentContext = {
 /**
  * BILAN FINANCIER DE L'ADHÉRENT (refonte du 2026-09-28) — un RELEVÉ individuel par adhérent, conçu
  * pour l'impression A4 / PDF (impression navigateur, même mécanisme que la fiche membre) :
- * charte de l'association, identification, état financier par période de la périodicité des
- * intérêts de la règle de crédit, synthèse. Plusieurs / tous les adhérents = succession de relevés,
+ * charte de l'association, identification, état financier MENSUEL (intérêts et pénalités de retard
+ * dans deux colonnes distinctes), synthèse. Plusieurs / tous les adhérents = succession de relevés,
  * chacun sur une nouvelle page. L'exercice n'est JAMAIS choisi ici : il vient du header
  * (`useFiscalYear`). Aucun calcul dans ce fichier : tout vient de `@/lib/finance/member-balance-sheet`.
  */
@@ -123,7 +123,7 @@ export function MemberBalanceSheetPage({ t }: { t: T }) {
     percent: (value: number) => formatNumber(value),
     cashboxTitleOf: new Map(cashboxes.map((cashbox) => [cashbox.id, cashbox.title])),
     creditRule: data.creditRule,
-    periodLabel: (line) => periodLabel(line, data.creditRule.interestPeriod, locale),
+    periodLabel: (line) => periodLabel(line, locale),
   } : null;
 
   const printable = Boolean(context && statements.length > 0);
@@ -174,10 +174,8 @@ export function MemberBalanceSheetPage({ t }: { t: T }) {
   </Page>;
 }
 
-function periodLabel(line: StatementLine, frequency: LoanRuleInterestPeriod, locale: string): ReactNode {
-  if (frequency === 'DAILY') return formatDate(line.start);
-  if (frequency === 'WEEKLY') return <>{formatDate(line.start)}<span className="block text-[0.85em] text-neutral-500">→ {formatDate(line.end)}</span></>;
-  if (frequency === 'YEARLY') return line.start.slice(0, 4);
+/** Libellé d'une ligne du relevé : toujours un mois civil (intérêts mensuels, `INTEREST_PERIOD`). */
+function periodLabel(line: StatementLine, locale: string): ReactNode {
   return new Date(`${line.start}T00:00:00Z`).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
@@ -215,6 +213,9 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
   const displayName = member ? `${member.lastName.toUpperCase()} ${member.firstName}` : statement.memberId;
   // Intérêts : affichés si la règle de crédit en produit, ou si l'adhérent en a réellement généré ou reçu.
   const showInterest = creditRule.interestApplicable || movements.interestAccrued !== 0 || end.interestLines.length > 0 || end.gainLines.length > 0 || movements.gains !== 0;
+  // Pénalités (règle d'affichage définitive) : colonne, synthèse et détail DISTINCTS des intérêts, présents dès qu'AU MOINS
+  // UN prêt du relevé a la pénalité ACTIVÉE (`penaltyEnabled` historisé), même à 0 sur la période ; totalement absents sinon.
+  const showPenalties = end.loans.some((loan) => loan.penaltyEnabled);
   const currentLoans = end.loans.filter((loan) => loan.outstanding > 0);
   const otherMovements = Object.entries(movements.otherMovements) as [TransactionSubcategory, number][];
   const columns = [
@@ -224,6 +225,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
     { key: 'debtCarried', label: t('finance', 'mbColDebtCarried') },
     { key: 'loansDisbursed', label: t('finance', 'mbColLoans') },
     ...(showInterest ? [{ key: 'interest', label: t('finance', 'mbColInterest') }] : []),
+    ...(showPenalties ? [{ key: 'penalties', label: t('finance', 'mbColPenalties') }] : []),
     { key: 'repayments', label: t('finance', 'mbColRepayment') },
     { key: 'debtRemaining', label: t('finance', 'mbColDebtRemaining') },
   ] as { key: keyof Omit<StatementLine, 'start' | 'end'>; label: string }[];
@@ -234,6 +236,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
     debtCarried: null,
     loansDisbursed: movements.loansDisbursed,
     interest: movements.interestAccrued,
+    penalties: movements.penaltiesAccrued,
     repayments: movements.repayments,
     debtRemaining: closing.debt,
   };
@@ -250,11 +253,12 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
   // ceux de la règle de crédit en vigueur (qui s'appliquera à ses prochains prêts). Jamais un taux unique
   // trompeur : plusieurs jeux de paramètres → « Selon le prêt » et le détail prêt par prêt.
   const typeOf = (mode: LoanRuleLoanMode) => t('finance', 'mbInterestType' + mode);
-  const rateOf = (rate: number, period: LoanRuleInterestPeriod) => `${ctx.percent(rate)} % ${t('finance', 'mbRatePer' + period)}`;
-  const parameterSets = [...new Map(end.loans.map((loan) => [`${loan.loanMode}|${loan.rate}|${loan.interestPeriod}`, loan])).values()];
+  const rateOf = (rate: number) => `${ctx.percent(rate)} % ${t('finance', 'mbRatePer' + INTEREST_PERIOD)}`;
+  const parameterSets = [...new Map(end.loans.map((loan) => [`${loan.loanMode}|${loan.rate}`, loan])).values()];
+  const penaltyLabel = (type: LoanPenaltyType, value: number) => (type === 'FIXED' ? `${amount(value)} ${ctx.currencyLabel}` : `${ctx.percent(value)} %`);
   const mixed = parameterSets.length > 1;
   const typeLabel = !showInterest ? t('finance', 'mbNoInterest') : mixed ? t('finance', 'mbPerLoan') : typeOf(parameterSets[0]?.loanMode ?? creditRule.loanMode);
-  const rateLabel = !showInterest ? '—' : mixed ? t('finance', 'mbPerLoan') : parameterSets[0] ? rateOf(parameterSets[0].rate, parameterSets[0].interestPeriod) : rateOf(creditRule.interestRate, creditRule.interestPeriod);
+  const rateLabel = !showInterest ? '—' : mixed ? t('finance', 'mbPerLoan') : parameterSets[0] ? rateOf(parameterSets[0].rate) : rateOf(creditRule.interestRate);
   const cashboxesOf = (funding: { cashboxId: string }[]) => funding.map((item) => ctx.cashboxTitleOf.get(item.cashboxId) ?? item.cashboxId).join(', ') || '—';
   const loanById = new Map(end.loans.map((loan) => [loan.loanId, loan]));
 
@@ -271,7 +275,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
           <Field label={t('finance', 'mbPeriod')} value={<span className="font-semibold text-neutral-900">{from} → {to}</span>} />
           <Field label={t('finance', 'mbInterestType')} value={<span className="font-semibold text-neutral-900" data-testid="mb-interest-type">{typeLabel}</span>} />
           <Field label={t('finance', 'mbInterestRate')} value={<span className="font-semibold text-neutral-900" data-testid="mb-interest-rate">{rateLabel}</span>} />
-          {showInterest && mixed && <div className="col-span-2 flex gap-2" data-testid="mb-interest-per-loan"><dt className="w-20 shrink-0 text-neutral-500">{t('finance', 'mbParametersPerLoan')}</dt><dd className="min-w-0 text-neutral-800">{parameterSets.map((loan) => `${loan.loanId} : ${typeOf(loan.loanMode)} — ${rateOf(loan.rate, loan.interestPeriod)}`).join(' · ')}</dd></div>}
+          {showInterest && mixed && <div className="col-span-2 flex gap-2" data-testid="mb-interest-per-loan"><dt className="w-20 shrink-0 text-neutral-500">{t('finance', 'mbParametersPerLoan')}</dt><dd className="min-w-0 text-neutral-800">{parameterSets.map((loan) => `${loan.loanId} : ${typeOf(loan.loanMode)} — ${rateOf(loan.rate)}`).join(' · ')}</dd></div>}
           {member?.matricule && <Field label={t('finance', 'mbMatricule')} value={member.matricule} />}
           <Field label={t('finance', 'mbFiscalYear')} value={ctx.fiscalYear} />
           <Field label={t('finance', 'mbCashboxes')} value={ctx.cashboxLabel} />
@@ -286,7 +290,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
         <table className="mb-table w-full border-collapse" data-testid="mb-statement-table">
           <thead>
             <tr className="border-y border-neutral-400 text-[9px] uppercase tracking-wide text-neutral-600">
-              <th scope="col" className="py-1.5 pr-2 text-left font-medium">{t('finance', 'mbColPeriod' + creditRule.interestPeriod)}</th>
+              <th scope="col" className="py-1.5 pr-2 text-left font-medium">{t('finance', 'mbColPeriod' + INTEREST_PERIOD)}</th>
               {columns.map((column) => <th key={column.key} scope="col" className="py-1.5 pl-2 text-right font-medium">{column.label}</th>)}
             </tr>
           </thead>
@@ -324,6 +328,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
             <SummaryLine label={t('finance', 'mbDebtAt', { date: dayBeforeFrom })} value={amount(openingPosition.debt)} />
             <SummaryLine label={t('finance', 'mbLoansDisbursed')} value={amount(movements.loansDisbursed)} />
             {showInterest && <SummaryLine label={t('finance', 'mbInterestGenerated')} value={amount(movements.interestAccrued)} />}
+            {showPenalties && <SummaryLine label={t('finance', 'mbPenaltiesGenerated')} value={amount(movements.penaltiesAccrued)} />}
             <SummaryLine label={t('finance', 'mbRepayments')} value={amount(movements.repayments)} />
             <SummaryLine label={t('finance', 'mbDebtAt', { date: to })} value={amount(closing.debt)} strong />
           </dl>
@@ -343,7 +348,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
         <table className="w-full border-collapse">
           <thead><tr className={header}>
             {[t('finance', 'mbLoan'), t('finance', 'mbDisbursementDate'), t('finance', 'mbMaturityDate'), t('finance', 'mbCashboxColumn')].map((label) => <th key={label} scope="col" className="py-1.5 pr-2 text-left font-medium">{label}</th>)}
-            {[t('finance', 'mbInitialAmount'), ...(showInterest ? [t('finance', 'mbInterestGenerated')] : []), t('finance', 'mbRepaid'), t('finance', 'mbOutstanding')].map((label) => <th key={label} scope="col" className="py-1.5 pl-2 text-right font-medium">{label}</th>)}
+            {[t('finance', 'mbInitialAmount'), ...(showInterest ? [t('finance', 'mbInterestGenerated')] : []), ...(showPenalties ? [t('finance', 'mbPenaltiesGenerated')] : []), t('finance', 'mbRepaid'), t('finance', 'mbOutstanding')].map((label) => <th key={label} scope="col" className="py-1.5 pl-2 text-right font-medium">{label}</th>)}
           </tr></thead>
           <tbody>{currentLoans.map((loan) => <tr key={loan.loanId}>
             <td className={textCell}>{loan.loanId}</td>
@@ -352,6 +357,7 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
             <td className={textCell}>{cashboxesOf(loan.funding)}</td>
             <td className={cell}>{amount(loan.principal)}</td>
             {showInterest && <td className={cell}>{amount(loan.interestAccrued)}</td>}
+            {showPenalties && <td className={cell}>{amount(loan.penaltiesAccrued)}</td>}
             <td className={cell}>{amount(loan.repaid)}</td>
             <td className={`${cell} font-medium text-neutral-900`}>{amount(loan.outstanding)}</td>
           </tr>)}</tbody>
@@ -395,6 +401,26 @@ function MemberStatementDocument({ ctx, statement, member, index, total }: { ctx
             <td className={`${cell} text-neutral-900`}>{amount(line.gain)}</td>
           </tr>)}</tbody>
         </table>}
+      </div>}
+
+      {showPenalties && end.penaltyLines.length > 0 && <div className="mt-5" data-testid="mb-penalty-detail">
+        <h3 className={`mb-head ${sectionTitle}`}>{t('finance', 'mbPenaltyDetailTitle')}</h3>
+        <table className="mb-table w-full border-collapse" data-testid="mb-loan-penalties">
+          <caption className="pb-1 text-left text-[9.5px] font-medium text-neutral-600">{t('finance', 'mbPenaltyCaption')}</caption>
+          <thead><tr className={header}>
+            {[t('finance', 'mbDate'), t('finance', 'mbLoan'), t('finance', 'mbPenaltyLateMonth'), t('finance', 'mbPenaltyTypeColumn')].map((label) => <th key={label} scope="col" className="py-1.5 pr-2 text-left font-medium">{label}</th>)}
+            {[t('finance', 'mbBase'), t('finance', 'mbPenaltyValueColumn'), t('finance', 'mbColPenalties')].map((label) => <th key={label} scope="col" className="py-1.5 pl-2 text-right font-medium">{label}</th>)}
+          </tr></thead>
+          <tbody>{end.penaltyLines.map((line, lineIndex) => <tr key={`${line.loanId}-${line.date}-${lineIndex}`}>
+            <td className={`${textCell} whitespace-nowrap`}>{formatDate(line.date)}</td>
+            <td className={textCell}>{line.loanId}</td>
+            <td className={textCell}>{line.lateMonth}</td>
+            <td className={textCell}>{t('finance', `penaltyType${line.penaltyType}`)}</td>
+            <td className={cell}>{line.penaltyType === 'FIXED' ? '—' : amount(line.base)}</td>
+            <td className={cell}>{penaltyLabel(line.penaltyType, line.penaltyValue)}</td>
+            <td className={`${cell} text-neutral-900`}>{amount(line.amount)}</td>
+          </tr>)}</tbody>
+        </table>
       </div>}
 
       {(end.repaymentsMismatch || end.unattributedLoanIds.length > 0) && <div className="mt-4 space-y-1 rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] text-amber-800 print:hidden" data-testid="mb-control-notes">

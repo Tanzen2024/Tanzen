@@ -21,7 +21,20 @@
 export type LoanRuleLoanMode = 'SIMPLE' | 'COMPOUND' | 'GLOBAL';
 /** Ordre d'affichage IMPOSÉ partout : Simple, Composé, Global. */
 export const LOAN_MODES = ['SIMPLE', 'COMPOUND', 'GLOBAL'] as const satisfies readonly LoanRuleLoanMode[];
+/**
+ * Périodicité HISTORIQUE du taux (compatibilité des données uniquement). RÈGLE DÉFINITIVE du 2026-09-29 :
+ * les intérêts sont TOUJOURS mensuels (`INTEREST_PERIOD`, src/lib/finance/interest-distribution.ts), quelle
+ * que soit la fréquence des réunions, séances ou tontines ; cette valeur n'est plus choisie ni lue par le calcul.
+ */
 export type LoanRuleInterestPeriod = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+/**
+ * PÉNALITÉ DE RETARD (règle définitive du 2026-09-29) — distincte de l'intérêt, appliquée CHAQUE mois de
+ * retard (échéance mensuelle postérieure à `maturityDate`, dette > 0) :
+ *   - FIXED      : `penaltyValue` FCFA par mois de retard ;
+ *   - PERCENTAGE : `penaltyValue` % de la dette À `maturityDate` (hors pénalités), base FIGÉE pour tout le retard.
+ */
+export type LoanPenaltyType = 'FIXED' | 'PERCENTAGE';
+export const LOAN_PENALTY_TYPES = ['FIXED', 'PERCENTAGE'] as const satisfies readonly LoanPenaltyType[];
 export type LoanRuleGuaranteeType = 'PERSONAL' | 'GROUP' | 'COLLATERAL';
 export type LoanRuleApprovalLevel = 'MEMBER' | 'BOARD' | 'ADMIN';
 /** D-CREDIT-LR-02 (validée) : status = état métier utilisable (ACTIVE/INACTIVE) — distinct de deletedAt (suppression logique). */
@@ -43,8 +56,15 @@ export type LoanRule = {
   minAmount: number;
   maxAmount: number;
   interestRate: number;
+  /** Compatibilité uniquement — valeur effective toujours `'MONTHLY'`, jamais lue par le calcul (voir `LoanRuleInterestPeriod`). */
   interestPeriod: LoanRuleInterestPeriod;
   durationMonths: number;
+  /** Pénalité de retard (ON/OFF) — historisée sur chaque prêt à l'octroi. */
+  penaltyEnabled: boolean;
+  /** Obligatoire si `penaltyEnabled` ; `null` possible sinon. */
+  penaltyType: LoanPenaltyType | null;
+  /** FCFA (FIXED) ou % (PERCENTAGE) ; > 0 si `penaltyEnabled`, 0 possible sinon. */
+  penaltyValue: number;
   maxActiveLoans: number;
   maxLoanExposure: number | null;
   requiresGuarantor: boolean;
@@ -65,27 +85,27 @@ export type LoanRule = {
 export const loanRules: LoanRule[] = [
   {
     id: 'LR-001', tenantId: 'T-001', name: 'Politique Trésorerie Sutura',
-    allowLoans: true, loanMode: 'COMPOUND', minAmount: 50_000, maxAmount: 2_000_000, interestRate: 12, interestPeriod: 'MONTHLY', durationMonths: 24,
+    allowLoans: true, loanMode: 'COMPOUND', minAmount: 50_000, maxAmount: 2_000_000, interestRate: 12, interestPeriod: 'MONTHLY', durationMonths: 24, penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
     // Données DEMO (2026-09-27) : « Garant requis » à OFF ; Garants min./max. volontairement conservés tels quels.
     maxActiveLoans: 2, maxLoanExposure: 3_000_000, requiresGuarantor: false, minGuarantors: 1, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: false,
     requiresApproval: true, approvalLevel: 'ADMIN', status: 'ACTIVE', deletedAt: null, version: 1,
   },
   {
     id: 'LR-002', tenantId: 'T-002', name: 'Politique Trésorerie Horizon',
-    allowLoans: true, loanMode: 'SIMPLE', minAmount: 30_000, maxAmount: 1_500_000, interestRate: 10, interestPeriod: 'MONTHLY', durationMonths: 18,
+    allowLoans: true, loanMode: 'SIMPLE', minAmount: 30_000, maxAmount: 1_500_000, interestRate: 10, interestPeriod: 'MONTHLY', durationMonths: 18, penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
     maxActiveLoans: 1, maxLoanExposure: 1_500_000, requiresGuarantor: true, minGuarantors: 1, maxGuarantors: 1, guaranteeTypeRequired: 'GROUP', guaranteeRatio: 80, allowSelfGuarantee: false,
     requiresApproval: true, approvalLevel: 'BOARD', status: 'ACTIVE', deletedAt: null, version: 1,
   },
   {
     id: 'LR-003', tenantId: 'T-001', name: 'Politique Épargne Sutura',
-    allowLoans: false, loanMode: 'SIMPLE', minAmount: 0, maxAmount: 500_000, interestRate: 8, interestPeriod: 'YEARLY', durationMonths: 12,
+    allowLoans: false, loanMode: 'SIMPLE', minAmount: 0, maxAmount: 500_000, interestRate: 8, interestPeriod: 'YEARLY', durationMonths: 12, penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
     maxActiveLoans: 1, maxLoanExposure: null, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 1, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
     // Consolidation « règle unique » (2026-09-26) : T-001 garde LR-001 ; LR-003 (ex-caisse Épargne AC-002) et LR-004 (ex-caisse Epargne AC-009) sont supprimées LOGIQUEMENT — conservées pour l'historique, jamais appliquées.
     requiresApproval: false, approvalLevel: null, status: 'INACTIVE', deletedAt: '2026-09-26T00:00:00.000Z', version: 1,
   },
   {
     id: 'LR-004', tenantId: 'T-001', name: 'Politique Épargne volontaire Sutura',
-    allowLoans: true, loanMode: 'SIMPLE', minAmount: 20_000, maxAmount: 1_000_000, interestRate: 9, interestPeriod: 'MONTHLY', durationMonths: 12,
+    allowLoans: true, loanMode: 'SIMPLE', minAmount: 20_000, maxAmount: 1_000_000, interestRate: 9, interestPeriod: 'MONTHLY', durationMonths: 12, penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
     maxActiveLoans: 3, maxLoanExposure: 2_000_000, requiresGuarantor: false, minGuarantors: 0, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: true,
     requiresApproval: false, approvalLevel: null, status: 'INACTIVE', deletedAt: '2026-09-26T00:00:00.000Z', version: 1,
   },

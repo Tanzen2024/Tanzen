@@ -97,4 +97,47 @@ describe('Séparation Caisses / Crédit — écrans', { timeout: 20_000 }, () =>
     await user.type(within(row).getByLabelText('Montant de la ligne 1'), '100000');
     expect(within(row).getByTestId('quick-entry-repayment-split')).toHaveTextContent(/Prêt L-001 · Capital 89\s286\sFCFA · Intérêts 10\s714\sFCFA/);
   });
+
+  /** Saisie rapide d'un remboursement de Fatou Ndiaye (L-001) à la séance du jour ; renvoie la ligne. */
+  async function quickRepaymentRow(user: ReturnType<typeof userEvent.setup>, amount: number) {
+    await fiscalSessionService.createSession('T-001', 'FY-T001-2026', new Date().toISOString().slice(0, 10));
+    renderFinance('/finance/transactions/quick-entry?cashboxId=AC-012');
+    await screen.findByRole('heading', { name: 'Transactions' });
+    await waitFor(() => expect((screen.getByLabelText(/^Caisse/) as HTMLSelectElement).value).toBe('CS-001-CX-004'));
+    await user.selectOptions(screen.getByLabelText(/^Action \*/), 'REMBOURSEMENT');
+    const row = screen.getAllByTestId('quick-entry-row')[0];
+    await user.click(within(row).getByRole('combobox'));
+    await user.type(await screen.findByPlaceholderText(/Rechercher \(nom ou matricule\)/), 'Fatou');
+    await user.click(await screen.findByRole('option', { name: /Fatou/ }));
+    await user.type(within(row).getByLabelText('Montant de la ligne 1'), String(amount));
+    return row;
+  }
+  const money = (value: number) => new RegExp(`${String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '\\s')}\\sFCFA`);
+
+  it('saisie rapide Remboursement, pénalité DUE : l’aperçu affiche la part Pénalités, identique à la décomposition réelle du service', async () => {
+    const { creditService } = await import('@/services/credit.service');
+    const today = new Date().toISOString().slice(0, 10);
+    // L-001 rendu échu (préparation de test) avec une pénalité FIXE de 50 000 par mois de retard (échéances le 22).
+    Object.assign(loans.find((loan) => loan.id === 'L-001')!, { maturityDate: '2026-08-01', penaltyEnabled: true, penaltyType: 'FIXED', penaltyValue: 50_000 });
+    const exposed = (await creditService.listLoans('T-001', today)).find((loan) => loan.id === 'L-001')!;
+    expect(exposed.penaltyOutstanding).toBeGreaterThanOrEqual(50_000);
+    const amount = exposed.outstanding - 5_000; // couvre la dette hors pénalités et une partie des pénalités
+    const expectedPenaltyPart = exposed.penaltyOutstanding! - 5_000;
+    const user = userEvent.setup();
+    const row = await quickRepaymentRow(user, amount);
+    const preview = within(row).getByTestId('quick-entry-repayment-split');
+    expect(preview).toHaveTextContent(money(expectedPenaltyPart));
+    expect(preview).toHaveTextContent(/· Pénalités /);
+    // Même décomposition que le calcul réel (createRepaymentTransaction), à la même date.
+    const result = (await creditService.createRepaymentTransaction('T-001', { loanId: 'L-001', paymentDate: today, amount, transactionInput: { cashboxNumber: 'CS-001-CX-004', memberId: 'M-001', memberName: 'Fatou Ndiaye', category: 'AUTRES', subcategory: 'REMBOURSEMENT', type: 'credit', amount, description: '' } }))!;
+    expect(result.repayment.penaltyPart).toBe(expectedPenaltyPart);
+    expect(preview).toHaveTextContent(money(result.repayment.principalPart));
+    expect(preview).toHaveTextContent(money(result.repayment.interestPart));
+  });
+
+  it('saisie rapide Remboursement, pénalité OFF : aucune mention de pénalité dans l’aperçu', async () => {
+    const user = userEvent.setup();
+    const row = await quickRepaymentRow(user, 100_000);
+    expect(within(row).getByTestId('quick-entry-repayment-split')).not.toHaveTextContent(/Pénalit/);
+  });
 });

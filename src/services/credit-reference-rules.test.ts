@@ -55,9 +55,13 @@ describe('Module Crédit — INTÉRÊT SIMPLE 15 % (scénario de référence)', 
     expect(await repay(loan, '2026-09-01', 1)).toBeNull();
   });
 
-  it('sans remboursement : la base reste le capital (100 000 + 15 000 par échéance, jusqu’à l’échéance finale)', async () => {
+  it('sans remboursement : la base reste le capital (100 000 + 15 000 par échéance MENSUELLE, y compris après l’échéance finale)', async () => {
     const loan = await referenceLoan('SIMPLE', 15);
-    expect(await debtAt(loan)).toBe(100_000 + 12 * 15_000); // 11 échéances mensuelles + l'échéance du 31/12
+    // Règle du 2026-09-29 : échéances au quantième du décaissement uniquement (01/02 → 01/12 = 11 au 31/12),
+    // plus d'échéance supplémentaire à `maturityDate` ; les intérêts continuent ensuite (01/01/2027, 01/02/2027…).
+    expect(await debtAt(loan)).toBe(100_000 + 11 * 15_000);
+    expect(await debtAt(loan, '2027-01-01')).toBe(100_000 + 12 * 15_000);
+    expect(await debtAt(loan, '2027-03-01')).toBe(100_000 + 14 * 15_000);
   });
 });
 
@@ -94,7 +98,7 @@ describe('Module Crédit — garde-fous', () => {
   it('`outstanding` exposé = dette courante recalculée, jamais l’encours contractuel stocké', async () => {
     const loan = await referenceLoan('SIMPLE', 15);
     loan.outstanding = 999_999; // valeur stockée incohérente : ignorée par les lectures
-    expect(await debtAt(loan)).toBe(280_000);
+    expect(await debtAt(loan)).toBe(265_000);
     expect(await debtAt(loan, '2026-03-01')).toBe(130_000);
     expect((await creditService.getLoan('T-001', loan.id))?.outstanding).not.toBe(999_999); // getLoan : dette du jour
   });

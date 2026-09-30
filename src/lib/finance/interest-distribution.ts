@@ -1,36 +1,46 @@
 import { cashboxEntryEffect, type CashboxRecord } from '@/mocks/finance/cashboxes';
 import type { Loan } from '@/mocks/finance/loans';
-import type { LoanRuleInterestPeriod, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import type { LoanPenaltyType, LoanRuleInterestPeriod, LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
 import type { Repayment } from '@/mocks/finance/repayments';
 import type { Transaction } from '@/mocks/finance/transactions';
 import { isLoanDisbursement, isLoanRepayment } from '@/mocks/finance/transaction-classification';
 import { referenceDate } from './reference-date';
 
 /**
- * PRÊTS, INTÉRÊTS, REMBOURSEMENTS ET REDISTRIBUTIONS — RÈGLES MÉTIER DE RÉFÉRENCE (validées par
- * Hugues le 2026-09-28, elles remplacent toute règle antérieure). Fonctions PURES, contexte déjà
- * filtré par tenant par le service. DEUX FLUX DISTINCTS :
+ * PRÊTS, INTÉRÊTS, PÉNALITÉS, REMBOURSEMENTS ET REDISTRIBUTIONS — RÈGLES MÉTIER DE RÉFÉRENCE du 2026-09-28,
+ * complétées par les RÈGLES DÉFINITIVES du 2026-09-29 (intérêts toujours mensuels, intérêts au-delà de
+ * l'échéance, pénalités de retard). Fonctions PURES, contexte déjà filtré par tenant par le service.
  *
- * FLUX 1 — DETTE DU PRÊT (`loanInterestAccruals`, `loanDebtAt`), paramètres HISTORISÉS sur le prêt
- * (`Loan.loanMode`, `Loan.interestRate` en % par période, `Loan.interestPeriod`), jamais la règle courante :
+ * FLUX 1 — DETTE DU PRÊT (`loanState` / `loanSchedule` → `loanInterestAccruals`, `loanPenaltyAccruals`,
+ * `loanDebtAt`), paramètres HISTORISÉS sur le prêt (`Loan.loanMode`, `Loan.interestRate` en % PAR MOIS,
+ * `Loan.penaltyEnabled / penaltyType / penaltyValue`), jamais la règle courante :
+ *   - PÉRIODICITÉ : TOUJOURS MENSUELLE (`INTEREST_PERIOD`). Aucune fréquence de réunion, de séance, de
+ *     tontine, ni `Loan.interestPeriod` (donnée historique conservée pour compatibilité) n'intervient.
  *   - GLOBAL   : intérêt = capital × taux, déterminé UNE fois à l'origine (date de décaissement) et
- *                AJOUTÉ à la dette (100 000 à 25 % → 125 000 à rembourser). Aucun intérêt périodique
- *                ensuite ; les remboursements réduisent la dette restante.
- *   - SIMPLE   : intérêt de chaque période = CAPITAL DE RÉFÉRENCE × taux. Le capital de référence est
- *                le capital initial, puis la DETTE RESTANTE juste après chaque remboursement ; il ne
- *                change pas tant qu'aucun nouveau remboursement n'intervient — les intérêts suivants ne
- *                sont pas capitalisés dans la base (15 % : 100 000 → 115 000, remb. 20 000 → 95 000 ;
- *                puis 95 000 × 15 % à chaque période : 109 250, 123 500, 137 750, 152 000…).
- *   - COMPOUND : intérêt de chaque période = DETTE COURANTE × taux ; l'intérêt est capitalisé
- *                (10 % : 100 000 → 110 000, remb. 20 000 → 90 000 → 99 000 → 108 900…).
- *   Calendrier : une échéance d'intérêt par période après le décaissement (la dernière à l'échéance
- *   finale du prêt). Un remboursement daté AVANT une échéance est appliqué avant son intérêt ; daté du
- *   jour même d'une échéance, il est appliqué après (mois M : intérêt, puis remboursement). Plus
- *   d'intérêt quand la dette est soldée, ni après l'échéance finale (aucune règle de pénalité).
+ *                AJOUTÉ à la dette (100 000 à 25 % → 125 000 à rembourser). EXCEPTION MÉTIER EXPLICITE
+ *                (décision définitive du 2026-09-30) à la règle des intérêts mensuels : aucun intérêt
+ *                périodique, ni avant ni APRÈS `maturityDate` — ne jamais le traiter comme SIMPLE / COMPOUND.
+ *                Les pénalités de retard s'y appliquent comme à tout prêt.
+ *   - SIMPLE   : intérêt mensuel = CAPITAL DE RÉFÉRENCE × taux (capital initial, puis dette restante hors
+ *                pénalités juste après chaque remboursement ; les intérêts suivants ne sont pas capitalisés
+ *                dans la base : 15 % : 100 000 → 115 000, remb. 20 000 → 95 000 ; puis 95 000 × 15 %…).
+ *   - COMPOUND : intérêt mensuel = DETTE COURANTE HORS PÉNALITÉS × taux (capital + intérêts − remboursements ;
+ *                10 % : 100 000 → 110 000, remb. 20 000 → 90 000 → 99 000 → 108 900…).
+ *   Calendrier : une échéance au même quantième chaque mois après le décaissement (`addMonths`, bornée à la
+ *   fin de mois). `maturityDate` N'ARRÊTE PAS les intérêts : ils continuent tant que la dette > 0, jusqu'à la
+ *   date limite `until` fournie par l'appelant (OBLIGATOIRE — jamais de calendrier infini). Un remboursement
+ *   daté AVANT une échéance est appliqué avant son intérêt ; daté du jour même, après (mois M : intérêt, puis
+ *   remboursement).
+ *   PÉNALITÉ DE RETARD (si `penaltyEnabled`) : à CHAQUE échéance mensuelle postérieure à `maturityDate` tant
+ *   que la dette > 0 (échéance non alignée, décision du 2026-09-30 : décaissement le 25, échéance le 10/07 →
+ *   1re pénalité le 25/07, jamais le 10/07 ni d'intérêt supplémentaire ce jour-là), APRÈS l'intérêt du mois — FIXED : `penaltyValue` ; PERCENTAGE : dette à `maturityDate`
+ *   (hors pénalités) × `penaltyValue` %, base FIGÉE pendant tout le retard. La pénalité s'ajoute à la dette
+ *   mais n'entre jamais dans la base des intérêts. Un remboursement s'impute d'abord sur la dette hors
+ *   pénalités (capital + intérêts), le reliquat sur les pénalités (base intérêt = capital + intérêts − remb.).
  *
  * FLUX 2 — REDISTRIBUTION (`distributeInterest`), calculée SÉPARÉMENT : elle ne modifie jamais la dette
- * de l'emprunteur. Toujours dans la caisse source (la caisse qui a financé le prêt, au prorata de ses
- * décaissements) :
+ * de l'emprunteur et ne traite QUE les événements INTEREST (jamais les pénalités). Toujours dans la caisse
+ * source (la caisse qui a financé le prêt, au prorata de ses décaissements) :
  *   - caisse classique : membres dont le SOLDE DANS CETTE CAISSE est STRICTEMENT POSITIF, au prorata ;
  *   - caisse « Achat tontine » (`systemCode: 'TONTINE_PURCHASE'`) : le montant d'un achat de tontine
  *     (FLUX 3) est partagé À PARTS ÉGALES entre les membres de la tontine de l'achat ; un intérêt de prêt
@@ -38,17 +48,20 @@ import { referenceDate } from './reference-date';
  *   Solde d'un membre dans une caisse = ses mouvements dans la caisse, hors prêts / remboursements /
  *   transferts / distributions / achats de tontine, plus les gains déjà reçus dans cette caisse.
  *
- * MONTANTS ENTIERS : chaque intérêt est arrondi à l'entier (`roundMoney`) ; toute répartition d'un
- * montant entier (entre caisses, entre adhérents) utilise `allocateInteger` — Σ parts = montant exact,
- * reliquat attribué de façon déterministe et tracé (`GainLine.roundingAdjustment`).
+ * MONTANTS ENTIERS : chaque intérêt et chaque pénalité est arrondi à l'entier (`roundMoney`) ; toute
+ * répartition d'un montant entier (entre caisses, entre adhérents) utilise `allocateInteger` — Σ parts =
+ * montant exact, reliquat attribué de façon déterministe et tracé (`GainLine.roundingAdjustment`).
  */
+
+/** Périodicité UNIQUE des intérêts (règle définitive du 2026-09-29) — indépendante de toute fréquence métier. */
+export const INTEREST_PERIOD = 'MONTHLY' as const satisfies LoanRuleInterestPeriod;
 
 export type InterestAccrual = {
   date: string;
   amount: number;
   /** Base de calcul : capital (GLOBAL), capital de référence (SIMPLE) ou dette courante (COMPOUND). */
   base: number;
-  /** Taux appliqué, en % par période. */
+  /** Taux appliqué, en % par mois (`INTEREST_PERIOD`). */
   rate: number;
   periodStart: string;
   /** Dette avant l'intérêt de cette échéance (après les remboursements antérieurs). */
@@ -90,13 +103,18 @@ export function addDays(isoDate: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** Date + N mois, bornée au dernier jour du mois cible (31/01 + 1 mois = 28/02, jamais 03/03 : aucun mois sauté). */
 export function addMonths(isoDate: string, months: number): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
   date.setUTCMonth(date.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, lastDay));
   return date.toISOString().slice(0, 10);
 }
 
-/** Date + k périodes de la périodicité du taux. */
+/** Date + k périodes (découpages calendaires uniquement ; les intérêts n'utilisent que `addMonths`, cf. `INTEREST_PERIOD`). */
 export function addPeriods(isoDate: string, count: number, period: LoanRuleInterestPeriod): string {
   switch (period) {
     case 'DAILY': return addDays(isoDate, count);
@@ -107,51 +125,162 @@ export function addPeriods(isoDate: string, count: number, period: LoanRuleInter
   }
 }
 
-/** Échéancier des intérêts GÉNÉRÉS par un prêt, selon SES paramètres historisés (toutes dates ; l'appelant borne à sa date de situation). */
-export function loanInterestAccruals(loan: Loan, loanRepayments: Repayment[]): InterestAccrual[] {
-  const { loanMode, interestPeriod } = loan;
+/** Pénalité de retard générée par un prêt — événement distinct de l'intérêt, jamais redistribué. */
+export type PenaltyAccrual = {
+  date: string;
+  amount: number;
+  /** PERCENTAGE : dette à `maturityDate` hors pénalités (base figée) ; FIXED : 0 (aucune base). */
+  base: number;
+  penaltyType: LoanPenaltyType;
+  /** FCFA (FIXED) ou % (PERCENTAGE), historisé sur le prêt. */
+  penaltyValue: number;
+  /** Rang du mois de retard (1 = première échéance mensuelle postérieure à `maturityDate`). */
+  lateMonth: number;
+  /** Dette totale (pénalités comprises) avant cette pénalité. */
+  debtBefore: number;
+};
+
+export type LoanEventKind = 'LOAN' | 'INTEREST' | 'PENALTY' | 'REPAYMENT';
+
+/**
+ * Événement financier d'un prêt. `debtBefore` / `debtAfter` = dette TOTALE (capital + intérêts + pénalités
+ * − remboursements) autour de l'événement. INTEREST : `base`, `rate` (% par mois), `periodStart`,
+ * `interestDebtBefore` (dette hors pénalités). PENALTY : `base`, `penaltyType`, `penaltyValue`, `lateMonth`.
+ * REPAYMENT : `penaltyPart` = part imputée sur les pénalités.
+ */
+export type LoanEvent = {
+  date: string;
+  kind: LoanEventKind;
+  amount: number;
+  base: number;
+  rate?: number;
+  periodStart?: string;
+  interestDebtBefore?: number;
+  penaltyType?: LoanPenaltyType;
+  penaltyValue?: number;
+  lateMonth?: number;
+  penaltyPart?: number;
+  debtBefore: number;
+  debtAfter: number;
+};
+
+/** Calendrier d'un prêt et son état à la date limite : dette hors pénalités (porteuse d'intérêts) et pénalités dues. */
+export type LoanState = { events: LoanEvent[]; interestDebt: number; penaltyDebt: number; debt: number };
+
+/**
+ * MOTEUR UNIQUE d'un prêt jusqu'à `until` INCLUS (obligatoire : les intérêts ne s'arrêtent plus à
+ * l'échéance, le calendrier ne serait jamais borné sans lui). Pour chaque échéance mensuelle :
+ * remboursements datés avant l'échéance → dette > 0 ? → intérêt → retard (échéance > `maturityDate`) ? →
+ * pénalité. Les remboursements datés après la dernière échéance (≤ `until`) sont appliqués en fin de calcul.
+ */
+export function loanState(loan: Loan, loanRepayments: Repayment[], until: string): LoanState {
+  if (!until) throw new Error('loanSchedule : date limite `until` obligatoire.');
+  const events: LoanEvent[] = [];
+  if (loan.disbursementDate > until) return { events, interestDebt: 0, penaltyDebt: 0, debt: 0 };
+  const { loanMode } = loan;
   const rate = loan.interestRate ?? 0;
-  if (!(rate > 0) || !(loan.principal > 0)) return [];
-  if (loanMode === 'GLOBAL') {
-    // Déterminé à l'origine, ajouté à la dette, jamais recalculé ensuite.
-    return [{ date: loan.disbursementDate, amount: roundMoney((loan.principal * rate) / 100), base: loan.principal, rate, periodStart: loan.disbursementDate, debtBefore: loan.principal }];
-  }
-  const dates: string[] = [];
-  for (let k = 1; ; k += 1) {
-    const date = addPeriods(loan.disbursementDate, k, interestPeriod);
-    if (date >= loan.maturityDate) break;
-    dates.push(date);
-  }
-  dates.push(loan.maturityDate > loan.disbursementDate ? loan.maturityDate : addPeriods(loan.disbursementDate, 1, interestPeriod));
-  const completed = loanRepayments.filter((repayment) => repayment.status === 'completed').sort((a, b) => a.paymentDate.localeCompare(b.paymentDate));
-  const accruals: InterestAccrual[] = [];
-  let debt = loan.principal;
-  let referenceCapital = loan.principal; // SIMPLE : capital initial, puis dette restante après chaque remboursement
-  let pointer = 0;
-  for (let index = 0; index < dates.length; index += 1) {
-    const date = dates[index];
-    // Remboursements datés avant cette échéance : appliqués avant son intérêt.
-    while (pointer < completed.length && completed[pointer].paymentDate < date) {
-      debt -= completed[pointer].amount;
-      referenceCapital = debt;
-      pointer += 1;
-    }
-    if (debt <= 0) break;
-    const base = loanMode === 'COMPOUND' ? debt : referenceCapital;
-    if (base <= 0) break;
+  const bearsInterest = rate > 0 && loan.principal > 0;
+  const completed = loanRepayments
+    .filter((repayment) => repayment.status === 'completed' && repayment.paymentDate <= until)
+    .sort((a, b) => a.paymentDate.localeCompare(b.paymentDate));
+  let interestDebt = loan.principal; // capital + intérêts − remboursements : base COMPOUND, jamais les pénalités
+  let penaltyDebt = 0;
+  let referenceCapital = loan.principal; // SIMPLE : capital initial, puis dette hors pénalités après chaque remboursement
+  const total = () => interestDebt + penaltyDebt;
+  events.push({ date: loan.disbursementDate, kind: 'LOAN', amount: loan.principal, base: loan.principal, debtBefore: 0, debtAfter: total() });
+
+  const addInterest = (date: string, periodStart: string, base: number) => {
     const amount = roundMoney((base * rate) / 100);
-    accruals.push({ date, amount, base, rate, periodStart: index === 0 ? loan.disbursementDate : dates[index - 1], debtBefore: debt });
-    debt += amount;
+    const debtBefore = total();
+    const interestDebtBefore = interestDebt;
+    interestDebt += amount; // ajouté à la dette dans tous les modes ; seule la base de COMPOUND le réutilise
+    events.push({ date, kind: 'INTEREST', amount, base, rate, periodStart, interestDebtBefore, debtBefore, debtAfter: total() });
+  };
+  // GLOBAL : déterminé à l'origine, ajouté à la dette, jamais recalculé. EXCEPTION MÉTIER : aucun intérêt
+  // périodique, même après `maturityDate` (`periodic` ci-dessous exclut GLOBAL) ; seules les pénalités continuent.
+  if (loanMode === 'GLOBAL' && bearsInterest) addInterest(loan.disbursementDate, loan.disbursementDate, loan.principal);
+
+  let pointer = 0;
+  const applyRepayment = (repayment: Repayment) => {
+    const debtBefore = total();
+    // Imputation : dette hors pénalités (capital + intérêts) d'abord, le reliquat sur les pénalités.
+    const onInterestDebt = Math.min(repayment.amount, Math.max(0, interestDebt));
+    const penaltyPart = repayment.amount - onInterestDebt;
+    interestDebt -= onInterestDebt;
+    penaltyDebt -= penaltyPart;
+    referenceCapital = interestDebt;
+    events.push({ date: repayment.paymentDate, kind: 'REPAYMENT', amount: repayment.amount, base: 0, penaltyPart, debtBefore, debtAfter: total() });
+  };
+
+  const periodic = bearsInterest && (loanMode === 'SIMPLE' || loanMode === 'COMPOUND');
+  const penaltyType = loan.penaltyEnabled ? loan.penaltyType : null;
+  const penaltyValue = loan.penaltyValue ?? 0;
+  let penaltyBase: number | null = null;
+  let lateMonth = 0;
+  let periodStart = loan.disbursementDate;
+  for (let k = 1; ; k += 1) {
+    const date = addMonths(loan.disbursementDate, k); // INTEREST_PERIOD = MONTHLY
+    if (date > until) break; // date limite : la seule borne tant que la dette reste due (plus aucun arrêt à `maturityDate`)
+    while (pointer < completed.length && completed[pointer].paymentDate < date) applyRepayment(completed[pointer++]);
+    if (total() <= 0) break; // dette soldée : plus d'intérêt ni de pénalité
+    if (periodic && interestDebt > 0) {
+      let base: number;
+      switch (loanMode) {
+        case 'COMPOUND':
+          base = interestDebt; // dette courante hors pénalités, intérêts antérieurs capitalisés compris
+          break;
+        case 'SIMPLE':
+        default:
+          base = referenceCapital; // les intérêts postérieurs au dernier remboursement n'entrent pas dans la base
+          break;
+      }
+      if (base > 0) addInterest(date, periodStart, base);
+    }
+    if (penaltyType && date > loan.maturityDate) {
+      lateMonth += 1;
+      // Base FIGÉE : dette à `maturityDate` hors pénalités = capital + intérêts ≤ échéance − remboursements ≤ échéance.
+      penaltyBase ??= Math.max(0, loan.principal
+        + events.filter((event) => event.kind === 'INTEREST' && event.date <= loan.maturityDate).reduce((sum, event) => sum + event.amount, 0)
+        - completed.filter((repayment) => repayment.paymentDate <= loan.maturityDate).reduce((sum, repayment) => sum + repayment.amount, 0));
+      const amount = penaltyType === 'FIXED' ? roundMoney(penaltyValue) : roundMoney((penaltyBase * penaltyValue) / 100);
+      if (amount > 0) {
+        const debtBefore = total();
+        penaltyDebt += amount; // due, mais jamais dans la base des intérêts
+        events.push({ date, kind: 'PENALTY', amount, base: penaltyType === 'FIXED' ? 0 : penaltyBase, penaltyType, penaltyValue, lateMonth, debtBefore, debtAfter: total() });
+      }
+    }
+    periodStart = date;
   }
-  return accruals;
+  while (pointer < completed.length) applyRepayment(completed[pointer++]);
+  return { events, interestDebt, penaltyDebt, debt: total() };
 }
 
-/** DETTE COURANTE d'un prêt à une date = capital + Σ intérêts générés (≤ date) − Σ remboursements réalisés (≤ date). Source unique pour le bilan ET le module Crédit. */
+/** Événements financiers distincts (LOAN, INTEREST, PENALTY, REPAYMENT) d'un prêt jusqu'à `until` inclus. */
+export function loanSchedule(loan: Loan, loanRepayments: Repayment[], until: string): LoanEvent[] {
+  return loanState(loan, loanRepayments, until).events;
+}
+
+/** Intérêts GÉNÉRÉS par un prêt jusqu'à `until` inclus, selon SES paramètres historisés — les seuls redistribuables. */
+export function loanInterestAccruals(loan: Loan, loanRepayments: Repayment[], until: string): InterestAccrual[] {
+  return loanSchedule(loan, loanRepayments, until)
+    .filter((event) => event.kind === 'INTEREST')
+    .map((event) => ({ date: event.date, amount: event.amount, base: event.base, rate: event.rate ?? 0, periodStart: event.periodStart ?? event.date, debtBefore: event.interestDebtBefore ?? event.debtBefore }));
+}
+
+/** Pénalités de retard générées par un prêt jusqu'à `until` inclus (jamais redistribuées). */
+export function loanPenaltyAccruals(loan: Loan, loanRepayments: Repayment[], until: string): PenaltyAccrual[] {
+  return loanSchedule(loan, loanRepayments, until)
+    .filter((event): event is LoanEvent & { penaltyType: LoanPenaltyType } => event.kind === 'PENALTY' && event.penaltyType !== undefined)
+    .map((event) => ({ date: event.date, amount: event.amount, base: event.base, penaltyType: event.penaltyType, penaltyValue: event.penaltyValue ?? 0, lateMonth: event.lateMonth ?? 0, debtBefore: event.debtBefore }));
+}
+
+/**
+ * DETTE COURANTE d'un prêt à une date = capital + Σ intérêts (≤ date) + Σ pénalités (≤ date) − Σ remboursements
+ * réalisés (≤ date). Source unique pour le bilan, l'état financier ET le module Crédit.
+ */
 export function loanDebtAt(loan: Loan, loanRepayments: Repayment[], date: string): number {
   if (loan.disbursementDate > date) return 0;
-  const interest = loanInterestAccruals(loan, loanRepayments).filter((accrual) => accrual.date <= date).reduce((sum, accrual) => sum + accrual.amount, 0);
-  const repaid = loanRepayments.filter((repayment) => repayment.status === 'completed' && repayment.paymentDate <= date).reduce((sum, repayment) => sum + repayment.amount, 0);
-  return loan.principal + interest - repaid;
+  return loanState(loan, loanRepayments, date).debt;
 }
 
 /** Achat de tontine (transaction ACHAT_TONTINE) et personnes appartenant à sa tontine à la date de l'achat. */
@@ -268,9 +397,9 @@ export function distributeInterest(ctx: DistributionCtx, upTo: string): Interest
   for (const loan of ctx.loans) {
     if (loan.disbursementDate > upTo) continue;
     const shares = loanFundingShares(disbursementsByLoan.get(loan.id) ?? []);
-    for (const accrual of loanInterestAccruals(loan, repaymentsByLoan.get(loan.id) ?? [])) {
-      if (accrual.date > upTo) continue;
-      const source: InterestSource = { kind: 'LOAN', loanId: loan.id, borrowerId: loan.memberId, loanMode: loan.loanMode, interestPeriod: loan.interestPeriod, base: accrual.base, rate: accrual.rate, loanInterest: accrual.amount };
+    // Événements INTEREST uniquement : les pénalités (`loanPenaltyAccruals`) ne sont JAMAIS redistribuées.
+    for (const accrual of loanInterestAccruals(loan, repaymentsByLoan.get(loan.id) ?? [], upTo)) {
+      const source: InterestSource = { kind: 'LOAN', loanId: loan.id, borrowerId: loan.memberId, loanMode: loan.loanMode, interestPeriod: INTEREST_PERIOD, base: accrual.base, rate: accrual.rate, loanInterest: accrual.amount };
       if (shares.length === 0) { undistributed.push({ date: accrual.date, cashboxId: null, amount: accrual.amount, reason: 'UNATTRIBUTED_LOAN', source }); continue; }
       // Intérêt ENTIER réparti entre les caisses de financement (Σ parts = intérêt).
       const portions = allocateInteger(accrual.amount, shares.map((item) => item.amount));

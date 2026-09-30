@@ -245,6 +245,82 @@ describe('Bilan financier de l’adhérent — relevés', { timeout: 30_000 }, (
     }
   });
 
+  it('TEST 20 — Intérêts et Pénalités dans deux colonnes distinctes, détail des pénalités (date, base, type, valeur, montant)', async () => {
+    const { loans } = await import('@/mocks/finance/loans');
+    const saved = loans.length;
+    const member = t001Members().find((item) => !['M-001', 'M-006'].includes(item.id))!;
+    const base = structuredClone(loans.find((loan) => loan.id === 'L-001')!);
+    // Échu le 01/06/2026, non soldé : intérêts mensuels continus + pénalité FIXE de 10 000 aux échéances des 01/07, 01/08 et 01/09.
+    loans.push({ ...base, id: 'L-PEN-UI', memberId: member.id, principal: 100_000, loanMode: 'SIMPLE', interestRate: 10, disbursementDate: '2026-03-01', maturityDate: '2026-06-01', penaltyEnabled: true, penaltyType: 'FIXED', penaltyValue: 10_000 });
+    try {
+      const user = userEvent.setup();
+      renderPage();
+      await periodReady('2026-01-01', TODAY);
+      await user.selectOptions(screen.getByLabelText('Adhérents'), 'SELECTION');
+      await user.click(screen.getByRole('checkbox', { name: `${member.firstName} ${member.lastName}` }));
+      await waitFor(() => expect(statements()).toHaveLength(1));
+      const table = within(statements()[0]).getByTestId('mb-statement-table');
+      const headers = within(table).getAllByRole('columnheader').map((header) => header.textContent);
+      expect(headers.slice(-6)).toEqual(['Report dette', 'Prêt accordé', 'Intérêts', 'Pénalités', 'Remboursement', 'Dette restante']);
+      const september = within(table).getAllByRole('row').find((row) => /septembre/i.test(row.textContent ?? ''))!;
+      const cells = within(september).getAllByRole('cell').map((cell) => plain(cell.textContent));
+      const penaltiesIndex = headers.indexOf('Pénalités') - 1;
+      expect(cells[penaltiesIndex]).toBe(num(10_000));
+      expect(cells[penaltiesIndex - 1]).toBe(num(10_000)); // intérêt SIMPLE 100 000 × 10 %, continu après l'échéance
+      const detail = within(statements()[0]).getByTestId('mb-loan-penalties');
+      expect(within(detail).getAllByRole('row')).toHaveLength(4); // en-tête + 3 mois de retard
+      expect(detail).toHaveTextContent('Montant fixe');
+    } finally {
+      loans.splice(saved);
+    }
+  });
+
+  describe('Colonne Pénalités — affichée selon `penaltyEnabled` des prêts du relevé, jamais selon le montant', () => {
+    /** Relevé d'un adhérent sans prêt de démo, avec les prêts fournis (dérivés de L-001) ; renvoie en-têtes et relevé. */
+    async function statementWithLoans(overrides: Partial<import('@/mocks/finance/loans').Loan>[]) {
+      const { loans } = await import('@/mocks/finance/loans');
+      const saved = loans.length;
+      const member = t001Members().find((item) => !['M-001', 'M-006'].includes(item.id))!;
+      const base = structuredClone(loans.find((loan) => loan.id === 'L-001')!);
+      overrides.forEach((over, index) => loans.push({ ...base, id: `L-COL-${index}`, memberId: member.id, principal: 100_000, loanMode: 'SIMPLE', interestRate: 10, disbursementDate: '2026-03-01', ...over }));
+      try {
+        const user = userEvent.setup();
+        renderPage();
+        await periodReady('2026-01-01', TODAY);
+        await user.selectOptions(screen.getByLabelText('Adhérents'), 'SELECTION');
+        await user.click(screen.getByRole('checkbox', { name: `${member.firstName} ${member.lastName}` }));
+        await waitFor(() => expect(statements()).toHaveLength(1));
+        const statement = statements()[0];
+        const headers = within(within(statement).getByTestId('mb-statement-table')).getAllByRole('columnheader').map((header) => header.textContent);
+        return { statement, headers };
+      } finally {
+        loans.splice(saved);
+      }
+    }
+    const OFF = { penaltyEnabled: false, penaltyType: null, penaltyValue: 0 } as const;
+    const ON = { penaltyEnabled: true, penaltyType: 'FIXED', penaltyValue: 10_000 } as const;
+
+    it('pénalité OFF (prêt échu, non soldé) : colonne, synthèse et détail des pénalités totalement absents', async () => {
+      const { statement, headers } = await statementWithLoans([{ ...OFF, maturityDate: '2026-06-01' }]);
+      expect(headers).not.toContain('Pénalités');
+      expect(headers).toContain('Intérêts');
+      expect(within(statement).queryByTestId('mb-penalty-detail')).not.toBeInTheDocument();
+      expect(within(statement).queryByText('Pénalités de retard')).not.toBeInTheDocument();
+      expect(statement).not.toHaveTextContent(/Part pénalités/);
+    });
+
+    it('pénalité ON mais aucun retard sur la période (montant 0) : la colonne reste affichée', async () => {
+      const { statement, headers } = await statementWithLoans([{ ...ON, maturityDate: '2027-03-01' }]);
+      expect(headers.slice(-4)).toEqual(['Intérêts', 'Pénalités', 'Remboursement', 'Dette restante']);
+      expect(within(statement).queryByTestId('mb-penalty-detail')).not.toBeInTheDocument(); // aucune pénalité à détailler
+    });
+
+    it('plusieurs prêts : un OFF échu + un ON non échu → colonne affichée', async () => {
+      const { headers } = await statementWithLoans([{ ...OFF, maturityDate: '2026-06-01' }, { ...ON, maturityDate: '2027-03-01' }]);
+      expect(headers).toContain('Pénalités');
+    });
+  });
+
   it('« Imprimer / PDF » : impression navigateur du document', async () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
     renderPage();

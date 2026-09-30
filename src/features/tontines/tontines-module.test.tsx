@@ -814,15 +814,19 @@ describe('Dashboard Tontines — Colonne « Prochain tour » (Tour courant vs To
   it('TEST 7 — MULTI-TENANT : un Tour d’un AUTRE tenant n’apparaît jamais dans la Tontine du tenant courant', async () => {
     const user = userEvent.setup();
     const tontineOther = await tontinesService.createTontine({ tenantId: 'T-002', name: `Test Autre Tenant ${Date.now()}`, valueType: 'MONEY', currency: 'XOF', contributionAmount: 5_000, frequency: 'MONTHLY', monthlyRule: 'DAY_OF_MONTH', monthlyDayOfMonth: 1 } as never);
-    await tontineOperationsService.createOccurrence('T-002', tontineOther!.id, futureDate(2));
+    // Date du Tour de T-002 : toujours DIFFÉRENTE de la date calculée pour la Tontine de T-001 (1er du mois
+    // suivant) — sinon, deux jours avant un début de mois, les deux dates coïncident et l'assertion n'a plus de sens.
+    const computed = suggestNextOccurrenceDate(MONTHLY_CONFIG, new Date().toISOString().slice(0, 10))!;
+    const otherTourDate = futureDate(2) === computed ? futureDate(3) : futureDate(2);
+    await tontineOperationsService.createOccurrence('T-002', tontineOther!.id, otherTourDate);
     const tontine = await makeTontine('T-001', 'Test Tenant Courant Sans Tour');
     renderTontines('/tontines'); // rendu pour le tenant courant, T-001
     await user.type(await screen.findByPlaceholderText('Nom de la tontine'), tontine!.name);
     const row = (await screen.findByText(tontine!.name)).closest('tr')!;
-    // Aucun Tour pour CETTE Tontine (T-001) → date CALCULÉE ancrée sur aujourd'hui, jamais la date du Tour de T-002 (`futureDate(2)`) ni « — ».
+    // Aucun Tour pour CETTE Tontine (T-001) → date CALCULÉE ancrée sur aujourd'hui, jamais la date du Tour de T-002 ni « — ».
     const today = new Date().toISOString().slice(0, 10);
     expect(within(row).getByText(formatTourDate(suggestNextOccurrenceDate(MONTHLY_CONFIG, today)!))).toBeInTheDocument();
-    expect(within(row).queryByText(formatTourDate(futureDate(2)))).not.toBeInTheDocument();
+    expect(within(row).queryByText(formatTourDate(otherTourDate))).not.toBeInTheDocument();
   });
 
   it('TEST 9 — la colonne reste correcte après application des filtres Fréquence et Statut', async () => {

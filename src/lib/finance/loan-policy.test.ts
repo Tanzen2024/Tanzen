@@ -5,7 +5,7 @@ import type { LoanRule } from '@/mocks/finance/loan-rules';
 /** Règle de crédit = source de vérité des conditions d'octroi (mandat 2026-09-25). */
 const baseRule: LoanRule = {
   id: 'LR-T', tenantId: 'T-1', name: 'Règle test',
-  allowLoans: true, loanMode: 'SIMPLE', minAmount: 50_000, maxAmount: 1_000_000, interestRate: 10, interestPeriod: 'MONTHLY', durationMonths: 12,
+  allowLoans: true, loanMode: 'SIMPLE', minAmount: 50_000, maxAmount: 1_000_000, interestRate: 10, interestPeriod: 'MONTHLY', durationMonths: 12, penaltyEnabled: false, penaltyType: null, penaltyValue: 0,
   maxActiveLoans: 2, maxLoanExposure: 1_500_000, requiresGuarantor: true, minGuarantors: 2, maxGuarantors: 2, guaranteeTypeRequired: 'PERSONAL', guaranteeRatio: 100, allowSelfGuarantee: false,
   requiresApproval: true, approvalLevel: 'ADMIN', status: 'ACTIVE', deletedAt: null, version: 1,
 };

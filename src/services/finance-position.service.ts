@@ -79,7 +79,7 @@ function balanceSheetScope(tenantId: string, requested: string[] | 'ALL', reques
   const rule = tenantCreditRule(tenantId);
   const tenantMemberIds = members.filter((member) => member.tenantId === tenantId).map((member) => member.id);
   return {
-    ctx: { transactions: finance.transactions, loans: finance.loans ?? [], repayments: finance.repayments ?? [], cashboxes: finance.cashboxes, loanMode: rule?.loanMode ?? 'SIMPLE', interestPeriod: rule?.interestPeriod ?? 'MONTHLY', tontinePurchases: tontinePurchaseGroups(tenantId, finance.transactions) },
+    ctx: { transactions: finance.transactions, loans: finance.loans ?? [], repayments: finance.repayments ?? [], cashboxes: finance.cashboxes, loanMode: rule?.loanMode ?? 'SIMPLE', tontinePurchases: tontinePurchaseGroups(tenantId, finance.transactions) },
     memberIds: requested === 'ALL' ? tenantMemberIds : requested.filter((id) => tenantMemberIds.includes(id)),
     cashboxId: requestedCashboxId && finance.cashboxes.some((cashbox) => cashbox.id === requestedCashboxId) ? requestedCashboxId : undefined,
   };
@@ -243,9 +243,10 @@ export const financePositionService = {
       const { ctx, memberIds, cashboxId } = balanceSheetScope(tenantId, params.memberIds, params.cashboxId);
       const statements = memberPeriodStatementsEngine(ctx, { ...params, memberIds, cashboxId });
       const rule = tenantCreditRule(tenantId);
-      // Règle de crédit appliquée au relevé : périodicité des lignes et des intérêts, et intérêts
-      // applicables (prêts autorisés, taux non nul) — sinon le relevé n'affiche aucun intérêt artificiel.
-      const creditRule = { loanMode: ctx.loanMode, interestPeriod: ctx.interestPeriod ?? 'MONTHLY', interestRate: rule?.interestRate ?? 0, interestApplicable: Boolean(rule && rule.allowLoans && rule.interestRate > 0) };
+      // Règle de crédit appliquée au relevé : intérêts applicables (prêts autorisés, taux non nul) — sinon le
+      // relevé n'affiche aucun intérêt artificiel. Lignes et intérêts TOUJOURS mensuels (`INTEREST_PERIOD`) ;
+      // la colonne Pénalités dépend des prêts eux-mêmes (`penaltyEnabled` historisé), jamais de la règle actuelle.
+      const creditRule = { loanMode: ctx.loanMode, interestRate: rule?.interestRate ?? 0, interestApplicable: Boolean(rule && rule.allowLoans && rule.interestRate > 0) };
       return { statements, summary: summarizePeriodStatements(statements), creditRule };
     }),
 

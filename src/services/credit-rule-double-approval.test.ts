@@ -172,7 +172,7 @@ describe('Historisation des paramètres financiers du prêt', () => {
     startFrom('COMPOUND', 10);
     const { loan: oldLoan } = await lend(100_000);
     expect(oldLoan).toMatchObject({ loanMode: 'COMPOUND', interestRate: 10, interestPeriod: 'MONTHLY' });
-    const before = loanInterestAccruals(oldLoan, []).map((accrual) => [accrual.base, accrual.amount]);
+    const before = loanInterestAccruals(oldLoan, [], oldLoan.maturityDate).map((accrual) => [accrual.base, accrual.amount]);
     expect(before.slice(0, 2)).toEqual([[100_000, 10_000], [110_000, 11_000]]);
 
     // ÉTAPE 2 : modification de la règle par double approbation (simple, 20 %, mensuel).
@@ -181,12 +181,12 @@ describe('Historisation des paramètres financiers du prêt', () => {
     // ÉTAPE 3 : l'ancien prêt est recalculé à l'identique (composé 10 %), jamais avec la nouvelle règle.
     const stored = loans.find((loan) => loan.id === oldLoan.id)!;
     expect(stored).toMatchObject({ loanMode: 'COMPOUND', interestRate: 10, interestPeriod: 'MONTHLY' });
-    expect(loanInterestAccruals(stored, []).map((accrual) => [accrual.base, accrual.amount])).toEqual(before);
+    expect(loanInterestAccruals(stored, [], stored.maturityDate).map((accrual) => [accrual.base, accrual.amount])).toEqual(before);
 
     // ÉTAPE 4 : un nouveau prêt utilise la nouvelle règle.
     const { loan: newLoan } = await lend(100_000);
     expect(newLoan).toMatchObject({ loanMode: 'SIMPLE', interestRate: 20, interestPeriod: 'MONTHLY' });
-    expect(loanInterestAccruals(newLoan, []).slice(0, 2).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 20_000], [100_000, 20_000]]);
+    expect(loanInterestAccruals(newLoan, [], newLoan.maturityDate).slice(0, 2).map((accrual) => [accrual.base, accrual.amount])).toEqual([[100_000, 20_000], [100_000, 20_000]]);
   });
 
   it('le bilan affiche et calcule chaque prêt selon SES paramètres, même après changement de règle', async () => {

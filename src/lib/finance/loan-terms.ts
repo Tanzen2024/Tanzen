@@ -1,4 +1,5 @@
 import type { LoanRule } from '@/mocks/finance/loan-rules';
+import { addMonths } from './interest-distribution';
 
 /**
  * Calcul des conditions d'un prêt à partir de la politique de la caisse
@@ -8,17 +9,13 @@ import type { LoanRule } from '@/mocks/finance/loan-rules';
  * projet avant ce mandat) :
  *   - `durationMonths` est TOUJOURS exprimée en mois (champ `LoanRule.durationMonths`,
  *     déjà ainsi dans tout le modèle existant).
- *   - `periodsInDuration` convertit cette durée dans l'unité de `interestPeriod`
- *     (MONTHLY → durationMonths tel quel ; YEARLY → /12 ; WEEKLY → ×4.345 ;
- *     DAILY → ×30, mois normalisé à 30 jours, cohérent avec l'absence de
- *     calendrier réel dans les autres modules financiers du projet).
+ *   - Le taux est TOUJOURS mensuel (règle définitive du 2026-09-29, `INTEREST_PERIOD`) : la durée en mois
+ *     est directement le nombre de périodes ; `LoanRule.interestPeriod` n'est plus lu.
  *   - Le calcul est piloté par le MODE DE PRÊT (`LoanRule.loanMode`) :
  *   - SIMPLE : intérêt sur le capital INITIAL, à chaque période, jamais
- *     recalculé sur un solde restant — `interestAmount = principal × (taux/100) ×
- *     periodsInDuration`.
+ *     recalculé sur un solde restant — `interestAmount = principal × (taux/100) × durationMonths`.
  *   - COMPOUND (« Composé ») : intérêt sur le montant NET de la dette — formule
- *     d'amortissement standard à mensualité constante, `r` = taux périodique
- *     (taux/100, déjà exprimé « par période » par `LoanRule.interestPeriod`) :
+ *     d'amortissement standard à mensualité constante, `r` = taux mensuel (taux/100) :
  *       mensualité = principal × r / (1 − (1 + r)⁻ⁿ), n = durée en périodes.
  *     Cas particulier `r = 0` : mensualité = principal / n (aucun intérêt).
  *   - GLOBAL : intérêt calculé UNE SEULE FOIS sur la période définie —
@@ -39,26 +36,6 @@ export type LoanTerms = {
   nextPaymentDate: string;
 };
 
-function periodsInDuration(durationMonths: number, period: LoanRule['interestPeriod']): number {
-  switch (period) {
-    case 'YEARLY':
-      return durationMonths / 12;
-    case 'WEEKLY':
-      return durationMonths * 4.345;
-    case 'DAILY':
-      return durationMonths * 30;
-    case 'MONTHLY':
-    default:
-      return durationMonths;
-  }
-}
-
-function addMonths(isoDate: string, months: number): string {
-  const date = new Date(`${isoDate}T00:00:00Z`);
-  date.setUTCMonth(date.getUTCMonth() + months);
-  return date.toISOString().slice(0, 10);
-}
-
 /**
  * `principal` doit déjà avoir été validé positif et dans les bornes de la
  * règle par l'appelant (`isStrictlyPositiveNumber`, `minAmount`/`maxAmount`) —
@@ -66,7 +43,7 @@ function addMonths(isoDate: string, months: number): string {
  */
 export function computeLoanTerms(
   principal: number,
-  rule: Pick<LoanRule, 'interestRate' | 'loanMode' | 'interestPeriod' | 'durationMonths'>,
+  rule: Pick<LoanRule, 'interestRate' | 'loanMode' | 'durationMonths'>,
   disbursementDate: string,
 ): LoanTerms {
   const n = Math.max(rule.durationMonths, 1);
@@ -74,8 +51,7 @@ export function computeLoanTerms(
   let monthlyPayment: number;
 
   if (rule.loanMode === 'COMPOUND') {
-    const periods = periodsInDuration(n, rule.interestPeriod);
-    const r = rule.interestRate / 100 / (n / Math.max(periods, 1)); // taux ramené « par mois » pour une mensualité constante
+    const r = rule.interestRate / 100; // taux mensuel (INTEREST_PERIOD)
     if (r === 0) {
       monthlyPayment = principal / n;
     } else {
@@ -88,9 +64,8 @@ export function computeLoanTerms(
     interestAmount = principal * (rule.interestRate / 100);
     monthlyPayment = (principal + interestAmount) / n;
   } else {
-    // SIMPLE — intérêt sur le capital initial, à chaque période.
-    const periods = periodsInDuration(n, rule.interestPeriod);
-    interestAmount = principal * (rule.interestRate / 100) * periods;
+    // SIMPLE — intérêt sur le capital initial, chaque mois.
+    interestAmount = principal * (rule.interestRate / 100) * n;
     monthlyPayment = (principal + interestAmount) / n;
   }
 

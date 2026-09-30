@@ -38,10 +38,11 @@ describe('computeLoanTerms — SIMPLE (intérêt sur le montant initial, à chaq
     expect(terms.totalRepayable).toBe(200_000);
   });
 
-  it('convertit correctement une période YEARLY (durée en mois vers années)', () => {
-    const terms = computeLoanTerms(100_000, { interestRate: 10, loanMode: 'SIMPLE', interestPeriod: 'YEARLY', durationMonths: 12 }, '2026-01-01');
-    // 12 mois = 1 an → 10 % une fois.
-    expect(terms.interestAmount).toBe(10_000);
+  it('taux TOUJOURS mensuel (règle du 2026-09-29) : une ancienne périodicité YEARLY de la règle est ignorée', () => {
+    const legacyYearlyRule = { interestRate: 10, loanMode: 'SIMPLE' as const, interestPeriod: 'YEARLY' as const, durationMonths: 12 };
+    const terms = computeLoanTerms(100_000, legacyYearlyRule, '2026-01-01');
+    // 12 mois × 10 % par mois — plus aucune conversion en années.
+    expect(terms.interestAmount).toBe(120_000);
   });
 });
 

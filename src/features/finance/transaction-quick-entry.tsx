@@ -13,7 +13,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { useLocale } from '@/contexts/locale-context';
 import { useTenant } from '@/contexts/tenant-context';
 import { usePermissions } from '@/contexts/permission-context';
-import { guaranteeCoverage, loanPolicyViolations, splitRepaymentProRata, type GuaranteeCoverage, type LoanPolicyViolation } from '@/lib/finance';
+import { guaranteeCoverage, INTEREST_PERIOD, loanPolicyViolations, splitRepayment, type GuaranteeCoverage, type LoanPolicyViolation } from '@/lib/finance';
 import { financeService } from '@/services/finance.service';
 import { creditService } from '@/services/credit.service';
 import { loanRuleService } from '@/services/loan-rule.service';
@@ -128,7 +128,8 @@ function MemberPicker({ t, id, members, value, onChange, invalid, allowEmpty, tr
 function LoanRulePanel({ t, rule, money }: { t: T; rule: LoanRule; money: (value: number) => string }) {
   const items: [string, string][] = [
     [t('finance', 'quickEntryRuleAmount'), `${money(rule.minAmount)} → ${money(rule.maxAmount)}`],
-    [t('finance', 'interestRate'), `${rule.interestRate} % · ${t('finance', 'loanMode' + rule.loanMode)} · ${t('finance', 'interestPeriod' + rule.interestPeriod)}`],
+    [t('finance', 'interestRate'), `${rule.interestRate} % · ${t('finance', 'loanMode' + rule.loanMode)} · ${t('finance', 'interestPeriod' + INTEREST_PERIOD)}`],
+    [t('finance', 'latePenalty'), !rule.penaltyEnabled || !rule.penaltyType ? t('finance', 'penaltyDisabled') : t('finance', `penaltySummary${rule.penaltyType}`, { value: rule.penaltyType === 'FIXED' ? money(rule.penaltyValue) : String(rule.penaltyValue) })],
     [t('finance', 'quickEntryRuleDuration'), t('finance', 'quickEntryMonths', { count: String(rule.durationMonths) })],
     [t('finance', 'maxActiveLoans'), String(rule.maxActiveLoans)],
     [t('finance', 'maxLoanExposure'), rule.maxLoanExposure === null ? '—' : money(rule.maxLoanExposure)],
@@ -271,7 +272,13 @@ export function TransactionQuickEntry({ t }: { t: T }) {
       };
       let debt: Loan | undefined;
       if (isRepayment && row.memberId) {
-        const memberLoans = tenantLoans.filter((loan) => loan.memberId === row.memberId).map((loan) => ({ ...loan, outstanding: loan.outstanding - (consumedByLoan.get(loan.id) ?? 0) }));
+        // Lignes précédentes du lot déjà imputées comme le moteur : dette hors pénalités d'abord, puis pénalités.
+        const memberLoans = tenantLoans.filter((loan) => loan.memberId === row.memberId).map((loan) => {
+          const consumed = consumedByLoan.get(loan.id) ?? 0;
+          const penaltyOutstanding = loan.penaltyOutstanding ?? 0;
+          const interestBearing = loan.outstanding - penaltyOutstanding;
+          return { ...loan, outstanding: loan.outstanding - consumed, penaltyOutstanding: penaltyOutstanding - Math.max(0, consumed - Math.max(0, interestBearing)) };
+        });
         debt = resolveMemberDebt(memberLoans);
         form.loanId = debt?.id ?? '';
         form.debtOutstanding = debt ? String(debt.outstanding) : '';
@@ -462,7 +469,12 @@ export function TransactionQuickEntry({ t }: { t: T }) {
                     <td className="py-2 pr-3">
                       <MemberPicker t={t} id={`qe-member-${row.key}`} members={members} value={row.memberId} onChange={(memberId) => setRow(row.key, { memberId })} invalid={showErrors && Boolean(errors.member || errors.repayment)} allowEmpty={!memberRequired} triggerRef={(element) => { if (element) triggerRefs.current.set(row.key, element); else triggerRefs.current.delete(row.key); }} />
                       {isRepayment && debt && <p className="mt-1 text-[11px] text-muted-foreground">{t('finance', 'amountToRepay')} : {money(debt.outstanding)}</p>}
-                      {isRepayment && debt && Number(row.amount) > 0 && <p className="text-[11px] text-muted-foreground" data-testid="quick-entry-repayment-split">{(() => { const split = splitRepaymentProRata(debt, Number(row.amount)); return t('finance', 'quickEntryRepaymentSplit', { loan: debt.id, principal: money(split.principalPart), interest: money(split.interestPart) }); })()}</p>}
+                      {isRepayment && debt && Number(row.amount) > 0 && <p className="text-[11px] text-muted-foreground" data-testid="quick-entry-repayment-split">{(() => {
+                        // Même décomposition que `createRepaymentTransaction` ; la part pénalités n'apparaît que si elle est due.
+                        const split = splitRepayment(debt, Number(row.amount), debt.outstanding - (debt.penaltyOutstanding ?? 0));
+                        const values = { loan: debt.id, principal: money(split.principalPart), interest: money(split.interestPart), penalty: money(split.penaltyPart) };
+                        return t('finance', split.penaltyPart > 0 ? 'quickEntryRepaymentSplitWithPenalty' : 'quickEntryRepaymentSplit', values);
+                      })()}</p>}
                     </td>
                     <td className="py-2 pr-3"><AmountInput aria-label={t('finance', 'quickEntryAmountOf', { line: String(index + 1) })} value={row.amount} onValueChange={(amount) => setRow(row.key, { amount })} aria-invalid={showErrors && Boolean(errors.amount)} /></td>
                     {showGuarantors && rule && coverage && <td className="py-2 pr-3"><Button type="button" variant="outline" size="sm" className="h-9 whitespace-nowrap" disabled={!row.memberId} onClick={() => setGuarantorsRowKey(row.key)} aria-label={t('finance', 'quickEntryGuarantorsOf', { line: String(index + 1) })} aria-invalid={showErrors && Boolean(errors.guarantors)}><UsersRound size={14} />{guarantorCountLabel(t, coverage.guarantorCount, rule.maxGuarantors)}</Button></td>}

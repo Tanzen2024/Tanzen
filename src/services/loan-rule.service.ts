@@ -1,6 +1,7 @@
 import { mockRequest } from './api-client';
 import { getTenantScoped } from './tenant-scope';
-import { loanRules, tenantCreditRule, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import { loanRules, tenantCreditRule, LOAN_PENALTY_TYPES, type LoanPenaltyType, type LoanRule, type LoanRuleApprovalLevel, type LoanRuleGuaranteeType, type LoanRuleInterestPeriod, type LoanRuleLoanMode } from '@/mocks/finance/loan-rules';
+import { INTEREST_PERIOD } from '@/lib/finance/interest-distribution';
 import { workflowRequests, type WorkflowRequest } from '@/mocks/operations/workflow-requests';
 import { computeChangeSet } from '@/lib/workflow/change-set';
 import { permissionsOfUser, workflowService } from './workflow.service';
@@ -17,7 +18,12 @@ import { notificationService } from './notification.service';
  * (workflow WD-009, ChangeSet avant/après, version de la règle) ; `decideLoanRuleUpdate` enregistre
  * chaque approbation / rejet ; la règle n'est modifiée (et sa version incrémentée) qu'après la
  * DEUXIÈME approbation. Les prêts déjà accordés n'en sont jamais affectés : leurs paramètres
- * financiers sont historisés à l'octroi (`Loan.loanMode` / `interestRate` / `interestPeriod`).
+ * financiers sont historisés à l'octroi (`Loan.loanMode` / `interestRate` / `penaltyEnabled` /
+ * `penaltyType` / `penaltyValue`).
+ *
+ * RÈGLES DÉFINITIVES du 2026-09-29 : la périodicité des intérêts n'est plus configurable (toujours
+ * `INTEREST_PERIOD`, mensuelle) — `interestPeriod` n'est plus modifiable et vaut `'MONTHLY'` à la création ;
+ * la pénalité de retard (`penaltyEnabled` / `penaltyType` / `penaltyValue`) passe par la même double approbation.
  */
 export type LoanRuleInput = {
   name: string;
@@ -26,8 +32,13 @@ export type LoanRuleInput = {
   minAmount: number;
   maxAmount: number;
   interestRate: number;
-  interestPeriod: LoanRuleInterestPeriod;
+  /** @deprecated Ignoré : périodicité des intérêts toujours `INTEREST_PERIOD` (mensuelle). */
+  interestPeriod?: LoanRuleInterestPeriod;
   durationMonths: number;
+  /** Pénalité de retard — désactivée si absente. */
+  penaltyEnabled?: boolean;
+  penaltyType?: LoanPenaltyType | null;
+  penaltyValue?: number;
   maxActiveLoans: number;
   maxLoanExposure: number | null;
   requiresGuarantor: boolean;
@@ -58,7 +69,7 @@ export type LoanRuleDecisionResult =
  * Garant requis = false → aucune contrainte de garantie : les paramètres de garantie conservés (masqués
  * dans le formulaire) ne sont pas contrôlés, même incohérents.
  */
-function violatesCanonicalConstraints(input: Pick<LoanRuleInput, 'minAmount' | 'maxAmount' | 'interestRate' | 'durationMonths' | 'maxLoanExposure' | 'requiresGuarantor' | 'minGuarantors' | 'maxGuarantors' | 'guaranteeRatio'>): boolean {
+function violatesCanonicalConstraints(input: Pick<LoanRuleInput, 'minAmount' | 'maxAmount' | 'interestRate' | 'durationMonths' | 'maxLoanExposure' | 'requiresGuarantor' | 'minGuarantors' | 'maxGuarantors' | 'guaranteeRatio' | 'penaltyEnabled' | 'penaltyType' | 'penaltyValue'>): boolean {
   if (input.maxAmount < input.minAmount) return true; // ck_amount_valid
   if (input.interestRate < 0) return true; // ck_interest_valid
   if (input.durationMonths <= 0) return true; // ck_duration_valid
@@ -67,11 +78,23 @@ function violatesCanonicalConstraints(input: Pick<LoanRuleInput, 'minAmount' | '
     if (input.maxGuarantors < input.minGuarantors) return true; // ck_guarantor_count
     if (input.guaranteeRatio < 0 || input.guaranteeRatio > 100) return true; // ck_guarantee_ratio
   }
-  return false;
+  return violatesPenaltyConstraints(input);
 }
 
-/** Seuls les champs de `LoanRuleInput` peuvent être modifiés (jamais id, tenant, statut, suppression ni version). */
-const EDITABLE_FIELDS: (keyof LoanRuleInput)[] = ['name', 'allowLoans', 'loanMode', 'minAmount', 'maxAmount', 'interestRate', 'interestPeriod', 'durationMonths', 'maxActiveLoans', 'maxLoanExposure', 'requiresGuarantor', 'minGuarantors', 'maxGuarantors', 'guaranteeTypeRequired', 'guaranteeRatio', 'allowSelfGuarantee', 'requiresApproval', 'approvalLevel'];
+/**
+ * PÉNALITÉ DE RETARD (2026-09-29) : désactivée → type `null` et valeur 0 admis ; activée → type obligatoire
+ * (FIXED ou PERCENTAGE) et valeur strictement positive. Une valeur négative est toujours refusée.
+ */
+export function violatesPenaltyConstraints(input: Pick<LoanRuleInput, 'penaltyEnabled' | 'penaltyType' | 'penaltyValue'>): boolean {
+  const value = input.penaltyValue ?? 0;
+  if (!Number.isFinite(value) || value < 0) return true;
+  if (input.penaltyType !== undefined && input.penaltyType !== null && !LOAN_PENALTY_TYPES.includes(input.penaltyType)) return true;
+  if (!input.penaltyEnabled) return false;
+  return !input.penaltyType || !(value > 0);
+}
+
+/** Seuls les champs de `LoanRuleInput` peuvent être modifiés (jamais id, tenant, statut, suppression, version ni `interestPeriod`, figée à `INTEREST_PERIOD`). */
+const EDITABLE_FIELDS: (keyof LoanRuleInput)[] = ['name', 'allowLoans', 'loanMode', 'minAmount', 'maxAmount', 'interestRate', 'durationMonths', 'penaltyEnabled', 'penaltyType', 'penaltyValue', 'maxActiveLoans', 'maxLoanExposure', 'requiresGuarantor', 'minGuarantors', 'maxGuarantors', 'guaranteeTypeRequired', 'guaranteeRatio', 'allowSelfGuarantee', 'requiresApproval', 'approvalLevel'];
 function editablePatch(patch: LoanRuleUpdateInput): LoanRuleUpdateInput {
   return Object.fromEntries(Object.entries(patch).filter(([field, value]) => EDITABLE_FIELDS.includes(field as keyof LoanRuleInput) && value !== undefined)) as LoanRuleUpdateInput;
 }
@@ -118,7 +141,8 @@ export const loanRuleService = {
     mockRequest(() => {
       if (tenantCreditRule(tenantId)) return undefined;
       if (!input.name.trim() || violatesCanonicalConstraints(input)) return undefined;
-      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, status: 'ACTIVE', deletedAt: null, version: 1, ...input };
+      const { penaltyEnabled = false, penaltyType = null, penaltyValue = 0, ...rest } = input;
+      const rule: LoanRule = { id: `LR-${String(loanRules.length + 1).padStart(3, '0')}`, tenantId, status: 'ACTIVE', deletedAt: null, version: 1, ...rest, interestPeriod: INTEREST_PERIOD, penaltyEnabled, penaltyType, penaltyValue };
       loanRules.push(rule);
       return rule;
     }),
